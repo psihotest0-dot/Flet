@@ -82,14 +82,31 @@ class ChatView(ft.Container):
             margin=ft.margin.only(left=50 if is_user else 0, right=0 if is_user else 50),
         )
 
-        row = ft.Row(
-            controls=[msg_container],
-            alignment=ft.MainAxisAlignment.END if is_user else ft.MainAxisAlignment.START,
-        )
+        expansion_tile = None
+        if not is_user:
+            expansion_tile = ft.ExpansionTile(
+                title=ft.Text("Sources"),
+                controls=[],
+                visible=False,
+            )
+            # Wrap in a column to put the tile below the message
+            column = ft.Column(
+                controls=[msg_container, expansion_tile],
+                spacing=5,
+            )
+            row = ft.Row(
+                controls=[column],
+                alignment=ft.MainAxisAlignment.START,
+            )
+        else:
+            row = ft.Row(
+                controls=[msg_container],
+                alignment=ft.MainAxisAlignment.END,
+            )
 
         self.chat_list.controls.append(row)
         self.update()
-        return md
+        return md, expansion_tile
 
     async def send_message_click(self, e):
         if not self.input_field.value:
@@ -105,7 +122,7 @@ class ChatView(ft.Container):
 
         self.add_message("user", user_text)
 
-        md_control = self.add_message("assistant", "")
+        md_control, expansion_tile = self.add_message("assistant", "")
         self._stop_generation = False
 
         last_update_time = time.time()
@@ -115,8 +132,32 @@ class ChatView(ft.Container):
                 if self._stop_generation:
                     break
 
-                if isinstance(chunk, dict) and "text" in chunk:
-                    md_control.value += chunk["text"]
+                if isinstance(chunk, dict):
+                    if "text" in chunk:
+                        md_control.value += chunk["text"]
+
+                    has_new_source = False
+                    for source_key in ("facts", "chunks"):
+                        if source_key in chunk and isinstance(chunk[source_key], list):
+                            for src in chunk[source_key]:
+                                if isinstance(src, dict):
+                                    src_type = src.get("source_type", "Unknown")
+                                    src_snippet = src.get("text_snippet", "")
+                                    src_score = src.get("score", "N/A")
+
+                                    tile_title = f"{src_type} (Score: {src_score})"
+                                    tile_subtitle = ft.Text(src_snippet, no_wrap=False, size=12, color=ft.colors.GREY_400)
+
+                                    list_tile = ft.ListTile(
+                                        title=ft.Text(tile_title, size=14, weight=ft.FontWeight.BOLD),
+                                        subtitle=tile_subtitle,
+                                    )
+                                    expansion_tile.controls.append(list_tile)
+                                    has_new_source = True
+
+                    if has_new_source and not expansion_tile.visible:
+                        expansion_tile.visible = True
+
                 elif isinstance(chunk, str):
                     md_control.value += chunk
 
