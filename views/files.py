@@ -64,6 +64,12 @@ class FilesView(ft.Container):
             self.state.set_files(files)
         except Exception as e:  # noqa: BLE001
             print(f"Error loading files: {e}")
+            self.page.open(
+                ft.SnackBar(
+                    ft.Text("Failed to load files.", color=ft.colors.WHITE),
+                    bgcolor=ft.colors.RED
+                )
+            )
 
     async def poll_statuses(self, *_args):
         while self._polling:
@@ -94,6 +100,12 @@ class FilesView(ft.Container):
                     await self.api_client.upload_file(content, f.name)
             except Exception as ex:  # noqa: BLE001
                 print(f"Error uploading {f.name}: {ex}")
+                self.page.open(
+                    ft.SnackBar(
+                        ft.Text(f"Failed to upload {f.name}: {ex}", color=ft.colors.WHITE),
+                        bgcolor=ft.colors.RED
+                    )
+                )
 
         # Refresh the list
         await self.initial_load()
@@ -126,4 +138,10 @@ class FilesView(ft.Container):
                 await self.initial_load()
             except Exception as ex:  # noqa: BLE001
                 print(f"Error deleting file {file_id}: {ex}")
+                self.page.open(
+                    ft.SnackBar(
+                        ft.Text(f"Failed to delete file: {ex}", color=ft.colors.WHITE),
+                        bgcolor=ft.colors.RED
+                    )
+                )
         return handler
