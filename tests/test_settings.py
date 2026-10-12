@@ -1,7 +1,8 @@
-import json
 import pytest
-from state.settings import Settings, load_settings, save_settings
+
 import state.settings
+from state.settings import Settings, load_settings, save_settings
+
 
 @pytest.fixture(autouse=True)
 def mock_settings_file(tmp_path, monkeypatch):
