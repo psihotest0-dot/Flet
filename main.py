@@ -1,6 +1,8 @@
 import flet as ft
 
+from api.client import APIClient
 from state.settings import load_settings, save_settings
+from views.files import FilesView
 
 
 def main(page: ft.Page):
@@ -41,6 +43,8 @@ def main(page: ft.Page):
         ]
     )
 
+    api_client = APIClient(base_url=settings.base_url, user_id="123e4567-e89b-12d3-a456-426614174000")
+
     t = ft.Tabs(
         selected_index=0,
         animation_duration=300,
@@ -59,9 +63,7 @@ def main(page: ft.Page):
             ),
             ft.Tab(
                 text="Files",
-                content=ft.Container(
-                    content=ft.Text("Files Tab content"), alignment=ft.alignment.center
-                ),
+                content=FilesView(page, api_client)
             ),
         ],
         expand=1,
