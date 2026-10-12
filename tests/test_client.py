@@ -2,7 +2,7 @@ import httpx
 import pytest
 import respx
 
-from api.client import APIClient, IngestedFile
+from api.client import APIClient, IngestedFile, Memory
 
 
 @pytest.fixture
@@ -114,8 +114,6 @@ async def test_get_file_status_success(client):
     assert isinstance(result, IngestedFile)
     assert result.id == "123e4567-e89b-12d3-a456-426614174001"
     assert result.status == "processing"
-
-from api.client import Memory
 
 
 @respx.mock
