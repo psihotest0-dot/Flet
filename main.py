@@ -2,6 +2,7 @@ import flet as ft
 
 from api.client import APIClient
 from state.settings import load_settings, save_settings
+from views.chat import ChatView
 from views.files import FilesView
 from views.memory import MemoryView
 
@@ -52,9 +53,7 @@ def main(page: ft.Page):
         tabs=[
             ft.Tab(
                 text="Chat",
-                content=ft.Container(
-                    content=ft.Text("Chat Tab content"), alignment=ft.alignment.center
-                ),
+                content=ChatView(page, api_client)
             ),
             ft.Tab(
                 text="Memory",
