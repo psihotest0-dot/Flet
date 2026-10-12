@@ -3,6 +3,7 @@ import flet as ft
 from api.client import APIClient
 from state.settings import load_settings, save_settings
 from views.files import FilesView
+from views.memory import MemoryView
 
 
 def main(page: ft.Page):
@@ -57,9 +58,7 @@ def main(page: ft.Page):
             ),
             ft.Tab(
                 text="Memory",
-                content=ft.Container(
-                    content=ft.Text("Memory Tab content"), alignment=ft.alignment.center
-                ),
+                content=MemoryView(page, api_client)
             ),
             ft.Tab(
                 text="Files",
