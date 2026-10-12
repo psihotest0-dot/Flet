@@ -1,9 +1,26 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
+
+
+class Memory(BaseModel):
+    id: str | None = None
+    user_id: str | None = None
+    content: str | None = None
+    status: str | None = None
+    embedding: list[float] | None = None
+    embedding_model: str | None = None
+    source_message_id: str | None = None
+    importance: int | None = None
+    metadata: dict[str, Any] | None = None
+    content_hash: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    last_used_at: datetime | None = None
 
 
 class IngestedFile(BaseModel):
@@ -51,3 +68,43 @@ class APIClient:
             response = await client.get(f"/v1/files/{file_id}", headers=headers)
             response.raise_for_status()
             return IngestedFile(**response.json())
+
+    async def create_memory(self, content: str, status: str = "candidate", source_message_id: str | None = None, importance: int | None = None, metadata: dict[str, Any] | None = None) -> Memory:
+        async with httpx.AsyncClient(base_url=self.base_url) as client:
+            headers = {"X-User-ID": self.user_id}
+            payload = {"content": content, "status": status}
+            if source_message_id is not None:
+                payload["source_message_id"] = source_message_id
+            if importance is not None:
+                payload["importance"] = importance
+            if metadata is not None:
+                payload["metadata"] = metadata
+            response = await client.post("/memories", headers=headers, json=payload)
+            response.raise_for_status()
+            return Memory(**response.json())
+
+    async def list_memories(self, status: str | None = None) -> list[Memory]:
+        async with httpx.AsyncClient(base_url=self.base_url) as client:
+            headers = {"X-User-ID": self.user_id}
+            params = {}
+            if status is not None:
+                params["status"] = status
+            response = await client.get("/memories", headers=headers, params=params or None)
+            response.raise_for_status()
+            return [Memory(**item) for item in response.json()]
+
+    async def update_memory(self, memory_id: str, content: str, status: str, importance: int, metadata: dict[str, Any] | None = None) -> Memory:
+        async with httpx.AsyncClient(base_url=self.base_url) as client:
+            headers = {"X-User-ID": self.user_id}
+            payload = {"content": content, "status": status, "importance": importance}
+            if metadata is not None:
+                payload["metadata"] = metadata
+            response = await client.put(f"/memories/{memory_id}", headers=headers, json=payload)
+            response.raise_for_status()
+            return Memory(**response.json())
+
+    async def delete_memory(self, memory_id: str) -> None:
+        async with httpx.AsyncClient(base_url=self.base_url) as client:
+            headers = {"X-User-ID": self.user_id}
+            response = await client.delete(f"/memories/{memory_id}", headers=headers)
+            response.raise_for_status()
