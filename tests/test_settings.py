@@ -1,4 +1,3 @@
-import json
 import pytest
 from state.settings import Settings, load_settings, save_settings
 import state.settings
