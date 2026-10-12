@@ -16,7 +16,7 @@ def main(page: ft.Page):
 
     def save_dlg(e):
         settings.base_url = base_url_field.value
-        settings.api_key = api_key_field.value if api_key_field.value else None
+        settings.api_key = api_key_field.value or None
         save_settings(settings)
         page.close(settings_dialog)
 

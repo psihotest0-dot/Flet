@@ -114,3 +114,135 @@ async def test_get_file_status_success(client):
     assert isinstance(result, IngestedFile)
     assert result.id == "123e4567-e89b-12d3-a456-426614174001"
     assert result.status == "processing"
+
+from api.client import Memory
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_create_memory_success(client):
+    mock_response = {
+        "id": "123e4567-e89b-12d3-a456-426614174001",
+        "user_id": "123e4567-e89b-12d3-a456-426614174000",
+        "content": "This is a memory",
+        "status": "candidate",
+        "importance": 1,
+        "created_at": "2023-01-01T00:00:00Z",
+        "updated_at": "2023-01-01T00:00:00Z"
+    }
+    respx.post("http://localhost:8080/memories").mock(return_value=httpx.Response(201, json=mock_response))
+
+    result = await client.create_memory("This is a memory")
+
+    assert isinstance(result, Memory)
+    assert result.id == "123e4567-e89b-12d3-a456-426614174001"
+    assert result.content == "This is a memory"
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_create_memory_conflict(client):
+    respx.post("http://localhost:8080/memories").mock(return_value=httpx.Response(409, json={"error": "Conflict"}))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.create_memory("This is a memory")
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_create_memory_server_error(client):
+    respx.post("http://localhost:8080/memories").mock(return_value=httpx.Response(500, json={"error": "Internal Server Error"}))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.create_memory("This is a memory")
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_list_memories_success(client):
+    mock_response = [
+        {
+            "id": "123e4567-e89b-12d3-a456-426614174001",
+            "user_id": "123e4567-e89b-12d3-a456-426614174000",
+            "content": "Memory 1",
+            "status": "candidate"
+        },
+        {
+            "id": "123e4567-e89b-12d3-a456-426614174002",
+            "user_id": "123e4567-e89b-12d3-a456-426614174000",
+            "content": "Memory 2",
+            "status": "active"
+        }
+    ]
+    respx.get("http://localhost:8080/memories").mock(return_value=httpx.Response(200, json=mock_response))
+
+    result = await client.list_memories()
+
+    assert len(result) == 2
+    assert isinstance(result[0], Memory)
+    assert result[0].content == "Memory 1"
+    assert result[1].content == "Memory 2"
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_list_memories_filtered(client):
+    mock_response = [
+        {
+            "id": "123e4567-e89b-12d3-a456-426614174001",
+            "user_id": "123e4567-e89b-12d3-a456-426614174000",
+            "content": "Memory 1",
+            "status": "candidate"
+        },
+        {
+            "id": "123e4567-e89b-12d3-a456-426614174002",
+            "user_id": "123e4567-e89b-12d3-a456-426614174000",
+            "content": "Memory 2",
+            "status": "active"
+        }
+    ]
+    respx.get("http://localhost:8080/memories?status=active").mock(return_value=httpx.Response(200, json=[mock_response[1]]))
+
+    result = await client.list_memories(status="active")
+
+    assert len(result) == 1
+    assert isinstance(result[0], Memory)
+    assert result[0].content == "Memory 2"
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_update_memory_success(client):
+    mock_response = {
+        "id": "123e4567-e89b-12d3-a456-426614174001",
+        "user_id": "123e4567-e89b-12d3-a456-426614174000",
+        "content": "Updated memory",
+        "status": "active",
+        "importance": 2
+    }
+    respx.put("http://localhost:8080/memories/123e4567-e89b-12d3-a456-426614174001").mock(return_value=httpx.Response(200, json=mock_response))
+
+    result = await client.update_memory("123e4567-e89b-12d3-a456-426614174001", content="Updated memory", status="active", importance=2)
+
+    assert isinstance(result, Memory)
+    assert result.content == "Updated memory"
+    assert result.status == "active"
+    assert result.importance == 2
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_update_memory_not_found(client):
+    respx.put("http://localhost:8080/memories/123e4567-e89b-12d3-a456-426614174001").mock(return_value=httpx.Response(404))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.update_memory("123e4567-e89b-12d3-a456-426614174001", content="Updated memory", status="active", importance=2)
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_delete_memory_success(client):
+    respx.delete("http://localhost:8080/memories/123e4567-e89b-12d3-a456-426614174001").mock(return_value=httpx.Response(204))
+
+    await client.delete_memory("123e4567-e89b-12d3-a456-426614174001")
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_delete_memory_not_found(client):
+    respx.delete("http://localhost:8080/memories/123e4567-e89b-12d3-a456-426614174001").mock(return_value=httpx.Response(404))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.delete_memory("123e4567-e89b-12d3-a456-426614174001")
