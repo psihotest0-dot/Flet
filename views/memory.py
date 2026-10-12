@@ -79,8 +79,8 @@ class MemoryView(ft.Container):
 
             # Inline edit state for each row
 
-            content_text = ft.Text(memory.content or "", expand=True)
-            content_field = ft.TextField(value=memory.content or "", expand=True, visible=False, multiline=True)
+            content_text = ft.Text(memory.content or "")
+            content_field = ft.TextField(value=memory.content or "", visible=False, multiline=True)
 
             edit_btn = ft.IconButton(
                 icon=ft.icons.EDIT,
