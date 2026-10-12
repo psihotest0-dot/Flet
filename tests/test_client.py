@@ -246,3 +246,23 @@ async def test_delete_memory_not_found(client):
 
     with pytest.raises(httpx.HTTPStatusError):
         await client.delete_memory("123e4567-e89b-12d3-a456-426614174001")
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_chat_success(client):
+
+    async def sse_stream():
+        yield b'data: {"text": "Hello"}\n\n'
+        yield b'data: {"source": "Doc 1"}\n\n'
+        yield b'data: [DONE]\n\n'
+
+    respx.post("http://localhost:8080/chat/stream").mock(return_value=httpx.Response(200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}))
+
+    generator = client.stream_chat(session_id="session-123", content="Hi")
+    results = []
+    async for item in generator:
+        results.append(item)
+
+    assert len(results) == 2
+    assert results[0] == {"text": "Hello"}
+    assert results[1] == {"source": "Doc 1"}
