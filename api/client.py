@@ -1,20 +1,22 @@
-from typing import Optional
+from __future__ import annotations
+
 from datetime import datetime
-from pydantic import BaseModel
+
 import httpx
+from pydantic import BaseModel
 
 
 class IngestedFile(BaseModel):
-    id: Optional[str] = None
-    user_id: Optional[str] = None
-    file_name: Optional[str] = None
-    file_hash: Optional[str] = None
-    mime_type: Optional[str] = None
-    file_size: Optional[int] = None
-    status: Optional[str] = None
-    local_path: Optional[str] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    id: str | None = None
+    user_id: str | None = None
+    file_name: str | None = None
+    file_hash: str | None = None
+    mime_type: str | None = None
+    file_size: int | None = None
+    status: str | None = None
+    local_path: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class APIClient:
