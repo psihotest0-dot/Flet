@@ -17,7 +17,9 @@ build-backend = "hatchling.build"
 [project.optional-dependencies]
 dev = [
     "pytest",
-    "ruff"
+    "pytest-asyncio",
+    "ruff",
+    "respx"
 ]
 
 [tool.pytest.ini_options]
