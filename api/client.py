@@ -42,6 +42,14 @@ class APIClient:
         self.base_url = base_url
         self.user_id = user_id
 
+    async def check_health(self) -> bool:
+        try:
+            async with httpx.AsyncClient(base_url=self.base_url, timeout=5.0) as client:
+                response = await client.get("/healthz")
+                return response.status_code == 200
+        except Exception:  # noqa: BLE001
+            return False
+
     async def upload_file(self, file_content: bytes, filename: str, mime_type: str = "application/octet-stream") -> IngestedFile:
         async with httpx.AsyncClient(base_url=self.base_url) as client:
             headers = {"X-User-ID": self.user_id}
