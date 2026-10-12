@@ -1,3 +1,5 @@
+import asyncio
+
 import flet as ft
 
 from api.client import APIClient
@@ -38,14 +40,30 @@ def main(page: ft.Page):
     def open_settings(e):
         page.open(settings_dialog)
 
+    status_icon = ft.Icon(name=ft.icons.CIRCLE, color=ft.colors.RED, size=14, tooltip="Disconnected")
+
     page.appbar = ft.AppBar(
-        title=ft.Text("AI Agent"),
+        title=ft.Row([ft.Text("AI Agent"), status_icon], alignment=ft.MainAxisAlignment.START),
         actions=[
             ft.IconButton(ft.icons.SETTINGS, on_click=open_settings)
         ]
     )
 
     api_client = APIClient(base_url=settings.base_url, user_id="123e4567-e89b-12d3-a456-426614174000")
+
+    async def check_connection():
+        while True:
+            is_healthy = await api_client.check_health()
+            if is_healthy:
+                status_icon.color = ft.colors.GREEN
+                status_icon.tooltip = "Connected"
+            else:
+                status_icon.color = ft.colors.RED
+                status_icon.tooltip = "Disconnected"
+            page.update()
+            await asyncio.sleep(5)
+
+    page.run_task(check_connection)
 
     t = ft.Tabs(
         selected_index=0,

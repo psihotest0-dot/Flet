@@ -66,6 +66,12 @@ class MemoryView(ft.Container):
             self.state.set_memories(memories)
         except Exception as e:  # noqa: BLE001
             print(f"Error loading memories: {e}")
+            self.page.open(
+                ft.SnackBar(
+                    ft.Text("Failed to load memories.", color=ft.colors.WHITE),
+                    bgcolor=ft.colors.RED
+                )
+            )
 
     async def on_filter_change(self, e):
         await self.load_memories()
@@ -141,6 +147,12 @@ class MemoryView(ft.Container):
                         self.state.update_memory(updated_mem)
                     except Exception as ex:  # noqa: BLE001
                         print(f"Error updating memory {mem.id}: {ex}")
+                        self.page.open(
+                            ft.SnackBar(
+                                ft.Text(f"Failed to update memory: {ex}", color=ft.colors.WHITE),
+                                bgcolor=ft.colors.RED
+                            )
+                        )
                     finally:
                         # Revert UI to non-edit mode (update_table will be triggered by state change anyway, but this is a fallback)
                         c_text.visible = True
@@ -164,6 +176,12 @@ class MemoryView(ft.Container):
                             self.state.remove_memory(mem.id)
                         except Exception as ex:  # noqa: BLE001
                             print(f"Error deleting memory {mem.id}: {ex}")
+                            self.page.open(
+                                ft.SnackBar(
+                                    ft.Text(f"Failed to delete memory: {ex}", color=ft.colors.WHITE),
+                                    bgcolor=ft.colors.RED
+                                )
+                            )
                         finally:
                             self.page.close(confirm_dialog)
 
