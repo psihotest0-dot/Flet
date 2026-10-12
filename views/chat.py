@@ -170,6 +170,12 @@ class ChatView(ft.Container):
         except Exception as ex:  # noqa: BLE001
             print(f"Error during streaming: {ex}")
             md_control.value += "\n\n**Error getting response.**"
+            self.page.open(
+                ft.SnackBar(
+                    ft.Text(f"Failed to stream response: {ex}", color=ft.colors.WHITE),
+                    bgcolor=ft.colors.RED
+                )
+            )
 
         self.update()
 

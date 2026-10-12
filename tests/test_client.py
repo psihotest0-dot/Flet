@@ -12,6 +12,30 @@ def client():
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_check_health_success(client):
+    respx.get("http://localhost:8080/healthz").mock(return_value=httpx.Response(200, text="OK"))
+    result = await client.check_health()
+    assert result is True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_check_health_failure_status(client):
+    respx.get("http://localhost:8080/healthz").mock(return_value=httpx.Response(500))
+    result = await client.check_health()
+    assert result is False
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_check_health_exception(client):
+    respx.get("http://localhost:8080/healthz").mock(side_effect=httpx.ConnectError("Connection refused"))
+    result = await client.check_health()
+    assert result is False
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_upload_file_success(client):
     mock_response = {
         "id": "123e4567-e89b-12d3-a456-426614174001",
