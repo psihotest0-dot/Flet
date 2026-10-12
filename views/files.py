@@ -23,7 +23,6 @@ class FilesView(ft.Container):
 
         # Components
         self.file_picker = ft.FilePicker(on_result=self.on_file_picker_result)
-        self.page.overlay.append(self.file_picker)
 
         self.upload_btn = ft.ElevatedButton(
             "Upload File",
@@ -51,11 +50,17 @@ class FilesView(ft.Container):
         self._polling = False
 
     def did_mount(self):
+        if self.file_picker not in self.page.overlay:
+            self.page.overlay.append(self.file_picker)
+            self.page.update()
         self._polling = True
         self.page.run_task(self.initial_load)
         self.page.run_task(self.poll_statuses)
 
     def will_unmount(self):
+        if self.file_picker in self.page.overlay:
+            self.page.overlay.remove(self.file_picker)
+            self.page.update()
         self._polling = False
 
     async def initial_load(self, *_args):
