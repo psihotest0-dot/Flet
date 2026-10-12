@@ -119,7 +119,7 @@ class APIClient:
             response.raise_for_status()
 
     async def stream_chat(self, session_id: str, content: str):
-        async with httpx.AsyncClient(base_url=self.base_url) as client:
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=None) as client:
             headers = {"X-User-ID": self.user_id}
             payload = {"session_id": session_id, "content": content}
             async with client.stream("POST", "/chat/stream", headers=headers, json=payload) as response:
