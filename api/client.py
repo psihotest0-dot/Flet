@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from typing import Any
 
 import httpx
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 
 class Memory(BaseModel):
@@ -123,7 +126,12 @@ class APIClient:
             headers = {"X-User-ID": self.user_id}
             payload = {"session_id": session_id, "content": content}
             async with client.stream("POST", "/chat/stream", headers=headers, json=payload) as response:
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    await e.response.aread()
+                    logger.error("Error streaming chat. Status: %s, URL: %s, Response: %s", e.response.status_code, e.request.url, e.response.text)
+                    raise
                 async for line in response.aiter_lines():
                     if line.startswith("data: "):
                         data = line[6:].strip()
