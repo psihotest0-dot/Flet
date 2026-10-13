@@ -132,12 +132,21 @@ class APIClient:
                     await e.response.aread()
                     logger.error("Error streaming chat. Status: %s, URL: %s, Response: %s", e.response.status_code, e.request.url, e.response.text)
                     raise
+                is_error_event = False
                 async for line in response.aiter_lines():
-                    if line.startswith("data:"):
+                    if line.startswith("event: error"):
+                        is_error_event = True
+                    elif line.startswith("data:"):
                         data = line[5:].strip()
                         if data == "[DONE]":
                             break
                         print(f"ПОЛУЧЕН ЧАНК: {data}")
+
+                        if is_error_event:
+                            yield {"error": data}
+                            is_error_event = False
+                            continue
+
                         try:
                             yield json.loads(data)
                         except json.JSONDecodeError:

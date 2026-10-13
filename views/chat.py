@@ -155,6 +155,15 @@ class ChatView(ft.Container):
                 if isinstance(chunk, dict):
                     if "text" in chunk:
                         md_control.value += chunk["text"]
+                        md_control.update()
+
+                    if "content" in chunk:
+                        md_control.value += chunk["content"]
+                        md_control.update()
+
+                    if "error" in chunk:
+                        md_control.value += f"\n\n**Error:** {chunk['error']}"
+                        md_control.update()
 
                     has_new_source = False
                     for source_key in ("facts", "chunks"):
@@ -180,6 +189,7 @@ class ChatView(ft.Container):
 
                 elif isinstance(chunk, str):
                     md_control.value += chunk
+                    md_control.update()
 
                 self.update()
 
