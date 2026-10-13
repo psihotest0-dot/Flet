@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from logging.handlers import RotatingFileHandler
 
 import flet as ft
 
@@ -10,7 +11,7 @@ from views.files import FilesView
 from views.memory import MemoryView
 
 logging.basicConfig(
-    filename="app.log",
+    handlers=[RotatingFileHandler("app.log", maxBytes=1024 * 1024, backupCount=3)],
     level=logging.ERROR,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import uuid
 
 import flet as ft
 
 from api.client import APIClient
+
+logger = logging.getLogger(__name__)
 
 
 class ChatView(ft.Container):
@@ -194,7 +197,7 @@ class ChatView(ft.Container):
                 self.update()
 
         except Exception as ex:  # noqa: BLE001
-            print(f"Error during streaming: {ex}")
+            logger.error(f"Грешка: {ex}")
             md_control.value += "\n\n**Error getting response.**"
             self.page.open(
                 ft.SnackBar(

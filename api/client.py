@@ -140,7 +140,6 @@ class APIClient:
                         data = line[5:].strip()
                         if data == "[DONE]":
                             break
-                        print(f"ПОЛУЧЕН ЧАНК: {data}")
 
                         if is_error_event:
                             yield {"error": data}
