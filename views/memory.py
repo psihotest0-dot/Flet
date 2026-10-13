@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
+
 import flet as ft
 
 from api.client import APIClient
 from state.memory import MemoryState
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryView(ft.Container):
@@ -65,7 +69,7 @@ class MemoryView(ft.Container):
             memories = await self.api_client.list_memories(status=status)
             self.state.set_memories(memories)
         except Exception as e:  # noqa: BLE001
-            print(f"Error loading memories: {e}")
+            logger.error(f"Грешка: {e}")
             self.page.open(
                 ft.SnackBar(
                     ft.Text("Failed to load memories.", color=ft.colors.WHITE),
@@ -146,7 +150,7 @@ class MemoryView(ft.Container):
                         )
                         self.state.update_memory(updated_mem)
                     except Exception as ex:  # noqa: BLE001
-                        print(f"Error updating memory {mem.id}: {ex}")
+                        logger.error(f"Грешка: {ex}")
                         self.page.open(
                             ft.SnackBar(
                                 ft.Text(f"Failed to update memory: {ex}", color=ft.colors.WHITE),
@@ -175,7 +179,7 @@ class MemoryView(ft.Container):
                             await self.api_client.delete_memory(mem.id)
                             self.state.remove_memory(mem.id)
                         except Exception as ex:  # noqa: BLE001
-                            print(f"Error deleting memory {mem.id}: {ex}")
+                            logger.error(f"Грешка: {ex}")
                             self.page.open(
                                 ft.SnackBar(
                                     ft.Text(f"Failed to delete memory: {ex}", color=ft.colors.WHITE),
