@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 
 import flet as ft
 
 from api.client import APIClient
 from state.files import FilesState
+
+logger = logging.getLogger(__name__)
 
 
 class FilesView(ft.Container):
@@ -68,7 +71,7 @@ class FilesView(ft.Container):
             files = await self.api_client.list_files()
             self.state.set_files(files)
         except Exception as e:  # noqa: BLE001
-            print(f"Error loading files: {e}")
+            logger.error(f"Грешка: {e}")
             self.page.open(
                 ft.SnackBar(
                     ft.Text("Failed to load files.", color=ft.colors.WHITE),
@@ -91,7 +94,7 @@ class FilesView(ft.Container):
                     updated_file = await self.api_client.get_file_status(file.id)
                     self.state.update_file(updated_file)
                 except Exception as e:  # noqa: BLE001
-                    print(f"Error polling file {file.id}: {e}")
+                    logger.error(f"Грешка: {e}")
 
     async def on_file_picker_result(self, e: ft.FilePickerResultEvent):
         if not e.files:
@@ -104,7 +107,7 @@ class FilesView(ft.Container):
                     content = await asyncio.to_thread(Path(f.path).read_bytes)
                     await self.api_client.upload_file(content, f.name)
             except Exception as ex:  # noqa: BLE001
-                print(f"Error uploading {f.name}: {ex}")
+                logger.error(f"Грешка: {ex}")
                 self.page.open(
                     ft.SnackBar(
                         ft.Text(f"Failed to upload {f.name}: {ex}", color=ft.colors.WHITE),
@@ -142,7 +145,7 @@ class FilesView(ft.Container):
                 await self.api_client.delete_file(file_id)
                 await self.initial_load()
             except Exception as ex:  # noqa: BLE001
-                print(f"Error deleting file {file_id}: {ex}")
+                logger.error(f"Грешка: {ex}")
                 self.page.open(
                     ft.SnackBar(
                         ft.Text(f"Failed to delete file: {ex}", color=ft.colors.WHITE),
