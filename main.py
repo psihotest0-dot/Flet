@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 import flet as ft
 
@@ -8,6 +9,11 @@ from views.chat import ChatView
 from views.files import FilesView
 from views.memory import MemoryView
 
+logging.basicConfig(
+    filename="app.log",
+    level=logging.ERROR,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 def main(page: ft.Page):
     page.title = "AI Agent Client"
