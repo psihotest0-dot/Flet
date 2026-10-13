@@ -65,12 +65,18 @@ class ChatView(ft.Container):
     def add_message(self, role: str, text: str):
         is_user = role == "user"
 
+        text_color = ft.colors.LIGHT_BLUE_200 if is_user else ft.colors.PINK_200
+        sender_name = "Ивайло" if is_user else "Лили"
+
         # We need text to wrap
         md = ft.Markdown(
             value=text,
             selectable=True,
             extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
             code_theme="atom-one-dark",
+            md_style_sheet=ft.MarkdownStyleSheet(
+                p_text_style=ft.TextStyle(color=text_color),
+            )
         )
 
         # Put it in a container for styling
@@ -79,8 +85,25 @@ class ChatView(ft.Container):
             padding=10,
             border_radius=10,
             bgcolor=ft.colors.BLUE_GREY_800 if is_user else ft.colors.BLUE_GREY_900,
+        )
+
+        sender_label = ft.Text(
+            value=sender_name,
+            size=12,
+            color=ft.colors.GREY_500,
+        )
+
+        message_column = ft.Column(
+            controls=[sender_label, msg_container],
+            spacing=2,
+            horizontal_alignment=ft.CrossAxisAlignment.END if is_user else ft.CrossAxisAlignment.START,
+        )
+
+        container_wrapper = ft.Container(
+            content=message_column,
             margin=ft.margin.only(left=50 if is_user else 0, right=0 if is_user else 50),
         )
+
 
         expansion_tile = None
         if not is_user:
@@ -91,7 +114,7 @@ class ChatView(ft.Container):
             )
             # Wrap in a column to put the tile below the message
             column = ft.Column(
-                controls=[msg_container, expansion_tile],
+                controls=[container_wrapper, expansion_tile],
                 spacing=5,
             )
             row = ft.Row(
@@ -100,7 +123,7 @@ class ChatView(ft.Container):
             )
         else:
             row = ft.Row(
-                controls=[msg_container],
+                controls=[container_wrapper],
                 alignment=ft.MainAxisAlignment.END,
             )
 
