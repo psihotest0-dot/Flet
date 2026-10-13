@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 import uuid
 
 import flet as ft
@@ -148,8 +147,6 @@ class ChatView(ft.Container):
         md_control, expansion_tile = self.add_message("assistant", "")
         self._stop_generation = False
 
-        last_update_time = time.time()
-
         try:
             async for chunk in self.api_client.stream_chat(session_id=self.session_id, content=user_text):
                 if self._stop_generation:
@@ -184,11 +181,7 @@ class ChatView(ft.Container):
                 elif isinstance(chunk, str):
                     md_control.value += chunk
 
-                # Batch updates every 50ms
-                current_time = time.time()
-                if current_time - last_update_time >= 0.05:
-                    self.update()
-                    last_update_time = current_time
+                self.update()
 
         except Exception as ex:  # noqa: BLE001
             print(f"Error during streaming: {ex}")
