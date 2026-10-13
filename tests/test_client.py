@@ -274,8 +274,10 @@ async def test_delete_memory_not_found(client):
 async def test_stream_chat_success(client):
 
     async def sse_stream():
-        yield b'data: {"text": "Hello"}\n\n'
+        yield b'data: {"content": "Hello"}\n\n'
         yield b'data: {"source": "Doc 1"}\n\n'
+        yield b'event: error\n'
+        yield b'data: Something went wrong\n\n'
         yield b'data: [DONE]\n\n'
 
     respx.post("http://localhost:8080/chat/stream").mock(return_value=httpx.Response(200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}))
@@ -285,6 +287,7 @@ async def test_stream_chat_success(client):
     async for item in generator:
         results.append(item)
 
-    assert len(results) == 2
-    assert results[0] == {"text": "Hello"}
+    assert len(results) == 3
+    assert results[0] == {"content": "Hello"}
     assert results[1] == {"source": "Doc 1"}
+    assert results[2] == {"error": "Something went wrong"}
