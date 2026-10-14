@@ -133,9 +133,12 @@ class APIClient:
                     logger.error("Error streaming chat. Status: %s, URL: %s, Response: %s", e.response.status_code, e.request.url, e.response.text)
                     raise
                 is_error_event = False
+                is_sources_event = False
                 async for line in response.aiter_lines():
                     if line.startswith("event: error"):
                         is_error_event = True
+                    elif line.startswith("event: sources"):
+                        is_sources_event = True
                     elif line.startswith("data:"):
                         data = line[5:].strip()
                         if data == "[DONE]":
@@ -144,6 +147,14 @@ class APIClient:
                         if is_error_event:
                             yield {"error": data}
                             is_error_event = False
+                            continue
+
+                        if is_sources_event:
+                            try:
+                                yield {"type": "sources", "data": json.loads(data)}
+                            except json.JSONDecodeError:
+                                yield {"type": "sources", "data": data}
+                            is_sources_event = False
                             continue
 
                         try:
