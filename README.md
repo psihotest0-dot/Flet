@@ -1,56 +1,73 @@
 # Flet Client for AI Agent
 
-This is a Flet-based desktop client application for an AI agent.
+Това е десктоп клиентско приложение, базирано на Flet, предназначено за работа с AI агент.
 
-## Local Development Setup
+## Архитектура на проекта
+Проектът следва стриктна структура с разделение на отговорностите:
+- **`api/`**: Съдържа логиката за комуникация с бекенда. Всички HTTP заявки минават изключително през `api/client.py`, използвайки `httpx.AsyncClient` за асинхронна комуникация.
+- **`views/`**: Съдържа потребителския интерфейс (UI), разделен на отделни изгледи (Views):
+  - **ChatView (`chat.py`)**: Интерфейс за чат с AI агента (конвенционално използва 'Ивайло' за потребителя и 'Лили' за асистента). Поддържа Server-Sent Events (SSE) за стрийминг на отговори в реално време.
+  - **MemoryView (`memory.py`)**: Интерфейс за преглед и управление на паметта на агента.
+  - **FilesView (`files.py`)**: Интерфейс за качване и управление на файлове.
+- **`state/`**: Съдържа логиката за управление на състоянието на приложението и настройките. Настройките се управляват чрез Pydantic v2 (`pydantic-settings`) и се записват в локален JSON файл.
+- **`tests/`**: Съдържа автоматизираните тестове.
 
-To run the project locally for development, follow these step-by-step instructions:
+## Локална среда за разработка
 
-1. **Clone the repository:**
+За да стартирате проекта локално за разработка, следвайте тези стъпки:
+
+1. **Клониране на хранилището:**
    ```bash
    git clone <repository_url>
    cd <repository_name>
    ```
 
-2. **Set up a virtual environment (optional but recommended):**
+2. **Създаване на виртуална среда (препоръчително):**
    ```bash
    python -m venv venv
-   source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
+   source venv/bin/activate  # За Windows: `venv\Scripts\activate`
    ```
 
-3. **Install dependencies:**
-   Install the project with development dependencies.
+3. **Инсталиране на зависимости:**
+   Инсталирайте проекта заедно със зависимостите за разработка:
    ```bash
    pip install -e .[dev]
    ```
 
-4. **Run the application:**
-   You can start the Flet app by running the main Python file.
+4. **Стартиране на приложението:**
+   Можете да стартирате Flet приложението, като изпълните главния Python файл:
    ```bash
    python main.py
    ```
-   *(Alternatively, you can run `flet run main.py`)*
 
-## Building the Standalone Application
+## Правила за разработка
 
-To compile the project into a standalone executable desktop application (`.exe` for Windows, `.app` for macOS), use the Flet build command.
+- **Мрежови заявки:** Всички HTTP заявки към бекенда задължително минават през `api/client.py`.
+- **Тестване:** Тестовете не правят реални мрежови повиквания (използвайте мокове, напр. `respx`). Изпълнявайте тестовете чрез `python -m pytest` или `PYTHONPATH=. pytest`.
+- **Качество на кода:** Преди всеки Pull Request, `ruff check --preview .` (линтер) и `pytest` (тестове) трябва да преминават без грешки.
+- **Грешки и логове:** Грешките на приложението се записват локално в `app.log` с помощта на `logging.handlers.RotatingFileHandler`. Избягвайте използването на чист `print` за грешки.
+- **Flet версия:** Версията на Flet е стриктно фиксирана на `0.24.0`. Диалозите и SnackBar компонентите трябва да се управляват чрез `page.open()` и `page.close()`.
 
-Run the following command from the root of the project:
+## Билдване на самостоятелно приложение
+
+За да компилирате проекта в самостоятелно изпълнимо десктоп приложение (`.exe` за Windows, `.app` за macOS), използвайте командата за билд на Flet.
+
+Изпълнете следната команда от основната директория на проекта:
 
 ```bash
 flet build <target_platform>
 ```
 
-Replace `<target_platform>` with your desired operating system target (e.g., `windows`, `macos`, `linux`, `apk`, `aab`, `ipa`).
+Заменете `<target_platform>` с желаната операционна система (напр. `windows`, `macos`, `linux`).
 
-For example, to build for macOS:
+Пример за macOS:
 ```bash
 flet build macos
 ```
 
-To build for Windows:
+Пример за Windows:
 ```bash
 flet build windows
 ```
 
-The resulting executable will be placed in the `build/` directory (or similar, depending on the target platform).
+Резултатният изпълним файл ще бъде запазен в директорията `build/` (или подобна, в зависимост от целевата платформа).
