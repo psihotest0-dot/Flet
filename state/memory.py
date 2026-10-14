@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+"""State management for the memory view."""
+
 from typing import Callable
 
 from pydantic import BaseModel, Field, PrivateAttr
@@ -6,6 +10,7 @@ from api.client import Memory
 
 
 class MemoryState(BaseModel):
+    """Manages the state of memories and listeners for updates."""
     memories: list[Memory] = Field(default_factory=list)
     _on_change_callbacks: list[Callable[[], None]] = PrivateAttr(default_factory=list)
 

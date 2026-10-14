@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+"""State management for the files view."""
+
 from typing import Callable
 
 from pydantic import BaseModel, Field, PrivateAttr
@@ -6,6 +10,7 @@ from api.client import IngestedFile
 
 
 class FilesState(BaseModel):
+    """Manages the state of files and listeners for updates."""
     files: list[IngestedFile] = Field(default_factory=list)
     _on_change_callbacks: list[Callable[[], None]] = PrivateAttr(default_factory=list)
 
