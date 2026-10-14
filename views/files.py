@@ -33,6 +33,12 @@ class FilesView(ft.Container):
             on_click=lambda _: self.file_picker.pick_files()
         )
 
+        self.refresh_btn = ft.ElevatedButton(
+            "Refresh",
+            icon=ft.icons.REFRESH,
+            on_click=self.on_refresh_click
+        )
+
         self.data_table = ft.DataTable(
             columns=[
                 ft.DataColumn(ft.Text("File Name")),
@@ -44,7 +50,7 @@ class FilesView(ft.Container):
 
         self.content = ft.Column(
             controls=[
-                self.upload_btn,
+                ft.Row([self.upload_btn, self.refresh_btn], alignment=ft.MainAxisAlignment.CENTER),
                 self.data_table
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER
@@ -66,6 +72,9 @@ class FilesView(ft.Container):
             self.page.update()
         self._polling = False
 
+    async def on_refresh_click(self, e):
+        await self.initial_load()
+
     async def initial_load(self, *_args):
         try:
             files = await self.api_client.list_files()
@@ -84,7 +93,7 @@ class FilesView(ft.Container):
             await asyncio.sleep(3)
             if not self.state:
                 continue
-            active_files = [f for f in self.state.files if f.status not in ("done", "failed")]
+            active_files = [f for f in self.state.files if f.status not in ("completed", "failed")]
             for file in active_files:
                 if not self._polling:
                     break
@@ -136,6 +145,7 @@ class FilesView(ft.Container):
                 )
             )
         self.update()
+        self.page.update()
 
     def create_delete_handler(self, file_id: str | None):
         async def handler(e):
