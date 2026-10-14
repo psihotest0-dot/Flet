@@ -110,7 +110,8 @@ class ChatMessage(ft.Column):
                 break
 
         self.sources_row.visible = True
-        self.update()
+        if self.page:
+            self.update()
 
     def open_sources_panel(self):
         if not self.page_ref:
