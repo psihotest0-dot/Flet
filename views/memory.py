@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Memory view component for managing AI agent memory."""
+
 import logging
 
 import flet as ft
@@ -11,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryView(ft.Container):
+    """The main view for listing, editing, and deleting agent memories."""
     def __init__(self, page: ft.Page, api_client: APIClient):
         super().__init__()
         self.page = page

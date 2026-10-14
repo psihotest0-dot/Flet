@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Chat view components for interacting with the AI agent."""
+
 import logging
 import uuid
 
@@ -23,6 +25,7 @@ def _get_mock_sources():
 
 
 class ChatMessage(ft.Column):
+    """A component representing a single chat message in the UI."""
     def __init__(self, role: str, text: str, sources: list | None = None, page: ft.Page | None = None):
         super().__init__()
         self.role = role
@@ -131,7 +134,8 @@ class ChatMessage(ft.Column):
                     score_str = f"{score_float*100:.1f}%"
                 else:
                     score_str = f"{score_float:.1f}%"
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
+                logger.error(f"Failed to convert score '{score}' to float: {e}")
                 score_str = str(score)
 
             item = ft.Container(
@@ -161,6 +165,7 @@ class ChatMessage(ft.Column):
 
 
 class ChatView(ft.Container):
+    """The main view for the chat interface."""
     def __init__(self, page: ft.Page, api_client: APIClient):
         super().__init__()
         self.page = page
