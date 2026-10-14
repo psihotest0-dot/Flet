@@ -35,10 +35,10 @@ def test_files_state_update_file():
 
     state.add_listener(listener)
 
-    updated_file = IngestedFile(id="1", file_name="test1.txt", status="done")
+    updated_file = IngestedFile(id="1", file_name="test1.txt", status="completed")
     state.update_file(updated_file)
 
-    assert state.files[0].status == "done"
+    assert state.files[0].status == "completed"
     assert called is True
 
 
