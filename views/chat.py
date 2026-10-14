@@ -9,6 +9,156 @@ from api.client import APIClient
 
 logger = logging.getLogger(__name__)
 
+DEBUG_MOCK_SOURCES = True
+
+
+def _get_mock_sources():
+    return [
+        {"title": "guidelines.pdf", "type": "Документ", "score": "95", "text_snippet": "Това е първият пример за намерен текст от документа guidelines.pdf."},
+        {"title": "receipt_123.jpg", "type": "OCR", "score": "82", "text_snippet": "Извлечен текст от касова бележка. Сума: 12.50 BGN"},
+        {"title": "manual.docx", "type": "Документ", "score": "78", "text_snippet": "Важно упътване от файла manual.docx относно инсталацията."},
+        {"title": "notes.txt", "type": "Документ", "score": "60", "text_snippet": "Някакви случайни записки, които са намерени от RAG системата."},
+        {"title": "screenshot.png", "type": "OCR", "score": "45", "text_snippet": "Текст от екранна снимка на браузър."},
+    ]
+
+
+class ChatMessage(ft.Column):
+    def __init__(self, role: str, text: str, sources: list | None = None, page: ft.Page | None = None):
+        super().__init__()
+        self.role = role
+        self.text_value = text
+        self.sources = sources or []
+        self.page_ref = page
+        self.spacing = 2
+        self.horizontal_alignment = ft.CrossAxisAlignment.END if role == "user" else ft.CrossAxisAlignment.START
+
+        self.text_color = ft.colors.LIGHT_BLUE_200 if role == "user" else ft.colors.PINK_200
+        self.sender_name = "Ивайло" if role == "user" else "Лили"
+        self.bgcolor = ft.colors.BLUE_GREY_800 if role == "user" else ft.colors.BLUE_GREY_900
+
+        self.md = ft.Markdown(
+            value=self.text_value,
+            selectable=True,
+            extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
+            code_theme="atom-one-dark",
+            md_style_sheet=ft.MarkdownStyleSheet(
+                p_text_style=ft.TextStyle(color=self.text_color),
+            )
+        )
+
+        self.msg_container = ft.Container(
+            content=self.md,
+            padding=10,
+            border_radius=10,
+            bgcolor=self.bgcolor,
+        )
+
+        self.sender_label = ft.Text(
+            value=self.sender_name,
+            size=12,
+            color=ft.colors.GREY_500,
+        )
+
+        self.sources_row = ft.Row(wrap=True, visible=False)
+        self.bottom_sheet = None
+
+        self.controls = [
+            self.sender_label,
+            self.msg_container,
+            self.sources_row
+        ]
+
+        if self.sources:
+            self.add_sources(self.sources)
+
+    def append_text(self, text: str):
+        self.md.value += text
+        self.md.update()
+
+    def add_sources(self, sources: list):
+        if not sources:
+            return
+
+        self.sources.extend(sources)
+        self.sources_row.controls.clear()
+
+        self.sources_row.controls.append(ft.Text("Източници:", size=12, color=ft.colors.GREY_400))
+
+        def create_chip_callback():
+            return lambda e: self.open_sources_panel()
+
+        for i, src in enumerate(self.sources):
+            if i < 3:
+                title = src.get("title", src.get("file_name", "Unknown"))
+                short_title = (title[:15] + "..") if len(title) > 15 else title
+                chip = ft.Chip(
+                    label=ft.Text(short_title, size=12),
+                    leading=ft.Icon(ft.icons.INSERT_DRIVE_FILE, size=14),
+                    on_click=create_chip_callback()
+                )
+                self.sources_row.controls.append(chip)
+            elif i == 3:
+                remaining = len(self.sources) - 3
+                chip = ft.Chip(
+                    label=ft.Text(f"+{remaining}", size=12),
+                    on_click=create_chip_callback()
+                )
+                self.sources_row.controls.append(chip)
+                break
+
+        self.sources_row.visible = True
+        self.update()
+
+    def open_sources_panel(self):
+        if not self.page_ref:
+            return
+
+        list_view = ft.ListView(expand=True, spacing=10, padding=20)
+
+        list_view.controls.append(ft.Text("Източници (RAG)", size=20, weight=ft.FontWeight.BOLD))
+
+        for src in self.sources:
+            title = src.get("title", src.get("file_name", "Unknown"))
+            src_type = src.get("type", src.get("source_type", "Документ"))
+            score = src.get("score", "N/A")
+            snippet = src.get("text_snippet", "")
+
+            # If score is a number, format it, otherwise leave as is
+            try:
+                score_float = float(score)
+                # Ensure it looks like a percentage if it's 0-1 or 0-100
+                if score_float <= 1.0:
+                    score_str = f"{score_float*100:.1f}%"
+                else:
+                    score_str = f"{score_float:.1f}%"
+            except (ValueError, TypeError):
+                score_str = str(score)
+
+            item = ft.Container(
+                content=ft.Column([
+                    ft.Row([
+                        ft.Text(title, weight=ft.FontWeight.BOLD, size=16),
+                        ft.Text(f"• {src_type} • Сходство: {score_str}", size=12, color=ft.colors.GREY_400)
+                    ]),
+                    ft.Text(snippet, selectable=True, size=14, color=ft.colors.GREY_300)
+                ]),
+                bgcolor=ft.colors.BLUE_GREY_900,
+                padding=15,
+                border_radius=10,
+                border=ft.border.all(1, ft.colors.BLUE_GREY_700)
+            )
+            list_view.controls.append(item)
+
+        self.bottom_sheet = ft.BottomSheet(
+            content=ft.Container(
+                content=list_view,
+                padding=10,
+                height=400,
+            ),
+            open=True
+        )
+        self.page_ref.open(self.bottom_sheet)
+
 
 class ChatView(ft.Container):
     def __init__(self, page: ft.Page, api_client: APIClient):
@@ -64,74 +214,27 @@ class ChatView(ft.Container):
             expand=True,
         )
 
-    def add_message(self, role: str, text: str):
+        if DEBUG_MOCK_SOURCES:
+            self.add_message("assistant", "Здравейте! Аз съм Лили. Как мога да ви помогна днес?", sources=_get_mock_sources())
+
+    def add_message(self, role: str, text: str, sources: list | None = None) -> ChatMessage:
         is_user = role == "user"
 
-        text_color = ft.colors.LIGHT_BLUE_200 if is_user else ft.colors.PINK_200
-        sender_name = "Ивайло" if is_user else "Лили"
-
-        # We need text to wrap
-        md = ft.Markdown(
-            value=text,
-            selectable=True,
-            extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
-            code_theme="atom-one-dark",
-            md_style_sheet=ft.MarkdownStyleSheet(
-                p_text_style=ft.TextStyle(color=text_color),
-            )
-        )
-
-        # Put it in a container for styling
-        msg_container = ft.Container(
-            content=md,
-            padding=10,
-            border_radius=10,
-            bgcolor=ft.colors.BLUE_GREY_800 if is_user else ft.colors.BLUE_GREY_900,
-        )
-
-        sender_label = ft.Text(
-            value=sender_name,
-            size=12,
-            color=ft.colors.GREY_500,
-        )
-
-        message_column = ft.Column(
-            controls=[sender_label, msg_container],
-            spacing=2,
-            horizontal_alignment=ft.CrossAxisAlignment.END if is_user else ft.CrossAxisAlignment.START,
-        )
+        chat_message = ChatMessage(role=role, text=text, sources=sources, page=self.page)
 
         container_wrapper = ft.Container(
-            content=message_column,
+            content=chat_message,
             margin=ft.margin.only(left=50 if is_user else 0, right=0 if is_user else 50),
         )
 
-
-        expansion_tile = None
-        if not is_user:
-            expansion_tile = ft.ExpansionTile(
-                title=ft.Text("Sources"),
-                controls=[],
-                visible=False,
-            )
-            # Wrap in a column to put the tile below the message
-            column = ft.Column(
-                controls=[container_wrapper, expansion_tile],
-                spacing=5,
-            )
-            row = ft.Row(
-                controls=[column],
-                alignment=ft.MainAxisAlignment.START,
-            )
-        else:
-            row = ft.Row(
-                controls=[container_wrapper],
-                alignment=ft.MainAxisAlignment.END,
-            )
+        row = ft.Row(
+            controls=[container_wrapper],
+            alignment=ft.MainAxisAlignment.END if is_user else ft.MainAxisAlignment.START,
+        )
 
         self.chat_list.controls.append(row)
         self.update()
-        return md, expansion_tile
+        return chat_message
 
     async def send_message_click(self, e):
         if not self.input_field.value:
@@ -147,7 +250,7 @@ class ChatView(ft.Container):
 
         self.add_message("user", user_text)
 
-        md_control, expansion_tile = self.add_message("assistant", "")
+        chat_message = self.add_message("assistant", "")
         self._stop_generation = False
 
         try:
@@ -156,49 +259,38 @@ class ChatView(ft.Container):
                     break
 
                 if isinstance(chunk, dict):
+                    if chunk.get("type") == "sources":
+                        data = chunk.get("data", {})
+                        if isinstance(data, list):
+                            chat_message.add_sources(data)
+                        elif isinstance(data, dict):
+                            for key in ("facts", "chunks", "sources"):
+                                if key in data and isinstance(data[key], list):
+                                    chat_message.add_sources(data[key])
+                        continue
+
                     if "text" in chunk:
-                        md_control.value += chunk["text"]
-                        md_control.update()
+                        chat_message.append_text(chunk["text"])
 
                     if "content" in chunk:
-                        md_control.value += chunk["content"]
-                        md_control.update()
+                        chat_message.append_text(chunk["content"])
 
                     if "error" in chunk:
-                        md_control.value += f"\n\n**Error:** {chunk['error']}"
-                        md_control.update()
+                        chat_message.append_text(f"\n\n**Error:** {chunk['error']}")
 
-                    has_new_source = False
-                    for source_key in ("facts", "chunks"):
+                    # Handle legacy sources in payload just in case
+                    for source_key in ("facts", "chunks", "sources"):
                         if source_key in chunk and isinstance(chunk[source_key], list):
-                            for src in chunk[source_key]:
-                                if isinstance(src, dict):
-                                    src_type = src.get("source_type", "Unknown")
-                                    src_snippet = src.get("text_snippet", "")
-                                    src_score = src.get("score", "N/A")
-
-                                    tile_title = f"{src_type} (Score: {src_score})"
-                                    tile_subtitle = ft.Text(src_snippet, no_wrap=False, size=12, color=ft.colors.GREY_400)
-
-                                    list_tile = ft.ListTile(
-                                        title=ft.Text(tile_title, size=14, weight=ft.FontWeight.BOLD),
-                                        subtitle=tile_subtitle,
-                                    )
-                                    expansion_tile.controls.append(list_tile)
-                                    has_new_source = True
-
-                    if has_new_source and not expansion_tile.visible:
-                        expansion_tile.visible = True
+                            chat_message.add_sources(chunk[source_key])
 
                 elif isinstance(chunk, str):
-                    md_control.value += chunk
-                    md_control.update()
+                    chat_message.append_text(chunk)
 
                 self.update()
 
         except Exception as ex:  # noqa: BLE001
             logger.error(f"Грешка: {ex}")
-            md_control.value += "\n\n**Error getting response.**"
+            chat_message.append_text("\n\n**Error getting response.**")
             self.page.open(
                 ft.SnackBar(
                     ft.Text(f"Failed to stream response: {ex}", color=ft.colors.WHITE),
