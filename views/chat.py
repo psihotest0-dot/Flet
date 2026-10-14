@@ -88,41 +88,44 @@ class ChatMessage(ft.Column):
 
         self.sources_row.controls.append(ft.Text("Източници:", size=12, color=ft.colors.GREY_400))
 
-        def create_chip_callback():
-            return lambda e: self.open_sources_panel()
+        # Group sources by filename
+        grouped_sources = {}
+        for src in self.sources:
+            title = src.get("title", src.get("file_name", "Unknown"))
+            if title not in grouped_sources:
+                grouped_sources[title] = []
+            grouped_sources[title].append(src)
 
-        for i, src in enumerate(self.sources):
-            if i < 3:
-                title = src.get("title", src.get("file_name", "Unknown"))
-                short_title = (title[:15] + "..") if len(title) > 15 else title
-                chip = ft.Chip(
-                    label=ft.Text(short_title, size=12),
-                    leading=ft.Icon(ft.icons.INSERT_DRIVE_FILE, size=14),
-                    on_click=create_chip_callback()
-                )
-                self.sources_row.controls.append(chip)
-            elif i == 3:
-                remaining = len(self.sources) - 3
-                chip = ft.Chip(
-                    label=ft.Text(f"+{remaining}", size=12),
-                    on_click=create_chip_callback()
-                )
-                self.sources_row.controls.append(chip)
-                break
+        def create_chip_callback(file_sources):
+            return lambda e: self.open_sources_panel(file_sources)
+
+        for title, file_sources in grouped_sources.items():
+            count = len(file_sources)
+            label_text = f"{title} ({count})" if count > 1 else title
+            short_label = (label_text[:20] + "..") if len(label_text) > 20 else label_text
+
+            chip = ft.Chip(
+                label=ft.Text(short_label, size=12),
+                leading=ft.Icon(ft.icons.INSERT_DRIVE_FILE, size=14),
+                on_click=create_chip_callback(file_sources)
+            )
+            self.sources_row.controls.append(chip)
 
         self.sources_row.visible = True
         if self.uid is not None:
             self.update()
 
-    def open_sources_panel(self):
+    def open_sources_panel(self, sources_to_display: list | None = None):
         if not self.page_ref:
             return
+
+        display_list = sources_to_display if sources_to_display is not None else self.sources
 
         list_view = ft.ListView(expand=True, spacing=10, padding=20)
 
         list_view.controls.append(ft.Text("Източници (RAG)", size=20, weight=ft.FontWeight.BOLD))
 
-        for src in self.sources:
+        for src in display_list:
             title = src.get("title", src.get("file_name", "Unknown"))
             src_type = src.get("type", src.get("source_type", "Документ"))
             score = src.get("score", "N/A")
@@ -222,6 +225,10 @@ class ChatView(ft.Container):
         )
 
 
+    def scroll_to_bottom(self):
+        if self.chat_list.uid is not None:
+            self.chat_list.scroll_to(offset=-1, duration=100)
+
     def did_mount(self):
         if DEBUG_MOCK_SOURCES:
             self.add_message("assistant", "Здравейте! Аз съм Лили. Как мога да ви помогна днес?", sources=_get_mock_sources())
@@ -234,6 +241,8 @@ class ChatView(ft.Container):
         container_wrapper = ft.Container(
             content=chat_message,
             margin=ft.margin.only(left=50 if is_user else 0, right=0 if is_user else 50),
+            expand=True,
+            alignment=ft.alignment.top_right if is_user else ft.alignment.top_left,
         )
 
         row = ft.Row(
@@ -244,6 +253,7 @@ class ChatView(ft.Container):
         self.chat_list.controls.append(row)
         if self.uid is not None:
             self.update()
+            self.scroll_to_bottom()
         return chat_message
 
     async def send_message_click(self, e):
@@ -278,6 +288,7 @@ class ChatView(ft.Container):
                             for key in ("facts", "chunks", "sources"):
                                 if key in data and isinstance(data[key], list):
                                     chat_message.add_sources(data[key])
+                        self.scroll_to_bottom()
                         continue
 
                     if "text" in chunk:
@@ -299,6 +310,7 @@ class ChatView(ft.Container):
 
                 if self.uid is not None:
                     self.update()
+                    self.scroll_to_bottom()
 
         except Exception as ex:  # noqa: BLE001
             logger.error(f"Грешка: {ex}")
