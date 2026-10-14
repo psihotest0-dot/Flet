@@ -64,6 +64,84 @@ class ChatView(ft.Container):
             expand=True,
         )
 
+    def did_mount(self):
+        super().did_mount()
+        _md, s_row = self.add_message("assistant", "Здравейте! Аз съм Лили. Как мога да ви помогна днес?")
+        mock_sources = [
+            {"source_type": "Уикипедия", "text_snippet": "Това е примерен текст от Уикипедия...", "score": 0.99},
+            {"source_type": "PDF Документ", "text_snippet": "Това е примерен текст от PDF...", "score": 0.85},
+            {"source_type": "Уебсайт", "text_snippet": "Това е примерен текст от уебсайт...", "score": 0.75},
+            {"source_type": "Блог", "text_snippet": "Допълнителен източник...", "score": 0.50}
+        ]
+        self.update_sources_ui(s_row, mock_sources)
+
+    def show_sources_drawer(self, sources: list):
+        list_view = ft.ListView(spacing=10, padding=20, expand=True)
+        for src in sources:
+            src_type = src.get("source_type", "Unknown")
+            src_snippet = src.get("text_snippet", "")
+            src_score = src.get("score", "N/A")
+
+            list_view.controls.append(
+                ft.Column(
+                    controls=[
+                        ft.Text(f"{src_type} (Score: {src_score})", size=16, weight=ft.FontWeight.BOLD),
+                        ft.Text("Документ", size=12, color=ft.colors.GREY_400),
+                        ft.Text(src_snippet, size=14, selectable=True),
+                        ft.Divider()
+                    ],
+                    spacing=5
+                )
+            )
+
+        drawer = ft.NavigationDrawer(
+            position=ft.NavigationDrawerPosition.END,
+            controls=[
+                ft.Container(
+                    content=ft.Text("Източници", size=20, weight=ft.FontWeight.BOLD),
+                    padding=ft.padding.only(top=20, left=20, bottom=10)
+                ),
+                list_view
+            ]
+        )
+        self.page.open(drawer)
+
+    def update_sources_ui(self, sources_row: ft.Row, sources: list):
+        sources_row.controls.clear()
+
+        if not sources:
+            sources_row.visible = False
+            sources_row.update()
+            return
+
+        def open_drawer_click(e):
+            self.show_sources_drawer(sources)
+
+        sources_row.controls.append(ft.Text("Източници:", size=12, color=ft.colors.GREY_500))
+
+        for i, src in enumerate(sources[:3]):
+            src_type = src.get("source_type", "Unknown")
+            # We can use a Chip or Container with an icon
+            chip = ft.Chip(
+                label=ft.Text(src_type, size=12),
+                leading=ft.Icon(ft.icons.INSERT_DRIVE_FILE, size=14),
+                on_click=open_drawer_click
+            )
+            sources_row.controls.append(chip)
+
+        if len(sources) > 3:
+            more_text = ft.Text(f"+{len(sources) - 3}", size=12, color=ft.colors.BLUE_200)
+            # Wrap in Container for clickability
+            more_btn = ft.Container(
+                content=more_text,
+                on_click=open_drawer_click,
+                padding=ft.padding.all(5)
+            )
+            sources_row.controls.append(more_btn)
+
+        sources_row.visible = True
+        sources_row.update()
+
     def add_message(self, role: str, text: str):
         is_user = role == "user"
 
@@ -107,16 +185,17 @@ class ChatView(ft.Container):
         )
 
 
-        expansion_tile = None
+        sources_row = None
         if not is_user:
-            expansion_tile = ft.ExpansionTile(
-                title=ft.Text("Sources"),
+            sources_row = ft.Row(
                 controls=[],
                 visible=False,
+                wrap=True,
+                alignment=ft.MainAxisAlignment.START,
             )
-            # Wrap in a column to put the tile below the message
+            # Wrap in a column to put the sources below the message
             column = ft.Column(
-                controls=[container_wrapper, expansion_tile],
+                controls=[container_wrapper, sources_row],
                 spacing=5,
             )
             row = ft.Row(
@@ -131,7 +210,7 @@ class ChatView(ft.Container):
 
         self.chat_list.controls.append(row)
         self.update()
-        return md, expansion_tile
+        return md, sources_row
 
     async def send_message_click(self, e):
         if not self.input_field.value:
@@ -147,8 +226,9 @@ class ChatView(ft.Container):
 
         self.add_message("user", user_text)
 
-        md_control, expansion_tile = self.add_message("assistant", "")
+        md_control, sources_row = self.add_message("assistant", "")
         self._stop_generation = False
+        accumulated_sources = []
 
         try:
             async for chunk in self.api_client.stream_chat(session_id=self.session_id, content=user_text):
@@ -173,22 +253,11 @@ class ChatView(ft.Container):
                         if source_key in chunk and isinstance(chunk[source_key], list):
                             for src in chunk[source_key]:
                                 if isinstance(src, dict):
-                                    src_type = src.get("source_type", "Unknown")
-                                    src_snippet = src.get("text_snippet", "")
-                                    src_score = src.get("score", "N/A")
-
-                                    tile_title = f"{src_type} (Score: {src_score})"
-                                    tile_subtitle = ft.Text(src_snippet, no_wrap=False, size=12, color=ft.colors.GREY_400)
-
-                                    list_tile = ft.ListTile(
-                                        title=ft.Text(tile_title, size=14, weight=ft.FontWeight.BOLD),
-                                        subtitle=tile_subtitle,
-                                    )
-                                    expansion_tile.controls.append(list_tile)
+                                    accumulated_sources.append(src)
                                     has_new_source = True
 
-                    if has_new_source and not expansion_tile.visible:
-                        expansion_tile.visible = True
+                    if has_new_source:
+                        self.update_sources_ui(sources_row, accumulated_sources)
 
                 elif isinstance(chunk, str):
                     md_control.value += chunk
