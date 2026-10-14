@@ -76,7 +76,8 @@ class ChatMessage(ft.Column):
 
     def append_text(self, text: str):
         self.md.value += text
-        self.md.update()
+        if self.md.uid is not None:
+            self.md.update()
 
     def add_sources(self, sources: list):
         if not sources:
@@ -110,7 +111,7 @@ class ChatMessage(ft.Column):
                 break
 
         self.sources_row.visible = True
-        if self.page:
+        if self.uid is not None:
             self.update()
 
     def open_sources_panel(self):
@@ -220,6 +221,8 @@ class ChatView(ft.Container):
             expand=True,
         )
 
+
+    def did_mount(self):
         if DEBUG_MOCK_SOURCES:
             self.add_message("assistant", "Здравейте! Аз съм Лили. Как мога да ви помогна днес?", sources=_get_mock_sources())
 
@@ -239,7 +242,8 @@ class ChatView(ft.Container):
         )
 
         self.chat_list.controls.append(row)
-        self.update()
+        if self.uid is not None:
+            self.update()
         return chat_message
 
     async def send_message_click(self, e):
@@ -252,7 +256,8 @@ class ChatView(ft.Container):
 
         self.send_btn.visible = False
         self.stop_btn.visible = True
-        self.update()
+        if self.uid is not None:
+            self.update()
 
         self.add_message("user", user_text)
 
@@ -292,7 +297,8 @@ class ChatView(ft.Container):
                 elif isinstance(chunk, str):
                     chat_message.append_text(chunk)
 
-                self.update()
+                if self.uid is not None:
+                    self.update()
 
         except Exception as ex:  # noqa: BLE001
             logger.error(f"Грешка: {ex}")
@@ -304,14 +310,17 @@ class ChatView(ft.Container):
                 )
             )
 
-        self.update()
+        if self.uid is not None:
+            self.update()
 
         self.send_btn.visible = True
         self.stop_btn.visible = False
-        self.update()
+        if self.uid is not None:
+            self.update()
 
     async def stop_generation_click(self, e):
         self._stop_generation = True
         self.stop_btn.visible = False
         self.send_btn.visible = True
-        self.update()
+        if self.uid is not None:
+            self.update()
