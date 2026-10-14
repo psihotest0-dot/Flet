@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Files view component for uploading and managing files."""
+
 import asyncio
 import logging
 from pathlib import Path
@@ -13,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class FilesView(ft.Container):
+    """The view for uploading, viewing, and managing files."""
     def __init__(self, page: ft.Page, api_client: APIClient):
         super().__init__()
         self.page = page

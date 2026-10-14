@@ -283,9 +283,7 @@ async def test_stream_chat_success(client):
     respx.post("http://localhost:8080/chat/stream").mock(return_value=httpx.Response(200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}))
 
     generator = client.stream_chat(session_id="session-123", content="Hi")
-    results = []
-    async for item in generator:
-        results.append(item)
+    results = [item async for item in generator]
 
     assert len(results) == 3
     assert results[0] == {"content": "Hello"}
