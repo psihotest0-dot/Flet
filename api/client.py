@@ -39,6 +39,8 @@ class IngestedFile(BaseModel):
     mime_type: str | None = None
     file_size: int | None = None
     status: str | None = None
+    category: str | None = None
+    manual_override: bool | None = None
     local_path: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -89,6 +91,15 @@ class APIClient:
         async with httpx.AsyncClient(base_url=self.base_url) as client:
             headers = {"X-User-ID": self.user_id}
             response = await client.get(f"/v1/files/{file_id}", headers=headers)
+            response.raise_for_status()
+            return IngestedFile(**response.json())
+
+    async def update_file_category(self, file_id: str, category: str) -> IngestedFile:
+        """Update the category of a file."""
+        async with httpx.AsyncClient(base_url=self.base_url) as client:
+            headers = {"X-User-ID": self.user_id}
+            payload = {"category": category, "manual_override": True}
+            response = await client.patch(f"/v1/files/{file_id}/category", headers=headers, json=payload)
             response.raise_for_status()
             return IngestedFile(**response.json())
 
