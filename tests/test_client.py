@@ -142,6 +142,35 @@ async def test_get_file_status_success(client):
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_update_file_category_success(client):
+    mock_response = {
+        "id": "123e4567-e89b-12d3-a456-426614174001",
+        "user_id": "123e4567-e89b-12d3-a456-426614174000",
+        "file_name": "test.txt",
+        "category": "medicine",
+        "manual_override": True
+    }
+    respx.patch("http://localhost:8080/v1/files/123e4567-e89b-12d3-a456-426614174001/category").mock(return_value=httpx.Response(200, json=mock_response))
+
+    result = await client.update_file_category("123e4567-e89b-12d3-a456-426614174001", "medicine")
+
+    assert isinstance(result, IngestedFile)
+    assert result.id == "123e4567-e89b-12d3-a456-426614174001"
+    assert result.category == "medicine"
+    assert result.manual_override is True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_update_file_category_not_found(client):
+    respx.patch("http://localhost:8080/v1/files/123e4567-e89b-12d3-a456-426614174001/category").mock(return_value=httpx.Response(404))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.update_file_category("123e4567-e89b-12d3-a456-426614174001", "medicine")
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_create_memory_success(client):
     mock_response = {
         "id": "123e4567-e89b-12d3-a456-426614174001",
