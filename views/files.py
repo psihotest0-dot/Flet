@@ -46,6 +46,7 @@ class FilesView(ft.Container):
             columns=[
                 ft.DataColumn(ft.Text("File Name")),
                 ft.DataColumn(ft.Text("Status")),
+                ft.DataColumn(ft.Text("Категория")),
                 ft.DataColumn(ft.Text("Actions")),
             ],
             rows=[]
@@ -138,17 +139,48 @@ class FilesView(ft.Container):
                 tooltip="Delete",
                 on_click=self.create_delete_handler(file.id)
             )
+            category_dropdown = ft.Dropdown(
+                value=file.category,
+                options=[
+                    ft.dropdown.Option("medicine", "Медицина"),
+                    ft.dropdown.Option("economics", "Икономика"),
+                    ft.dropdown.Option("programming", "Програмиране"),
+                    ft.dropdown.Option("law", "Право"),
+                    ft.dropdown.Option("general", "Общи"),
+                ],
+                width=150,
+                dense=True,
+                on_change=self.create_category_change_handler(file.id)
+            )
             self.data_table.rows.append(
                 ft.DataRow(
                     cells=[
                         ft.DataCell(ft.Text(file.file_name or "Unknown")),
                         ft.DataCell(ft.Text(file.status or "Unknown")),
+                        ft.DataCell(category_dropdown),
                         ft.DataCell(del_btn),
                     ]
                 )
             )
         self.update()
         self.page.update()
+
+    def create_category_change_handler(self, file_id: str | None):
+        async def handler(e):
+            if not file_id:
+                return
+            try:
+                await self.api_client.update_file_category(file_id, e.control.value)
+                await self.initial_load()
+            except Exception as ex:  # noqa: BLE001
+                logger.error(f"Грешка: {ex}")
+                self.page.open(
+                    ft.SnackBar(
+                        ft.Text(f"Failed to update category: {ex}", color=ft.colors.WHITE),
+                        bgcolor=ft.colors.RED
+                    )
+                )
+        return handler
 
     def create_delete_handler(self, file_id: str | None):
         async def handler(e):
