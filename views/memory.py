@@ -212,7 +212,7 @@ class MemoryView(ft.Container):
                     self.page.open(confirm_dialog)
                 return on_delete_click
 
-            def create_activate_handler(mem):
+            def create_activate_handler(mem, a_btn):
                 async def on_activate(e):
                     try:
                         importance = mem.importance if mem.importance is not None else 0
@@ -230,7 +230,7 @@ class MemoryView(ft.Container):
                             )
                         )
                         # Ensure UI reflects the state change
-                        activate_btn.visible = False
+                        a_btn.visible = False
                         self.update()
                     except Exception as ex:  # noqa: BLE001
                         logger.error(f"Грешка: {ex}")
@@ -246,7 +246,7 @@ class MemoryView(ft.Container):
             cancel_btn.on_click = create_cancel_handler(content_text, content_field, edit_btn, save_btn, cancel_btn, memory)
             save_btn.on_click = create_save_handler(content_text, content_field, edit_btn, save_btn, cancel_btn, memory)
             delete_btn.on_click = create_delete_handler(memory)
-            activate_btn.on_click = create_activate_handler(memory)
+            activate_btn.on_click = create_activate_handler(memory, activate_btn)
 
             self.data_table.rows.append(
                 ft.DataRow(
