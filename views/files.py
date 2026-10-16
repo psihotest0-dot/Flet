@@ -146,9 +146,11 @@ class FilesView(ft.Container):
                     ft.dropdown.Option("economics", "Икономика"),
                     ft.dropdown.Option("programming", "Програмиране"),
                     ft.dropdown.Option("law", "Право"),
+                    ft.dropdown.Option("psychology", "Психология"),
+                    ft.dropdown.Option("literature", "Литература"),
                     ft.dropdown.Option("general", "Общи"),
                 ],
-                width=150,
+                width=160,
                 dense=True,
                 on_change=self.create_category_change_handler(file.id)
             )
@@ -172,6 +174,12 @@ class FilesView(ft.Container):
             try:
                 await self.api_client.update_file_category(file_id, e.control.value)
                 await self.initial_load()
+                self.page.open(
+                    ft.SnackBar(
+                        ft.Text("Категорията е обновена!", color=ft.colors.WHITE),
+                        bgcolor=ft.colors.GREEN
+                    )
+                )
             except Exception as ex:  # noqa: BLE001
                 logger.error(f"Грешка: {ex}")
                 self.page.open(
