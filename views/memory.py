@@ -92,8 +92,17 @@ class MemoryView(ft.Container):
 
             # Inline edit state for each row
 
-            content_text = ft.Text(memory.content or "")
-            content_field = ft.TextField(value=memory.content or "", visible=False, multiline=True)
+            content_text = ft.Container(
+                content=ft.Text(memory.content or ""),
+                expand=True,
+                alignment=ft.alignment.top_left
+            )
+            content_field = ft.Container(
+                content=ft.TextField(value=memory.content or "", multiline=True),
+                expand=True,
+                visible=False,
+                alignment=ft.alignment.top_left
+            )
 
             edit_btn = ft.IconButton(
                 icon=ft.icons.EDIT,
@@ -139,7 +148,7 @@ class MemoryView(ft.Container):
                 def on_cancel(e):
                     c_text.visible = True
                     c_field.visible = False
-                    c_field.value = mem.content or "" # Reset value
+                    c_field.content.value = mem.content or "" # Reset value
                     e_btn.visible = True
                     s_btn.visible = False
                     ca_btn.visible = False
@@ -148,7 +157,7 @@ class MemoryView(ft.Container):
 
             def create_save_handler(c_text, c_field, e_btn, s_btn, ca_btn, mem):
                 async def on_save(e):
-                    new_content = c_field.value
+                    new_content = c_field.content.value
                     try:
                         # Assuming importance defaults to 0 if none
                         importance = mem.importance if mem.importance is not None else 0
@@ -251,7 +260,7 @@ class MemoryView(ft.Container):
             self.data_table.rows.append(
                 ft.DataRow(
                     cells=[
-                        ft.DataCell(ft.Row([content_text, content_field])),
+                        ft.DataCell(ft.Row([content_text, content_field], expand=True)),
                         ft.DataCell(ft.Text(memory.status or "")),
                         ft.DataCell(actions_row),
                     ]
