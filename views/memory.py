@@ -115,7 +115,14 @@ class MemoryView(ft.Container):
                 tooltip="Delete",
             )
 
-            actions_row = ft.Row([edit_btn, save_btn, cancel_btn, delete_btn])
+            activate_btn = ft.IconButton(
+                icon=ft.icons.CHECK,
+                icon_color=ft.colors.GREEN,
+                tooltip="Activate",
+                visible=memory.status == "candidate"
+            )
+
+            actions_row = ft.Row([activate_btn, edit_btn, save_btn, cancel_btn, delete_btn])
 
             # Capture variables for closures
             def create_edit_handler(c_text, c_field, e_btn, s_btn, ca_btn):
@@ -205,10 +212,41 @@ class MemoryView(ft.Container):
                     self.page.open(confirm_dialog)
                 return on_delete_click
 
+            def create_activate_handler(mem):
+                async def on_activate(e):
+                    try:
+                        importance = mem.importance if mem.importance is not None else 0
+                        updated_mem = await self.api_client.update_memory(
+                            memory_id=mem.id,
+                            content=mem.content,
+                            status="active",
+                            importance=importance
+                        )
+                        self.state.update_memory(updated_mem)
+                        self.page.open(
+                            ft.SnackBar(
+                                ft.Text("Споменът е активиран!", color=ft.colors.WHITE),
+                                bgcolor=ft.colors.GREEN
+                            )
+                        )
+                        # Ensure UI reflects the state change
+                        activate_btn.visible = False
+                        self.update()
+                    except Exception as ex:  # noqa: BLE001
+                        logger.error(f"Грешка: {ex}")
+                        self.page.open(
+                            ft.SnackBar(
+                                ft.Text(f"Failed to activate memory: {ex}", color=ft.colors.WHITE),
+                                bgcolor=ft.colors.RED
+                            )
+                        )
+                return on_activate
+
             edit_btn.on_click = create_edit_handler(content_text, content_field, edit_btn, save_btn, cancel_btn)
             cancel_btn.on_click = create_cancel_handler(content_text, content_field, edit_btn, save_btn, cancel_btn, memory)
             save_btn.on_click = create_save_handler(content_text, content_field, edit_btn, save_btn, cancel_btn, memory)
             delete_btn.on_click = create_delete_handler(memory)
+            activate_btn.on_click = create_activate_handler(memory)
 
             self.data_table.rows.append(
                 ft.DataRow(
