@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     """Application settings, loaded from and saved to a local JSON file."""
     base_url: str = "http://localhost:8080"
     api_key: str | None = None
+    session_id: str | None = None
 
 def load_settings() -> Settings:
     """Load settings from the local JSON file."""
