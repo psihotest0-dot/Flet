@@ -55,12 +55,14 @@ class FilesView(ft.Container):
         self.content = ft.Column(
             controls=[
                 ft.Row([self.upload_btn, self.refresh_btn], alignment=ft.MainAxisAlignment.CENTER),
-                self.data_table
+                ft.Column([ft.Row([self.data_table], scroll=ft.ScrollMode.ADAPTIVE)], scroll=ft.ScrollMode.ADAPTIVE, expand=True)
             ],
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            expand=True
         )
 
         self._polling = False
+        self.is_active_tab = False
 
     def did_mount(self):
         if self.file_picker not in self.page.overlay:
@@ -98,6 +100,10 @@ class FilesView(ft.Container):
             if not self.state:
                 continue
             active_files = [f for f in self.state.files if f.status not in ("completed", "failed")]
+
+            if not active_files or not self.is_active_tab:
+                continue
+
             for file in active_files:
                 if not self._polling:
                     break
