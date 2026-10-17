@@ -8,10 +8,11 @@ import uuid
 import flet as ft
 
 from api.client import APIClient
+from state.settings import load_settings, save_settings
 
 logger = logging.getLogger(__name__)
 
-DEBUG_MOCK_SOURCES = True
+DEBUG_MOCK_SOURCES = False
 
 
 def _get_mock_sources():
@@ -158,6 +159,9 @@ class ChatMessage(ft.Column):
             )
             list_view.controls.append(item)
 
+        if self.bottom_sheet is not None:
+            self.page_ref.close(self.bottom_sheet)
+
         self.bottom_sheet = ft.BottomSheet(
             content=ft.Container(
                 content=list_view,
@@ -175,7 +179,13 @@ class ChatView(ft.Container):
         super().__init__()
         self.page = page
         self.api_client = api_client
-        self.session_id = str(uuid.uuid4())
+
+        settings = load_settings()
+        if settings.session_id is None:
+            settings.session_id = str(uuid.uuid4())
+            save_settings(settings)
+        self.session_id = settings.session_id
+
         self._stop_generation = False
 
         self.expand = True
@@ -184,6 +194,17 @@ class ChatView(ft.Container):
             expand=True,
             spacing=10,
             auto_scroll=True,
+        )
+
+        self.new_chat_btn = ft.IconButton(
+            icon=ft.icons.ADD_COMMENT,
+            tooltip="Нов чат",
+            on_click=self.on_new_chat_click,
+        )
+
+        self.top_row = ft.Row(
+            controls=[self.new_chat_btn],
+            alignment=ft.MainAxisAlignment.END,
         )
 
         self.input_field = ft.TextField(
@@ -218,11 +239,24 @@ class ChatView(ft.Container):
 
         self.content = ft.Column(
             controls=[
+                self.top_row,
                 self.chat_list,
                 input_row,
             ],
             expand=True,
         )
+
+    async def on_new_chat_click(self, e):
+        self.chat_list.controls.clear()
+
+        settings = load_settings()
+        new_session = str(uuid.uuid4())
+        settings.session_id = new_session
+        save_settings(settings)
+
+        self.session_id = new_session
+        if self.uid is not None:
+            self.update()
 
 
     def scroll_to_bottom(self):
