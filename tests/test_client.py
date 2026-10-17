@@ -61,10 +61,11 @@ async def test_upload_file_success(client):
 @respx.mock
 @pytest.mark.asyncio
 async def test_upload_file_conflict(client):
-    respx.post("http://localhost:8080/v1/files").mock(return_value=httpx.Response(409, json={"error": "Conflict"}))
+    respx.post("http://localhost:8080/v1/files").mock(return_value=httpx.Response(409, json={"id": "conflict_id", "file_name": "test.txt", "status": "completed"}))
 
-    with pytest.raises(httpx.HTTPStatusError):
-        await client.upload_file(b"test content", "test.txt", "text/plain")
+    result = await client.upload_file(b"test content", "test.txt")
+    assert result.id == "conflict_id"
+    assert result.file_name == "test.txt"
 
 
 @respx.mock

@@ -51,108 +51,109 @@ class APIClient:
     def __init__(self, base_url: str, user_id: str):
         self.base_url = base_url
         self.user_id = user_id
+        self.client = httpx.AsyncClient(base_url=self.base_url)
+
+    def set_base_url(self, new_url: str) -> None:
+        """Update the base URL for the API client."""
+        self.base_url = new_url
+        self.client.base_url = httpx.URL(new_url)
 
     async def check_health(self) -> bool:
         """Check if the backend API is healthy and reachable."""
         try:
-            async with httpx.AsyncClient(base_url=self.base_url, timeout=5.0) as client:
-                response = await client.get("/healthz")
-                return response.status_code == 200
+            response = await self.client.get("/healthz", timeout=5.0)
+            return response.status_code == 200
         except Exception as e:  # noqa: BLE001
             logger.error(f"Health check failed: {e}")
             return False
 
     async def upload_file(self, file_content: bytes, filename: str, mime_type: str = "application/octet-stream") -> IngestedFile:
         """Upload a file to the backend."""
-        async with httpx.AsyncClient(base_url=self.base_url) as client:
-            headers = {"X-User-ID": self.user_id}
-            files = {"file": (filename, file_content, mime_type)}
-            response = await client.post("/v1/files", headers=headers, files=files)
+        headers = {"X-User-ID": self.user_id}
+        files = {"file": (filename, file_content, mime_type)}
+        response = await self.client.post("/v1/files", headers=headers, files=files)
+        try:
             response.raise_for_status()
-            return IngestedFile(**response.json())
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 409:
+                await e.response.aread()
+                return IngestedFile(**e.response.json())
+            raise
+        return IngestedFile(**response.json())
 
     async def delete_file(self, file_id: str) -> None:
         """Delete a file by its ID."""
-        async with httpx.AsyncClient(base_url=self.base_url) as client:
-            headers = {"X-User-ID": self.user_id}
-            response = await client.delete(f"/v1/files/{file_id}", headers=headers)
-            response.raise_for_status()
+        headers = {"X-User-ID": self.user_id}
+        response = await self.client.delete(f"/v1/files/{file_id}", headers=headers)
+        response.raise_for_status()
 
     async def list_files(self) -> list[IngestedFile]:
         """List all files uploaded by the user."""
-        async with httpx.AsyncClient(base_url=self.base_url) as client:
-            headers = {"X-User-ID": self.user_id}
-            response = await client.get("/v1/files", headers=headers)
-            response.raise_for_status()
-            return [IngestedFile(**item) for item in response.json()]
+        headers = {"X-User-ID": self.user_id}
+        response = await self.client.get("/v1/files", headers=headers)
+        response.raise_for_status()
+        return [IngestedFile(**item) for item in response.json()]
 
     async def get_file_status(self, file_id: str) -> IngestedFile:
         """Get the current status of a file."""
-        async with httpx.AsyncClient(base_url=self.base_url) as client:
-            headers = {"X-User-ID": self.user_id}
-            response = await client.get(f"/v1/files/{file_id}", headers=headers)
-            response.raise_for_status()
-            return IngestedFile(**response.json())
+        headers = {"X-User-ID": self.user_id}
+        response = await self.client.get(f"/v1/files/{file_id}", headers=headers)
+        response.raise_for_status()
+        return IngestedFile(**response.json())
 
     async def update_file_category(self, file_id: str, category: str) -> IngestedFile:
         """Update the category of a file."""
-        async with httpx.AsyncClient(base_url=self.base_url) as client:
-            headers = {"X-User-ID": self.user_id}
-            payload = {"category": category, "manual_override": True}
-            response = await client.patch(f"/v1/files/{file_id}/category", headers=headers, json=payload)
-            response.raise_for_status()
-            return IngestedFile(**response.json())
+        headers = {"X-User-ID": self.user_id}
+        payload = {"category": category, "manual_override": True}
+        response = await self.client.patch(f"/v1/files/{file_id}/category", headers=headers, json=payload)
+        response.raise_for_status()
+        return IngestedFile(**response.json())
 
     async def create_memory(self, content: str, status: str = "candidate", source_message_id: str | None = None, importance: int | None = None, metadata: dict[str, Any] | None = None) -> Memory:
         """Create a new memory."""
-        async with httpx.AsyncClient(base_url=self.base_url) as client:
-            headers = {"X-User-ID": self.user_id}
-            payload = {"content": content, "status": status}
-            if source_message_id is not None:
-                payload["source_message_id"] = source_message_id
-            if importance is not None:
-                payload["importance"] = importance
-            if metadata is not None:
-                payload["metadata"] = metadata
-            response = await client.post("/memories", headers=headers, json=payload)
-            response.raise_for_status()
-            return Memory(**response.json())
+        headers = {"X-User-ID": self.user_id}
+        payload = {"content": content, "status": status}
+        if source_message_id is not None:
+            payload["source_message_id"] = source_message_id
+        if importance is not None:
+            payload["importance"] = importance
+        if metadata is not None:
+            payload["metadata"] = metadata
+        response = await self.client.post("/memories", headers=headers, json=payload)
+        response.raise_for_status()
+        return Memory(**response.json())
 
     async def list_memories(self, status: str | None = None) -> list[Memory]:
         """List memories for the user, optionally filtered by status."""
-        async with httpx.AsyncClient(base_url=self.base_url) as client:
-            headers = {"X-User-ID": self.user_id}
-            params = {}
-            if status is not None:
-                params["status"] = status
-            response = await client.get("/memories", headers=headers, params=params or None)
-            response.raise_for_status()
-            return [Memory(**item) for item in response.json()]
+        headers = {"X-User-ID": self.user_id}
+        params = {}
+        if status is not None:
+            params["status"] = status
+        response = await self.client.get("/memories", headers=headers, params=params or None)
+        response.raise_for_status()
+        return [Memory(**item) for item in response.json()]
 
     async def update_memory(self, memory_id: str, content: str, status: str, importance: int, metadata: dict[str, Any] | None = None) -> Memory:
         """Update an existing memory."""
-        async with httpx.AsyncClient(base_url=self.base_url) as client:
-            headers = {"X-User-ID": self.user_id}
-            payload = {"content": content, "status": status, "importance": importance}
-            if metadata is not None:
-                payload["metadata"] = metadata
-            response = await client.put(f"/memories/{memory_id}", headers=headers, json=payload)
-            response.raise_for_status()
-            return Memory(**response.json())
+        headers = {"X-User-ID": self.user_id}
+        payload = {"content": content, "status": status, "importance": importance}
+        if metadata is not None:
+            payload["metadata"] = metadata
+        response = await self.client.put(f"/memories/{memory_id}", headers=headers, json=payload)
+        response.raise_for_status()
+        return Memory(**response.json())
 
     async def delete_memory(self, memory_id: str) -> None:
         """Delete a memory by its ID."""
-        async with httpx.AsyncClient(base_url=self.base_url) as client:
-            headers = {"X-User-ID": self.user_id}
-            response = await client.delete(f"/memories/{memory_id}", headers=headers)
-            response.raise_for_status()
+        headers = {"X-User-ID": self.user_id}
+        response = await self.client.delete(f"/memories/{memory_id}", headers=headers)
+        response.raise_for_status()
 
     async def stream_chat(self, session_id: str, content: str):
         """Stream a chat response from the backend using Server-Sent Events (SSE)."""
-        async with httpx.AsyncClient(base_url=self.base_url, timeout=httpx.Timeout(5.0, read=None)) as client:
-            headers = {"X-User-ID": self.user_id}
-            payload = {"session_id": session_id, "content": content}
-            async with client.stream("POST", "/chat/stream", headers=headers, json=payload) as response:
+        headers = {"X-User-ID": self.user_id}
+        payload = {"session_id": session_id, "content": content}
+        async with self.client.stream("POST", "/chat/stream", headers=headers, json=payload, timeout=httpx.Timeout(5.0, read=None)) as response:
                 try:
                     response.raise_for_status()
                 except httpx.HTTPStatusError as e:
@@ -162,6 +163,10 @@ class APIClient:
                 is_error_event = False
                 is_sources_event = False
                 async for line in response.aiter_lines():
+                    if not line:
+                        is_error_event = False
+                        is_sources_event = False
+                        continue
                     if line.startswith("event: error"):
                         is_error_event = True
                     elif line.startswith("event: sources"):

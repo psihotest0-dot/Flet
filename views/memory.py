@@ -55,7 +55,7 @@ class MemoryView(ft.Container):
         self.content = ft.Column(
             controls=[
                 ft.Row([self.status_dropdown, self.refresh_btn], alignment=ft.MainAxisAlignment.CENTER),
-                ft.Row([self.data_table], scroll=ft.ScrollMode.ADAPTIVE, expand=True)
+                ft.Column([ft.Row([self.data_table], scroll=ft.ScrollMode.ADAPTIVE)], scroll=ft.ScrollMode.ADAPTIVE, expand=True)
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             expand=True
@@ -176,14 +176,6 @@ class MemoryView(ft.Container):
                                 bgcolor=ft.colors.RED
                             )
                         )
-                    finally:
-                        # Revert UI to non-edit mode (update_table will be triggered by state change anyway, but this is a fallback)
-                        c_text.visible = True
-                        c_field.visible = False
-                        e_btn.visible = True
-                        s_btn.visible = False
-                        ca_btn.visible = False
-                        self.update()
                 return on_save
 
             def create_delete_handler(mem):
