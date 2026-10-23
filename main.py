@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import uuid
 from logging.handlers import RotatingFileHandler
 
 import flet as ft
@@ -21,15 +22,24 @@ def main(page: ft.Page):
 
     settings = load_settings()
 
+    # Initialize and validate user_id
+    if not settings.user_id:
+        settings.user_id = str(uuid.uuid4())
+        save_settings(settings)
+    else:
+        try:
+            uuid.UUID(settings.user_id)
+        except ValueError:
+            settings.user_id = str(uuid.uuid4())
+            save_settings(settings)
+
     base_url_field = ft.TextField(label="Base URL", value=settings.base_url)
-    api_key_field = ft.TextField(label="API Key", value=settings.api_key or "", password=True, can_reveal_password=True)
 
     def close_dlg(e):
         page.close(settings_dialog)
 
     def save_dlg(e):
         settings.base_url = base_url_field.value
-        settings.api_key = api_key_field.value or None
         success = save_settings(settings)
         page.close(settings_dialog)
 
@@ -51,7 +61,7 @@ def main(page: ft.Page):
     settings_dialog = ft.AlertDialog(
         modal=True,
         title=ft.Text("Settings"),
-        content=ft.Column([base_url_field, api_key_field], tight=True),
+        content=ft.Column([base_url_field], tight=True),
         actions=[
             ft.TextButton("Cancel", on_click=close_dlg),
             ft.TextButton("Save", on_click=save_dlg),
@@ -71,7 +81,7 @@ def main(page: ft.Page):
         ]
     )
 
-    api_client = APIClient(base_url=settings.base_url, user_id="123e4567-e89b-12d3-a456-426614174000")
+    api_client = APIClient(base_url=settings.base_url, user_id=settings.user_id)
 
     async def check_connection():
         while True:
@@ -85,7 +95,12 @@ def main(page: ft.Page):
             page.update()
             await asyncio.sleep(5)
 
-    page.run_task(check_connection)
+    task_handle = page.run_task(check_connection)
+
+    def on_disconnect(e):
+        task_handle.cancel()
+
+    page.on_disconnect = on_disconnect
 
     files_view = FilesView(page, api_client)
 
