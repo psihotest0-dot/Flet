@@ -15,6 +15,16 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 logger = logging.getLogger(__name__)
 
 
+class Message(BaseModel):
+    """Represents a chat message."""
+    id: str | None = None
+    user_id: str | None = None
+    session_id: str | None = None
+    role: str | None = None
+    content: str | None = None
+    created_at: datetime | None = None
+
+
 class Memory(BaseModel):
     """Represents a piece of memory stored in the system."""
     id: str | None = None
@@ -136,6 +146,13 @@ class APIClient:
         response = await self.client.post("/memories", headers=headers, json=payload)
         response.raise_for_status()
         return Memory(**response.json())
+
+    async def get_messages(self, session_id: str) -> list[Message]:
+        """Get chat messages for a session."""
+        headers = {"X-User-ID": self.user_id}
+        params = {"session_id": session_id}
+        response = await self._get("/messages", headers=headers, params=params)
+        return [Message(**item) for item in response.json()]
 
     async def list_memories(self, status: str | None = None) -> list[Memory]:
         """List memories for the user, optionally filtered by status."""
