@@ -3,6 +3,7 @@ from __future__ import annotations
 """Chat view components for interacting with the AI agent."""
 
 import logging
+import time
 import uuid
 
 import flet as ft
@@ -130,7 +131,7 @@ class ChatMessage(ft.Column):
             title = src.get("title", src.get("file_name", "Unknown"))
             src_type = src.get("type", src.get("source_type", "Документ"))
             score = src.get("score", "N/A")
-            snippet = src.get("text_snippet", "")
+            snippet = src.get("content_snippet", "")
 
             # If score is a number, format it, otherwise leave as is
             try:
@@ -266,6 +267,22 @@ class ChatView(ft.Container):
     def did_mount(self):
         if DEBUG_MOCK_SOURCES:
             self.add_message("assistant", "Здравейте! Аз съм Лили. Как мога да ви помогна днес?", sources=_get_mock_sources())
+        self._load_task = self.page.run_task(self.load_history)
+
+    def will_unmount(self):
+        if hasattr(self, "_load_task") and self._load_task:
+            self._load_task.cancel()
+
+    async def load_history(self, *_args):
+        try:
+            messages = await self.api_client.get_messages(session_id=self.session_id)
+            self.chat_list.controls.clear()
+            for msg in messages:
+                role = msg.role or "user"
+                content = msg.content or ""
+                self.add_message(role, content)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Failed to load chat history: {e}")
 
     def add_message(self, role: str, text: str, sources: list | None = None) -> ChatMessage:
         is_user = role == "user"
@@ -309,6 +326,9 @@ class ChatView(ft.Container):
         self._stop_generation = False
 
         try:
+            last_update_time = time.time()
+            pending_text = ""
+
             async for chunk in self.api_client.stream_chat(session_id=self.session_id, content=user_text):
                 if self._stop_generation:
                     break
@@ -326,13 +346,13 @@ class ChatView(ft.Container):
                         continue
 
                     if "text" in chunk:
-                        chat_message.append_text(chunk["text"])
+                        pending_text += chunk["text"]
 
                     if "content" in chunk:
-                        chat_message.append_text(chunk["content"])
+                        pending_text += chunk["content"]
 
                     if "error" in chunk:
-                        chat_message.append_text(f"\n\n**Error:** {chunk['error']}")
+                        pending_text += f"\n\n**Error:** {chunk['error']}"
 
                     # Handle legacy sources in payload just in case
                     for source_key in ("facts", "chunks", "sources"):
@@ -340,8 +360,21 @@ class ChatView(ft.Container):
                             chat_message.add_sources(chunk[source_key])
 
                 elif isinstance(chunk, str):
-                    chat_message.append_text(chunk)
+                    pending_text += chunk
 
+                current_time = time.time()
+                if current_time - last_update_time >= 0.05:
+                    if pending_text:
+                        chat_message.append_text(pending_text)
+                        pending_text = ""
+                    if self.uid is not None:
+                        self.update()
+                        self.scroll_to_bottom()
+                    last_update_time = current_time
+
+            # Final flush
+            if pending_text:
+                chat_message.append_text(pending_text)
                 if self.uid is not None:
                     self.update()
                     self.scroll_to_bottom()
@@ -349,6 +382,7 @@ class ChatView(ft.Container):
         except Exception as ex:  # noqa: BLE001
             logger.error(f"Грешка: {ex}")
             chat_message.append_text("\n\n**Error getting response.**")
+            self.input_field.value = user_text
             self.page.open(
                 ft.SnackBar(
                     ft.Text(f"Failed to stream response: {ex}", color=ft.colors.WHITE),

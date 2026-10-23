@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Memory view component for managing AI agent memory."""
 
+import asyncio
 import logging
 
 import flet as ft
@@ -39,6 +40,8 @@ class MemoryView(ft.Container):
             icon=ft.icons.REFRESH,
             on_click=self.on_refresh_click
         )
+
+        self._filter_task = None
 
         self.data_table = ft.DataTable(
             columns=[
@@ -79,7 +82,17 @@ class MemoryView(ft.Container):
             )
 
     async def on_filter_change(self, e):
-        await self.load_memories()
+        if self._filter_task and not self._filter_task.done():
+            self._filter_task.cancel()
+
+        async def debounced_load():
+            try:
+                await asyncio.sleep(0.2)
+                await self.load_memories()
+            except asyncio.CancelledError:
+                pass
+
+        self._filter_task = self.page.run_task(debounced_load)
 
     async def on_refresh_click(self, e):
         await self.load_memories()
