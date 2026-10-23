@@ -31,7 +31,6 @@ def main(page: ft.Page):
         settings.base_url = base_url_field.value
         settings.api_key = api_key_field.value or None
         save_settings(settings)
-        api_client.set_base_url(settings.base_url)
         page.close(settings_dialog)
 
     settings_dialog = ft.AlertDialog(
