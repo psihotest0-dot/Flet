@@ -88,10 +88,9 @@ def main(page: ft.Page):
     page.run_task(check_connection)
 
     files_view = FilesView(page, api_client)
-    files_view.is_active_tab = False
 
     def on_tab_change(e):
-        files_view.is_active_tab = (e.control.selected_index == 2)
+        pass
 
     t = ft.Tabs(
         selected_index=0,

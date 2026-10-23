@@ -58,7 +58,6 @@ class FilesView(ft.Container):
         )
 
         self._polling = False
-        self.is_active_tab = False
 
     def did_mount(self):
         if self.file_picker not in self.page.overlay:
@@ -98,7 +97,7 @@ class FilesView(ft.Container):
                 continue
             active_files = [f for f in self.files if f.status not in ("completed", "failed")]
 
-            if not active_files or not self.is_active_tab:
+            if not active_files:
                 continue
 
             for i, file in enumerate(self.files):
@@ -120,20 +119,25 @@ class FilesView(ft.Container):
         if not e.files:
             return
 
-        for f in e.files:
-            try:
-                if f.path:
-                    # Using asyncio.to_thread for reading file to avoid blocking
-                    content = await asyncio.to_thread(Path(f.path).read_bytes)
-                    await self.api_client.upload_file(content, f.name)
-            except Exception as ex:  # noqa: BLE001
-                logger.error(f"Грешка: {ex}")
-                self.page.open(
-                    ft.SnackBar(
-                        ft.Text(f"Failed to upload {f.name}: {ex}", color=ft.colors.WHITE),
-                        bgcolor=ft.colors.RED
+        sem = asyncio.Semaphore(3)
+
+        async def upload_single_file(f):
+            async with sem:
+                try:
+                    if f.path:
+                        # Using asyncio.to_thread for reading file to avoid blocking
+                        content = await asyncio.to_thread(Path(f.path).read_bytes)
+                        await self.api_client.upload_file(content, f.name)
+                except Exception as ex:  # noqa: BLE001
+                    logger.error(f"Грешка: {ex}")
+                    self.page.open(
+                        ft.SnackBar(
+                            ft.Text(f"Failed to upload {f.name}: {ex}", color=ft.colors.WHITE),
+                            bgcolor=ft.colors.RED
+                        )
                     )
-                )
+
+        await asyncio.gather(*(upload_single_file(f) for f in e.files))
 
         # Refresh the list
         await self.initial_load()
