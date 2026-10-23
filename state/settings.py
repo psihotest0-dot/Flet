@@ -51,6 +51,6 @@ def save_settings(settings: Settings) -> bool:
         try:
             if temp_file.exists():
                 temp_file.unlink()
-        except OSError:
-            pass
+        except OSError as unlink_error:
+            logger.warning(f"Failed to remove temporary file {temp_file}: {unlink_error}")
         return False

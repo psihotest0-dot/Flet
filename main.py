@@ -5,6 +5,8 @@ from logging.handlers import RotatingFileHandler
 
 import flet as ft
 
+logger = logging.getLogger(__name__)
+
 from api.client import APIClient
 from state.settings import load_settings, save_settings
 from views.chat import ChatView
@@ -29,7 +31,8 @@ def main(page: ft.Page):
     else:
         try:
             uuid.UUID(settings.user_id)
-        except ValueError:
+        except ValueError as e:
+            logger.error(f"Invalid UUID in settings.user_id, resetting: {e}")
             settings.user_id = str(uuid.uuid4())
             save_settings(settings)
 

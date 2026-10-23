@@ -5,3 +5,5 @@ venv/
 app.log
 settings.json
 *.tmp
+.coverage
+flet_output.log
