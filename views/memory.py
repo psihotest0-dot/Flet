@@ -7,7 +7,6 @@ import logging
 import flet as ft
 
 from api.client import APIClient
-from state.memory import MemoryState
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +17,9 @@ class MemoryView(ft.Container):
         super().__init__()
         self.page = page
         self.api_client = api_client
-        self.state = MemoryState()
+        self.memories = []
         self.alignment = ft.alignment.top_center
         self.expand = True
-
-        self.state.add_listener(self.update_table)
 
         self.status_dropdown = ft.Dropdown(
             label="Filter by Status",
@@ -70,7 +67,8 @@ class MemoryView(ft.Container):
             if status == "All":
                 status = None
             memories = await self.api_client.list_memories(status=status)
-            self.state.set_memories(memories)
+            self.memories = memories
+            self.update_table()
         except Exception as e:  # noqa: BLE001
             logger.error(f"Грешка: {e}")
             self.page.open(
@@ -88,7 +86,7 @@ class MemoryView(ft.Container):
 
     def update_table(self):
         self.data_table.rows.clear()
-        for memory in self.state.memories:
+        for memory in self.memories:
 
             # Inline edit state for each row
 
@@ -167,7 +165,12 @@ class MemoryView(ft.Container):
                             status=mem.status,
                             importance=importance
                         )
-                        self.state.update_memory(updated_mem)
+                        # Find and update the memory in the local list
+                        for i, m in enumerate(self.memories):
+                            if m.id == updated_mem.id:
+                                self.memories[i] = updated_mem
+                                break
+                        self.update_table()
                     except Exception as ex:  # noqa: BLE001
                         logger.error(f"Грешка: {ex}")
                         self.page.open(
@@ -188,7 +191,8 @@ class MemoryView(ft.Container):
                     async def confirm_delete(e):
                         try:
                             await self.api_client.delete_memory(mem.id)
-                            self.state.remove_memory(mem.id)
+                            self.memories = [m for m in self.memories if m.id != mem.id]
+                            self.update_table()
                         except Exception as ex:  # noqa: BLE001
                             logger.error(f"Грешка: {ex}")
                             self.page.open(
@@ -223,16 +227,17 @@ class MemoryView(ft.Container):
                             status="active",
                             importance=importance
                         )
-                        self.state.update_memory(updated_mem)
+                        for i, m in enumerate(self.memories):
+                            if m.id == updated_mem.id:
+                                self.memories[i] = updated_mem
+                                break
+                        self.update_table()
                         self.page.open(
                             ft.SnackBar(
                                 ft.Text("Споменът е активиран!", color=ft.colors.WHITE),
                                 bgcolor=ft.colors.GREEN
                             )
                         )
-                        # Ensure UI reflects the state change
-                        a_btn.visible = False
-                        self.update()
                     except Exception as ex:  # noqa: BLE001
                         logger.error(f"Грешка: {ex}")
                         self.page.open(
