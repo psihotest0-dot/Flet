@@ -9,7 +9,6 @@ from pathlib import Path
 import flet as ft
 
 from api.client import APIClient
-from state.files import FilesState
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +19,9 @@ class FilesView(ft.Container):
         super().__init__()
         self.page = page
         self.api_client = api_client
-        self.state = FilesState()
+        self.files = []
         self.alignment = ft.alignment.top_center
         self.expand = True
-
-        # Subscribe to state changes
-        self.state.add_listener(self.update_table)
 
         # Components
         self.file_picker = ft.FilePicker(on_result=self.on_file_picker_result)
@@ -84,7 +80,8 @@ class FilesView(ft.Container):
     async def initial_load(self, *_args):
         try:
             files = await self.api_client.list_files()
-            self.state.set_files(files)
+            self.files = files
+            self.update_table()
         except Exception as e:  # noqa: BLE001
             logger.error(f"Грешка: {e}")
             self.page.open(
@@ -97,21 +94,25 @@ class FilesView(ft.Container):
     async def poll_statuses(self, *_args):
         while self._polling:
             await asyncio.sleep(3)
-            if not self.state:
+            if not hasattr(self, 'files'):
                 continue
-            active_files = [f for f in self.state.files if f.status not in ("completed", "failed")]
+            active_files = [f for f in self.files if f.status not in ("completed", "failed")]
 
             if not active_files or not self.is_active_tab:
                 continue
 
-            for file in active_files:
+            for i, file in enumerate(self.files):
+                if file.status in ("completed", "failed"):
+                    continue
                 if not self._polling:
                     break
                 if file.id is None:
                     continue
                 try:
                     updated_file = await self.api_client.get_file_status(file.id)
-                    self.state.update_file(updated_file)
+                    if updated_file.status != file.status:
+                        self.files[i] = updated_file
+                        self.update_table()
                 except Exception as e:  # noqa: BLE001
                     logger.error(f"Грешка: {e}")
 
@@ -139,7 +140,7 @@ class FilesView(ft.Container):
 
     def update_table(self):
         self.data_table.rows.clear()
-        for file in self.state.files:
+        for file in self.files:
             del_btn = ft.IconButton(
                 icon=ft.icons.DELETE,
                 tooltip="Delete",
