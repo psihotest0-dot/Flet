@@ -30,8 +30,23 @@ def main(page: ft.Page):
     def save_dlg(e):
         settings.base_url = base_url_field.value
         settings.api_key = api_key_field.value or None
-        save_settings(settings)
+        success = save_settings(settings)
         page.close(settings_dialog)
+
+        if success:
+            page.open(
+                ft.SnackBar(
+                    ft.Text("Settings saved successfully!", color=ft.colors.WHITE),
+                    bgcolor=ft.colors.GREEN
+                )
+            )
+        else:
+            page.open(
+                ft.SnackBar(
+                    ft.Text("Failed to save settings.", color=ft.colors.WHITE),
+                    bgcolor=ft.colors.RED
+                )
+            )
 
     settings_dialog = ft.AlertDialog(
         modal=True,
