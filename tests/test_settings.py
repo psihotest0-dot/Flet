@@ -15,6 +15,19 @@ def test_load_default_settings():
     assert settings.base_url == "http://localhost:8080"
     assert settings.user_id is None
 
+
+def test_save_settings_os_error(mock_settings_file, monkeypatch):
+    import os
+    def mock_replace(*args, **kwargs):
+        raise OSError("Permission denied")
+
+    monkeypatch.setattr(os, "replace", mock_replace)
+
+    settings = Settings(base_url="http://example.com")
+    result = save_settings(settings)
+
+    assert result is False
+
 def test_save_and_load_settings(mock_settings_file):
     settings = Settings(base_url="http://example.com", user_id="test-uuid")
     save_settings(settings)
@@ -31,3 +44,8 @@ def test_load_settings_invalid_json(mock_settings_file):
     settings = load_settings()
     assert settings.base_url == "http://localhost:8080"
     assert settings.user_id is None
+
+    # Verify backup was created
+    backups = list(mock_settings_file.parent.glob("settings.json.broken.*"))
+    assert len(backups) == 1
+    assert mock_settings_file.exists() is False
