@@ -10,12 +10,37 @@ def client():
     return APIClient(base_url="http://localhost:8080", user_id="123e4567-e89b-12d3-a456-426614174000")
 
 
+@pytest.mark.asyncio
+async def test_client_context_manager():
+    async with APIClient(base_url="http://localhost:8080", user_id="123e4567-e89b-12d3-a456-426614174000") as client:
+        assert client.client.is_closed is False
+    assert client.client.is_closed is True
+
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_check_health_success(client):
-    respx.get("http://localhost:8080/healthz").mock(return_value=httpx.Response(200, text="OK"))
+    respx.get("http://localhost:8080/healthz").mock(return_value=httpx.Response(200))
     result = await client.check_health()
     assert result is True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_check_health_failure(client):
+    respx.get("http://localhost:8080/healthz").mock(return_value=httpx.Response(500))
+    result = await client.check_health()
+    assert result is False
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_check_health_timeout(client):
+    respx.get("http://localhost:8080/healthz").mock(side_effect=httpx.TimeoutException("Timeout"))
+    result = await client.check_health()
+    assert result is False
+
+
 
 
 @respx.mock
@@ -66,6 +91,13 @@ async def test_upload_file_conflict(client):
     result = await client.upload_file(b"test content", "test.txt")
     assert result.id == "conflict_id"
     assert result.file_name == "test.txt"
+
+
+@pytest.mark.asyncio
+async def test_upload_file_too_large(client):
+    large_content = b"a" * (100 * 1024 * 1024 + 1)
+    with pytest.raises(ValueError, match="Maximum size is 100MB"):
+        await client.upload_file(large_content, "large.txt")
 
 
 @respx.mock
@@ -319,3 +351,31 @@ async def test_stream_chat_success(client):
     assert results[0] == {"content": "Hello"}
     assert results[1] == {"source": "Doc 1"}
     assert results[2] == {"error": "Something went wrong"}
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_chat_http_error(client):
+    respx.post("http://localhost:8080/chat/stream").mock(return_value=httpx.Response(500, json={"error": "Internal Error"}))
+
+    generator = client.stream_chat(session_id="session-123", content="Hi")
+    with pytest.raises(httpx.HTTPStatusError):
+        async for _ in generator:
+            pass
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_chat_json_decode_error(client):
+    async def sse_stream():
+        yield b'data: invalid_json\n\n'
+        yield b'event: sources\n'
+        yield b'data: invalid_sources_json\n\n'
+        yield b'data: [DONE]\n\n'
+
+    respx.post("http://localhost:8080/chat/stream").mock(return_value=httpx.Response(200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}))
+
+    generator = client.stream_chat(session_id="session-123", content="Hi")
+    results = [item async for item in generator]
+
+    assert len(results) == 2
+    assert results[0] == "invalid_json"
+    assert results[1] == {"type": "sources", "data": "invalid_sources_json"}
