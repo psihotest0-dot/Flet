@@ -9,7 +9,7 @@ import uuid
 
 import flet as ft
 
-from api.client import APIClient
+from api.client import APIClient, StreamError
 from state.settings import load_settings, save_settings
 
 logger = logging.getLogger(__name__)
@@ -105,6 +105,14 @@ class ChatMessage(ft.Column):
             self.activity_indicator.visible = False
             if self.uid is not None:
                 self.update()
+
+    def finalize_with_error(self, error_msg: str):
+        self.md.value += f"\n\n**<span style='color:red;'>{error_msg}</span>**"
+        self.hide_activity_indicator()
+        if self.md.uid is not None:
+            self.md.update()
+        if self.uid is not None:
+            self.update()
 
     async def copy_to_clipboard(self, e):
         if self.page_ref:
@@ -266,7 +274,7 @@ class ChatView(ft.Container):
         )
 
         self.stop_btn = ft.IconButton(
-            icon=ft.icons.STOP_CIRCLE,
+            icon=ft.icons.STOP,
             icon_color=ft.colors.RED,
             tooltip="Stop",
             visible=False,
@@ -436,6 +444,15 @@ class ChatView(ft.Container):
                     self.update()
                     self.scroll_to_bottom()
 
+        except asyncio.CancelledError:
+            if pending_text:
+                chat_message.append_text(pending_text)
+                if self.uid is not None:
+                    self.update()
+                    self.scroll_to_bottom()
+        except StreamError as ex:
+            logger.error(f"Stream error: {ex}")
+            chat_message.finalize_with_error("Нещо се обърка. Опитай отново.")
         except Exception as ex:  # noqa: BLE001
             logger.error(f"Грешка: {ex}")
             chat_message.append_text("\n\n**Error getting response.**")
@@ -462,6 +479,7 @@ class ChatView(ft.Container):
 
     async def stop_generation_click(self, e):
         self._stop_generation = True
+        self.api_client.cancel_stream()
         self.stop_btn.visible = False
         self.send_btn.visible = True
         if self.uid is not None:
