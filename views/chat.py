@@ -64,17 +64,42 @@ class ChatMessage(ft.Column):
             color=ft.colors.GREY_500,
         )
 
+        top_controls = [self.sender_label]
+        if role != "user":
+            self.copy_btn = ft.IconButton(
+                icon=ft.icons.COPY,
+                icon_size=14,
+                tooltip="Копирай",
+                on_click=self.copy_to_clipboard,
+            )
+            top_controls.append(self.copy_btn)
+
+        self.top_row = ft.Row(
+            controls=top_controls,
+            alignment=ft.MainAxisAlignment.START,
+        )
+
         self.sources_row = ft.Row(wrap=True, visible=False)
         self.bottom_sheet = None
 
         self.controls = [
-            self.sender_label,
+            self.top_row,
             self.msg_container,
             self.sources_row
         ]
 
         if self.sources:
             self.add_sources(self.sources)
+
+    async def copy_to_clipboard(self, e):
+        if self.page_ref:
+            self.page_ref.set_clipboard(self.md.value)
+            self.page_ref.open(
+                ft.SnackBar(
+                    content=ft.Text("Текстът е копиран!"),
+                    duration=2000,
+                )
+            )
 
     def append_text(self, text: str):
         self.md.value += text
@@ -195,6 +220,7 @@ class ChatView(ft.Container):
             expand=True,
             spacing=10,
             auto_scroll=True,
+            padding=ft.padding.only(left=20, right=20),
         )
 
         self.new_chat_btn = ft.IconButton(
