@@ -90,7 +90,12 @@ class APIClient:
             raise ValueError("File too large. Maximum size is 100MB.")
         headers = {"X-User-ID": self.user_id}
         files = {"file": (filename, file_content, mime_type)}
-        response = await self.client.post("/v1/files", headers=headers, files=files)
+        response = await self.client.post(
+            "/v1/files",
+            headers=headers,
+            files=files,
+            timeout=httpx.Timeout(5.0, read=None)
+        )
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
