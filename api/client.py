@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """API client module for handling communication with the backend service."""
 
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -42,6 +43,10 @@ class Memory(BaseModel):
     last_used_at: datetime | None = None
 
 
+class StreamError(Exception):
+    """Exception raised for errors in the stream."""
+
+
 class IngestedFile(BaseModel):
     """Represents a file uploaded to the system."""
     id: str | None = None
@@ -64,6 +69,12 @@ class APIClient:
         self.base_url = base_url
         self.user_id = user_id
         self.client = httpx.AsyncClient(base_url=self.base_url)
+        self._current_stream_task = None
+
+    def cancel_stream(self):
+        """Cancel the current streaming task."""
+        if self._current_stream_task and not self._current_stream_task.done():
+            self._current_stream_task.cancel()
 
     async def __aenter__(self):
         return self
@@ -189,29 +200,36 @@ class APIClient:
         headers = {"X-User-ID": self.user_id}
         payload = {"session_id": session_id, "content": content}
 
-        async with aconnect_sse(self.client, "POST", "/chat/stream", headers=headers, json=payload, timeout=httpx.Timeout(5.0, read=None)) as event_source:
-            try:
-                event_source.response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                await e.response.aread()
-                logger.error("Error streaming chat. Status: %s, URL: %s, Response: %s", e.response.status_code, e.request.url, e.response.text)
-                raise
+        try:
+            self._current_stream_task = asyncio.current_task()
+            async with aconnect_sse(self.client, "POST", "/chat/stream", headers=headers, json=payload, timeout=httpx.Timeout(5.0, read=None)) as event_source:
+                try:
+                    event_source.response.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    await e.response.aread()
+                    logger.error("Error streaming chat. Status: %s, URL: %s, Response: %s", e.response.status_code, e.request.url, e.response.text)
+                    raise
 
-            async for sse in event_source.aiter_sse():
-                if sse.data == "[DONE]":
-                    break
+                async for sse in event_source.aiter_sse():
+                    if sse.data == "[DONE]":
+                        break
 
-                if sse.event == "error":
-                    yield {"error": sse.data}
-                elif sse.event == "sources":
-                    try:
-                        yield {"type": "sources", "data": json.loads(sse.data)}
-                    except json.JSONDecodeError as e:
-                        logger.error(f"JSONDecodeError parsing sources data: {e}, data: {sse.data}")
-                        yield {"type": "sources", "data": sse.data}
-                else:
-                    try:
-                        yield json.loads(sse.data)
-                    except json.JSONDecodeError as e:
-                        logger.error(f"JSONDecodeError parsing stream data: {e}, data: {sse.data}")
-                        yield sse.data
+                    if sse.event == "error":
+                        raise StreamError(sse.data)
+                    elif sse.event == "sources":
+                        try:
+                            yield {"type": "sources", "data": json.loads(sse.data)}
+                        except json.JSONDecodeError as e:
+                            logger.error(f"JSONDecodeError parsing sources data: {e}, data: {sse.data}")
+                            yield {"type": "sources", "data": sse.data}
+                    else:
+                        try:
+                            chunk = json.loads(sse.data)
+                            if "error" in chunk:
+                                raise StreamError(chunk.get("error", "Unknown error"))
+                            yield chunk
+                        except json.JSONDecodeError as e:
+                            logger.error(f"JSONDecodeError parsing stream data: {e}, data: {sse.data}")
+                            yield sse.data
+        finally:
+            self._current_stream_task = None

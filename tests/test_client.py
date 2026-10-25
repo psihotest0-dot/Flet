@@ -338,8 +338,6 @@ async def test_stream_chat_success(client):
     async def sse_stream():
         yield b'data: {"content": "Hello"}\n\n'
         yield b'data: {"source": "Doc 1"}\n\n'
-        yield b'event: error\n'
-        yield b'data: Something went wrong\n\n'
         yield b'data: [DONE]\n\n'
 
     respx.post("http://localhost:8080/chat/stream").mock(return_value=httpx.Response(200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}))
@@ -347,10 +345,28 @@ async def test_stream_chat_success(client):
     generator = client.stream_chat(session_id="session-123", content="Hi")
     results = [item async for item in generator]
 
-    assert len(results) == 3
+    assert len(results) == 2
     assert results[0] == {"content": "Hello"}
     assert results[1] == {"source": "Doc 1"}
-    assert results[2] == {"error": "Something went wrong"}
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_chat_error(client):
+    from api.client import StreamError
+
+    async def sse_stream():
+        yield b'data: {"content": "Hello"}\n\n'
+        yield b'event: error\n'
+        yield b'data: Something went wrong\n\n'
+
+    respx.post("http://localhost:8080/chat/stream").mock(return_value=httpx.Response(200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}))
+
+    generator = client.stream_chat(session_id="session-123", content="Hi")
+
+    with pytest.raises(StreamError) as exc_info:
+        [item async for item in generator]
+
+    assert str(exc_info.value) == "Something went wrong"
 
 @respx.mock
 @pytest.mark.asyncio
