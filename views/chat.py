@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Chat view components for interacting with the AI agent."""
 
+import asyncio
 import logging
 import time
 import uuid
@@ -81,15 +82,29 @@ class ChatMessage(ft.Column):
 
         self.sources_row = ft.Row(wrap=True, visible=False)
         self.bottom_sheet = None
+        self.activity_indicator = ft.Text("...", size=20, color=ft.colors.GREY_500, visible=False)
 
         self.controls = [
             self.top_row,
             self.msg_container,
+            self.activity_indicator,
             self.sources_row
         ]
 
         if self.sources:
             self.add_sources(self.sources)
+
+    def show_activity_indicator(self):
+        if not self.activity_indicator.visible:
+            self.activity_indicator.visible = True
+            if self.uid is not None:
+                self.update()
+
+    def hide_activity_indicator(self):
+        if self.activity_indicator.visible:
+            self.activity_indicator.visible = False
+            if self.uid is not None:
+                self.update()
 
     async def copy_to_clipboard(self, e):
         if self.page_ref:
@@ -351,11 +366,27 @@ class ChatView(ft.Container):
         chat_message = self.add_message("assistant", "")
         self._stop_generation = False
 
+        is_streaming = True
+        last_chunk_time = time.time()
+
+        async def show_activity_after_delay():
+            while is_streaming:
+                await asyncio.sleep(0.5)
+                if (time.time() - last_chunk_time) >= 1.0 and is_streaming:
+                    chat_message.show_activity_indicator()
+                    if self.uid is not None:
+                        self.update()
+                        self.scroll_to_bottom()
+
+        activity_task = self.page.run_task(show_activity_after_delay)
+
         try:
             last_update_time = time.time()
             pending_text = ""
 
             async for chunk in self.api_client.stream_chat(session_id=self.session_id, content=user_text):
+                last_chunk_time = time.time()
+                chat_message.hide_activity_indicator()
                 if self._stop_generation:
                     break
 
@@ -415,6 +446,11 @@ class ChatView(ft.Container):
                     bgcolor=ft.colors.RED
                 )
             )
+        finally:
+            is_streaming = False
+            chat_message.hide_activity_indicator()
+            if activity_task:
+                activity_task.cancel()
 
         if self.uid is not None:
             self.update()
