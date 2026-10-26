@@ -29,12 +29,13 @@ def _get_mock_sources():
 
 class ChatMessage(ft.Column):
     """A component representing a single chat message in the UI."""
-    def __init__(self, role: str, text: str, sources: list | None = None, page: ft.Page | None = None):
+    def __init__(self, role: str, text: str, sources: list | None = None, page: ft.Page | None = None, on_regenerate: callable | None = None):
         super().__init__()
         self.role = role
         self.text_value = text
         self.sources = sources or []
         self.page_ref = page
+        self.on_regenerate = on_regenerate
         self.spacing = 2
         self.horizontal_alignment = ft.CrossAxisAlignment.END if role == "user" else ft.CrossAxisAlignment.START
 
@@ -74,6 +75,8 @@ class ChatMessage(ft.Column):
                 on_click=self.copy_to_clipboard,
             )
             top_controls.append(self.copy_btn)
+            self.regenerate_btn = ft.IconButton(icon=ft.icons.REFRESH, icon_size=14, tooltip="Опитай отново", on_click=self._handle_regenerate, visible=False)
+            top_controls.append(self.regenerate_btn)
 
         self.top_row = ft.Row(
             controls=top_controls,
@@ -93,6 +96,17 @@ class ChatMessage(ft.Column):
 
         if self.sources:
             self.add_sources(self.sources)
+
+
+    async def _handle_regenerate(self, e):
+        if self.on_regenerate and self.page_ref:
+            self.page_ref.run_task(self.on_regenerate)
+
+    def set_regenerate_visible(self, visible: bool):
+        if hasattr(self, "regenerate_btn"):
+            self.regenerate_btn.visible = visible
+            if self.uid is not None:
+                self.update()
 
     def show_activity_indicator(self):
         if not self.activity_indicator.visible:
@@ -236,6 +250,8 @@ class ChatView(ft.Container):
         self.session_id = settings.session_id
 
         self._stop_generation = False
+        self._last_assistant_msg = None
+        self._last_assistant_row = None
 
         self.expand = True
 
@@ -326,17 +342,24 @@ class ChatView(ft.Container):
         try:
             messages = await self.api_client.get_messages(session_id=self.session_id)
             self.chat_list.controls.clear()
+
+            last_msg_obj = None
             for msg in messages:
                 role = msg.role or "user"
                 content = msg.content or ""
-                self.add_message(role, content)
+                last_msg_obj = self.add_message(role, content)
+
+            if last_msg_obj and last_msg_obj.role == "assistant":
+                self._last_assistant_msg = last_msg_obj
+                self._last_assistant_row = last_msg_obj._row
+                self._last_assistant_msg.set_regenerate_visible(True)
         except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to load chat history: {e}")
 
     def add_message(self, role: str, text: str, sources: list | None = None) -> ChatMessage:
         is_user = role == "user"
-
-        chat_message = ChatMessage(role=role, text=text, sources=sources, page=self.page)
+        on_regenerate = self.regenerate_last if not is_user else None
+        chat_message = ChatMessage(role=role, text=text, sources=sources, page=self.page, on_regenerate=on_regenerate)
 
         container_wrapper = ft.Container(
             content=chat_message,
@@ -351,29 +374,14 @@ class ChatView(ft.Container):
         )
 
         self.chat_list.controls.append(row)
+        chat_message._row = row
         if self.uid is not None:
             self.update()
             self.scroll_to_bottom()
         return chat_message
 
-    async def send_message_click(self, e):
-        if not self.input_field.value:
-            return
 
-        user_text = self.input_field.value
-        self.input_field.value = ""
-        self.input_field.focus()
-
-        self.send_btn.visible = False
-        self.stop_btn.visible = True
-        if self.uid is not None:
-            self.update()
-
-        self.add_message("user", user_text)
-
-        chat_message = self.add_message("assistant", "")
-        self._stop_generation = False
-
+    async def _stream_response(self, chat_message, stream_coro, fallback_user_text=""):
         is_streaming = True
         last_chunk_time = time.time()
 
@@ -392,7 +400,7 @@ class ChatView(ft.Container):
             last_update_time = time.time()
             pending_text = ""
 
-            async for chunk in self.api_client.stream_chat(session_id=self.session_id, content=user_text):
+            async for chunk in stream_coro:
                 last_chunk_time = time.time()
                 chat_message.hide_activity_indicator()
                 if self._stop_generation:
@@ -419,7 +427,6 @@ class ChatView(ft.Container):
                     if "error" in chunk:
                         pending_text += f"\n\n**Error:** {chunk['error']}"
 
-                    # Handle legacy sources in payload just in case
                     for source_key in ("facts", "chunks", "sources"):
                         if source_key in chunk and isinstance(chunk[source_key], list):
                             chat_message.add_sources(chunk[source_key])
@@ -437,7 +444,6 @@ class ChatView(ft.Container):
                         self.scroll_to_bottom()
                     last_update_time = current_time
 
-            # Final flush
             if pending_text:
                 chat_message.append_text(pending_text)
                 if self.uid is not None:
@@ -456,7 +462,8 @@ class ChatView(ft.Container):
         except Exception as ex:  # noqa: BLE001
             logger.error(f"Грешка: {ex}")
             chat_message.append_text("\n\n**Error getting response.**")
-            self.input_field.value = user_text
+            if fallback_user_text:
+                self.input_field.value = fallback_user_text
             self.page.open(
                 ft.SnackBar(
                     ft.Text(f"Failed to stream response: {ex}", color=ft.colors.WHITE),
@@ -469,6 +476,73 @@ class ChatView(ft.Container):
             if activity_task:
                 activity_task.cancel()
 
+        if self.uid is not None:
+            self.update()
+
+    async def send_message_click(self, e):
+        if not self.input_field.value:
+            return
+
+        user_text = self.input_field.value
+        self.input_field.value = ""
+        self.input_field.focus()
+
+        self.send_btn.visible = False
+        self.stop_btn.visible = True
+
+        if self._last_assistant_msg:
+            self._last_assistant_msg.set_regenerate_visible(False)
+
+        if self.uid is not None:
+            self.update()
+
+        self.add_message("user", user_text)
+
+        chat_message = self.add_message("assistant", "")
+        self._stop_generation = False
+
+        await self._stream_response(chat_message, self.api_client.stream_chat(session_id=self.session_id, content=user_text), user_text)
+
+        self._last_assistant_msg = chat_message
+        self._last_assistant_row = chat_message._row
+        self._last_assistant_msg.set_regenerate_visible(True)
+
+        self.send_btn.visible = True
+        self.stop_btn.visible = False
+        if self.uid is not None:
+            self.update()
+
+    async def regenerate_last(self, *_args):
+        if not self._last_assistant_msg or not self._last_assistant_row:
+            return
+
+        try:
+            self.chat_list.controls.remove(self._last_assistant_row)
+        except ValueError:
+            pass
+
+        if self.uid is not None:
+            self.update()
+
+        self._last_assistant_msg = None
+        self._last_assistant_row = None
+
+        self.send_btn.visible = False
+        self.stop_btn.visible = True
+        if self.uid is not None:
+            self.update()
+
+        chat_message = self.add_message("assistant", "")
+        self._stop_generation = False
+
+        await self._stream_response(chat_message, self.api_client.regenerate_chat(session_id=self.session_id))
+
+        self._last_assistant_msg = chat_message
+        self._last_assistant_row = chat_message._row
+        self._last_assistant_msg.set_regenerate_visible(True)
+
+        self.send_btn.visible = True
+        self.stop_btn.visible = False
         if self.uid is not None:
             self.update()
 

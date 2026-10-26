@@ -195,6 +195,46 @@ class APIClient:
         response = await self.client.delete(f"/memories/{memory_id}", headers=headers)
         response.raise_for_status()
 
+
+    async def regenerate_chat(self, session_id: str):
+        """Stream a regenerated chat response from the backend using Server-Sent Events (SSE)."""
+        headers = {"X-User-ID": self.user_id}
+        payload = {"session_id": session_id}
+
+        try:
+            self._current_stream_task = asyncio.current_task()
+            async with aconnect_sse(self.client, "POST", "/chat/regenerate", headers=headers, json=payload, timeout=httpx.Timeout(5.0, read=None)) as event_source:
+                try:
+                    event_source.response.raise_for_status()
+                except httpx.HTTPStatusError as e:
+                    await e.response.aread()
+                    logger.error("Error streaming regenerated chat. Status: %s, URL: %s, Response: %s", e.response.status_code, e.request.url, e.response.text)
+                    raise
+
+                async for sse in event_source.aiter_sse():
+                    if sse.data == "[DONE]":
+                        break
+
+                    if sse.event == "error":
+                        raise StreamError(sse.data)
+                    elif sse.event == "sources":
+                        try:
+                            yield {"type": "sources", "data": json.loads(sse.data)}
+                        except json.JSONDecodeError as e:
+                            logger.error(f"JSONDecodeError parsing sources data: {e}, data: {sse.data}")
+                            yield {"type": "sources", "data": sse.data}
+                    else:
+                        try:
+                            chunk = json.loads(sse.data)
+                            if "error" in chunk:
+                                raise StreamError(chunk.get("error", "Unknown error"))
+                            yield chunk
+                        except json.JSONDecodeError as e:
+                            logger.error(f"JSONDecodeError parsing stream data: {e}, data: {sse.data}")
+                            yield sse.data
+        finally:
+            self._current_stream_task = None
+
     async def stream_chat(self, session_id: str, content: str):
         """Stream a chat response from the backend using Server-Sent Events (SSE)."""
         headers = {"X-User-ID": self.user_id}
