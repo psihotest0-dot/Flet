@@ -48,6 +48,7 @@ class ChatMessage(ft.Column):
             selectable=True,
             extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
             code_theme="atom-one-dark",
+            on_tap_link=lambda e: self.page_ref.launch_url(e.data) if self.page_ref else None,
             md_style_sheet=ft.MarkdownStyleSheet(
                 p_text_style=ft.TextStyle(color=self.text_color),
             )
@@ -66,15 +67,15 @@ class ChatMessage(ft.Column):
             color=ft.colors.GREY_500,
         )
 
-        top_controls = [self.sender_label]
+        self.copy_btn = ft.IconButton(
+            icon=ft.icons.COPY,
+            icon_size=14,
+            tooltip="Копирай",
+            on_click=self.copy_to_clipboard,
+        )
+
+        top_controls = [self.sender_label, self.copy_btn]
         if role != "user":
-            self.copy_btn = ft.IconButton(
-                icon=ft.icons.COPY,
-                icon_size=14,
-                tooltip="Копирай",
-                on_click=self.copy_to_clipboard,
-            )
-            top_controls.append(self.copy_btn)
             self.regenerate_btn = ft.IconButton(icon=ft.icons.REFRESH, icon_size=14, tooltip="Опитай отново", on_click=self._handle_regenerate, visible=False)
             top_controls.append(self.regenerate_btn)
 
@@ -133,7 +134,7 @@ class ChatMessage(ft.Column):
             self.page_ref.set_clipboard(self.md.value)
             self.page_ref.open(
                 ft.SnackBar(
-                    content=ft.Text("Текстът е копиран!"),
+                    content=ft.Text("Копирано"),
                     duration=2000,
                 )
             )
