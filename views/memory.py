@@ -71,15 +71,19 @@ class MemoryView(ft.Container):
                 status = None
             memories = await self.api_client.list_memories(status=status)
             self.memories = memories
-            self.update_table()
+            if getattr(self.page, "session_id", None) is not None:
+                self.update_table()
+        except asyncio.CancelledError:
+            pass
         except Exception as e:  # noqa: BLE001
             logger.error(f"Грешка: {e}")
-            self.page.open(
-                ft.SnackBar(
-                    ft.Text("Failed to load memories.", color=ft.colors.WHITE),
-                    bgcolor=ft.colors.RED
+            if getattr(self.page, "session_id", None) is not None:
+                self.page.open(
+                    ft.SnackBar(
+                        ft.Text("Failed to load memories.", color=ft.colors.WHITE),
+                        bgcolor=ft.colors.RED
+                    )
                 )
-            )
 
     async def on_filter_change(self, e):
         if self._filter_task and not self._filter_task.done():
@@ -152,7 +156,8 @@ class MemoryView(ft.Container):
                     e_btn.visible = False
                     s_btn.visible = True
                     ca_btn.visible = True
-                    self.update()
+                    if getattr(self.page, "session_id", None) is not None:
+                        self.update()
                 return on_edit
 
             def create_cancel_handler(c_text, c_field, e_btn, s_btn, ca_btn, mem):
@@ -163,7 +168,8 @@ class MemoryView(ft.Container):
                     e_btn.visible = True
                     s_btn.visible = False
                     ca_btn.visible = False
-                    self.update()
+                    if getattr(self.page, "session_id", None) is not None:
+                        self.update()
                 return on_cancel
 
             def create_save_handler(c_text, c_field, e_btn, s_btn, ca_btn, mem):
@@ -183,39 +189,49 @@ class MemoryView(ft.Container):
                             if m.id == updated_mem.id:
                                 self.memories[i] = updated_mem
                                 break
-                        self.update_table()
+                        if getattr(self.page, "session_id", None) is not None:
+                            self.update_table()
+                    except asyncio.CancelledError:
+                        pass
                     except Exception as ex:  # noqa: BLE001
                         logger.error(f"Грешка: {ex}")
-                        self.page.open(
-                            ft.SnackBar(
-                                ft.Text(f"Failed to update memory: {ex}", color=ft.colors.WHITE),
-                                bgcolor=ft.colors.RED
+                        if getattr(self.page, "session_id", None) is not None:
+                            self.page.open(
+                                ft.SnackBar(
+                                    ft.Text(f"Failed to update memory: {ex}", color=ft.colors.WHITE),
+                                    bgcolor=ft.colors.RED
+                                )
                             )
-                        )
                 return on_save
 
             def create_delete_handler(mem):
                 def on_delete_click(e):
                     # Close dialog handler
                     def close_dlg(e):
-                        self.page.close(confirm_dialog)
+                        if getattr(self.page, "session_id", None) is not None:
+                            self.page.close(confirm_dialog)
 
                     # Confirm delete handler
                     async def confirm_delete(e):
                         try:
                             await self.api_client.delete_memory(mem.id)
                             self.memories = [m for m in self.memories if m.id != mem.id]
-                            self.update_table()
+                            if getattr(self.page, "session_id", None) is not None:
+                                self.update_table()
+                        except asyncio.CancelledError:
+                            pass
                         except Exception as ex:  # noqa: BLE001
                             logger.error(f"Грешка: {ex}")
-                            self.page.open(
-                                ft.SnackBar(
-                                    ft.Text(f"Failed to delete memory: {ex}", color=ft.colors.WHITE),
-                                    bgcolor=ft.colors.RED
+                            if getattr(self.page, "session_id", None) is not None:
+                                self.page.open(
+                                    ft.SnackBar(
+                                        ft.Text(f"Failed to delete memory: {ex}", color=ft.colors.WHITE),
+                                        bgcolor=ft.colors.RED
+                                    )
                                 )
-                            )
                         finally:
-                            self.page.close(confirm_dialog)
+                            if getattr(self.page, "session_id", None) is not None:
+                                self.page.close(confirm_dialog)
 
                     confirm_dialog = ft.AlertDialog(
                         modal=True,
@@ -227,7 +243,8 @@ class MemoryView(ft.Container):
                         ],
                         actions_alignment=ft.MainAxisAlignment.END,
                     )
-                    self.page.open(confirm_dialog)
+                    if getattr(self.page, "session_id", None) is not None:
+                        self.page.open(confirm_dialog)
                 return on_delete_click
 
             def create_activate_handler(mem, a_btn):
@@ -244,21 +261,25 @@ class MemoryView(ft.Container):
                             if m.id == updated_mem.id:
                                 self.memories[i] = updated_mem
                                 break
-                        self.update_table()
-                        self.page.open(
-                            ft.SnackBar(
-                                ft.Text("Споменът е активиран!", color=ft.colors.WHITE),
-                                bgcolor=ft.colors.GREEN
+                        if getattr(self.page, "session_id", None) is not None:
+                            self.update_table()
+                            self.page.open(
+                                ft.SnackBar(
+                                    ft.Text("Споменът е активиран!", color=ft.colors.WHITE),
+                                    bgcolor=ft.colors.GREEN
+                                )
                             )
-                        )
+                    except asyncio.CancelledError:
+                        pass
                     except Exception as ex:  # noqa: BLE001
                         logger.error(f"Грешка: {ex}")
-                        self.page.open(
-                            ft.SnackBar(
-                                ft.Text(f"Failed to activate memory: {ex}", color=ft.colors.WHITE),
-                                bgcolor=ft.colors.RED
+                        if getattr(self.page, "session_id", None) is not None:
+                            self.page.open(
+                                ft.SnackBar(
+                                    ft.Text(f"Failed to activate memory: {ex}", color=ft.colors.WHITE),
+                                    bgcolor=ft.colors.RED
+                                )
                             )
-                        )
                 return on_activate
 
             edit_btn.on_click = create_edit_handler(content_text, content_field, edit_btn, save_btn, cancel_btn)
@@ -276,4 +297,5 @@ class MemoryView(ft.Container):
                     ]
                 )
             )
-        self.update()
+        if getattr(self.page, "session_id", None) is not None:
+            self.update()
