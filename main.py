@@ -88,15 +88,23 @@ def main(page: ft.Page):
 
     async def check_connection():
         while True:
-            is_healthy = await api_client.check_health()
-            if is_healthy:
-                status_icon.color = ft.colors.GREEN
-                status_icon.tooltip = "Connected"
-            else:
-                status_icon.color = ft.colors.RED
-                status_icon.tooltip = "Disconnected"
-            page.update()
-            await asyncio.sleep(5)
+            try:
+                is_healthy = await api_client.check_health()
+                if is_healthy:
+                    status_icon.color = ft.colors.GREEN
+                    status_icon.tooltip = "Connected"
+                else:
+                    status_icon.color = ft.colors.RED
+                    status_icon.tooltip = "Disconnected"
+
+                if getattr(page, "session_id", None) is not None:
+                    page.update()
+
+                await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                break
+            except Exception:  # noqa: BLE001
+                await asyncio.sleep(5)
 
     task_handle = page.run_task(check_connection)
 

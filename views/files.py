@@ -80,15 +80,19 @@ class FilesView(ft.Container):
         try:
             files = await self.api_client.list_files()
             self.files = files
-            self.update_table()
+            if getattr(self.page, "session_id", None) is not None:
+                self.update_table()
+        except asyncio.CancelledError:
+            pass
         except Exception as e:  # noqa: BLE001
             logger.error(f"Грешка: {e}")
-            self.page.open(
-                ft.SnackBar(
-                    ft.Text("Failed to load files.", color=ft.colors.WHITE),
-                    bgcolor=ft.colors.RED
+            if getattr(self.page, "session_id", None) is not None:
+                self.page.open(
+                    ft.SnackBar(
+                        ft.Text("Failed to load files.", color=ft.colors.WHITE),
+                        bgcolor=ft.colors.RED
+                    )
                 )
-            )
 
     async def poll_statuses(self, *_args):
         while self._polling:
@@ -128,14 +132,17 @@ class FilesView(ft.Container):
                         # Using asyncio.to_thread for reading file to avoid blocking
                         content = await asyncio.to_thread(Path(f.path).read_bytes)
                         await self.api_client.upload_file(content, f.name)
+                except asyncio.CancelledError:
+                    pass
                 except Exception as ex:  # noqa: BLE001
                     logger.error(f"Грешка: {ex}")
-                    self.page.open(
-                        ft.SnackBar(
-                            ft.Text(f"Failed to upload {f.name}: {ex}", color=ft.colors.WHITE),
-                            bgcolor=ft.colors.RED
+                    if getattr(self.page, "session_id", None) is not None:
+                        self.page.open(
+                            ft.SnackBar(
+                                ft.Text(f"Failed to upload {f.name}: {ex}", color=ft.colors.WHITE),
+                                bgcolor=ft.colors.RED
+                            )
                         )
-                    )
 
         await asyncio.gather(*(upload_single_file(f) for f in e.files))
 
@@ -175,8 +182,9 @@ class FilesView(ft.Container):
                     ]
                 )
             )
-        self.update()
-        self.page.update()
+        if getattr(self.page, "session_id", None) is not None:
+            self.update()
+            self.page.update()
 
     def create_category_change_handler(self, file_id: str | None):
         async def handler(e):
@@ -185,20 +193,24 @@ class FilesView(ft.Container):
             try:
                 await self.api_client.update_file_category(file_id, e.control.value)
                 await self.initial_load()
-                self.page.open(
-                    ft.SnackBar(
-                        ft.Text("Категорията е обновена!", color=ft.colors.WHITE),
-                        bgcolor=ft.colors.GREEN
+                if getattr(self.page, "session_id", None) is not None:
+                    self.page.open(
+                        ft.SnackBar(
+                            ft.Text("Категорията е обновена!", color=ft.colors.WHITE),
+                            bgcolor=ft.colors.GREEN
+                        )
                     )
-                )
+            except asyncio.CancelledError:
+                pass
             except Exception as ex:  # noqa: BLE001
                 logger.error(f"Грешка: {ex}")
-                self.page.open(
-                    ft.SnackBar(
-                        ft.Text(f"Failed to update category: {ex}", color=ft.colors.WHITE),
-                        bgcolor=ft.colors.RED
+                if getattr(self.page, "session_id", None) is not None:
+                    self.page.open(
+                        ft.SnackBar(
+                            ft.Text(f"Failed to update category: {ex}", color=ft.colors.WHITE),
+                            bgcolor=ft.colors.RED
+                        )
                     )
-                )
         return handler
 
     def create_delete_handler(self, file_id: str | None):
@@ -208,12 +220,15 @@ class FilesView(ft.Container):
             try:
                 await self.api_client.delete_file(file_id)
                 await self.initial_load()
+            except asyncio.CancelledError:
+                pass
             except Exception as ex:  # noqa: BLE001
                 logger.error(f"Грешка: {ex}")
-                self.page.open(
-                    ft.SnackBar(
-                        ft.Text(f"Failed to delete file: {ex}", color=ft.colors.WHITE),
-                        bgcolor=ft.colors.RED
+                if getattr(self.page, "session_id", None) is not None:
+                    self.page.open(
+                        ft.SnackBar(
+                            ft.Text(f"Failed to delete file: {ex}", color=ft.colors.WHITE),
+                            bgcolor=ft.colors.RED
+                        )
                     )
-                )
         return handler

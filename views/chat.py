@@ -106,27 +106,27 @@ class ChatMessage(ft.Column):
     def set_regenerate_visible(self, visible: bool):
         if hasattr(self, "regenerate_btn"):
             self.regenerate_btn.visible = visible
-            if self.uid is not None:
+            if self.page_ref is not None and getattr(self.page_ref, "session_id", None) is not None and self.uid is not None:
                 self.update()
 
     def show_activity_indicator(self):
         if not self.activity_indicator.visible:
             self.activity_indicator.visible = True
-            if self.uid is not None:
+            if self.page_ref is not None and getattr(self.page_ref, "session_id", None) is not None and self.uid is not None:
                 self.update()
 
     def hide_activity_indicator(self):
         if self.activity_indicator.visible:
             self.activity_indicator.visible = False
-            if self.uid is not None:
+            if self.page_ref is not None and getattr(self.page_ref, "session_id", None) is not None and self.uid is not None:
                 self.update()
 
     def finalize_with_error(self, error_msg: str):
         self.md.value += f"\n\n**<span style='color:red;'>{error_msg}</span>**"
         self.hide_activity_indicator()
-        if self.md.uid is not None:
+        if self.md.uid is not None and self.page_ref is not None and getattr(self.page_ref, "session_id", None) is not None:
             self.md.update()
-        if self.uid is not None:
+        if self.uid is not None and self.page_ref is not None and getattr(self.page_ref, "session_id", None) is not None:
             self.update()
 
     async def copy_to_clipboard(self, e):
@@ -141,7 +141,7 @@ class ChatMessage(ft.Column):
 
     def append_text(self, text: str):
         self.md.value += text
-        if self.md.uid is not None:
+        if self.md.uid is not None and self.page_ref is not None and getattr(self.page_ref, "session_id", None) is not None:
             self.md.update()
 
     def add_sources(self, sources: list):
@@ -178,7 +178,7 @@ class ChatMessage(ft.Column):
             self.sources_row.controls.append(chip)
 
         self.sources_row.visible = True
-        if self.uid is not None:
+        if self.uid is not None and self.page_ref is not None and getattr(self.page_ref, "session_id", None) is not None:
             self.update()
 
     def open_sources_panel(self, sources_to_display: list | None = None):
@@ -323,7 +323,7 @@ class ChatView(ft.Container):
         save_settings(settings)
 
         self.session_id = new_session
-        if self.uid is not None:
+        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
             self.update()
 
 
@@ -355,6 +355,8 @@ class ChatView(ft.Container):
                 self._last_assistant_msg = last_msg_obj
                 self._last_assistant_row = last_msg_obj._row
                 self._last_assistant_msg.set_regenerate_visible(True)
+        except asyncio.CancelledError:
+            pass
         except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to load chat history: {e}")
 
@@ -377,7 +379,7 @@ class ChatView(ft.Container):
 
         self.chat_list.controls.append(row)
         chat_message._row = row
-        if self.uid is not None:
+        if self.uid is not None and getattr(self.page, "session_id", None) is not None:
             self.update()
             self.scroll_to_bottom()
         return chat_message
@@ -388,13 +390,16 @@ class ChatView(ft.Container):
         last_chunk_time = time.time()
 
         async def show_activity_after_delay():
-            while is_streaming:
-                await asyncio.sleep(0.5)
-                if (time.time() - last_chunk_time) >= 1.0 and is_streaming:
-                    chat_message.show_activity_indicator()
-                    if self.uid is not None:
-                        self.update()
-                        self.scroll_to_bottom()
+            try:
+                while is_streaming:
+                    await asyncio.sleep(0.5)
+                    if (time.time() - last_chunk_time) >= 1.0 and is_streaming:
+                        chat_message.show_activity_indicator()
+                        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
+                            self.update()
+                            self.scroll_to_bottom()
+            except asyncio.CancelledError:
+                pass
 
         activity_task = self.page.run_task(show_activity_after_delay)
 
@@ -441,21 +446,21 @@ class ChatView(ft.Container):
                     if pending_text:
                         chat_message.append_text(pending_text)
                         pending_text = ""
-                    if self.uid is not None:
+                    if getattr(self.page, "session_id", None) is not None and self.uid is not None:
                         self.update()
                         self.scroll_to_bottom()
                     last_update_time = current_time
 
             if pending_text:
                 chat_message.append_text(pending_text)
-                if self.uid is not None:
+                if getattr(self.page, "session_id", None) is not None and self.uid is not None:
                     self.update()
                     self.scroll_to_bottom()
 
         except asyncio.CancelledError:
             if pending_text:
                 chat_message.append_text(pending_text)
-                if self.uid is not None:
+                if getattr(self.page, "session_id", None) is not None and self.uid is not None:
                     self.update()
                     self.scroll_to_bottom()
         except StreamError as ex:
@@ -478,7 +483,7 @@ class ChatView(ft.Container):
             if activity_task:
                 activity_task.cancel()
 
-        if self.uid is not None:
+        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
             self.update()
 
     async def send_message_click(self, e):
@@ -495,7 +500,7 @@ class ChatView(ft.Container):
         if self._last_assistant_msg:
             self._last_assistant_msg.set_regenerate_visible(False)
 
-        if self.uid is not None:
+        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
             self.update()
 
         self.add_message("user", user_text)
@@ -511,7 +516,7 @@ class ChatView(ft.Container):
 
         self.send_btn.visible = True
         self.stop_btn.visible = False
-        if self.uid is not None:
+        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
             self.update()
 
     async def regenerate_last(self, *_args):
@@ -523,7 +528,7 @@ class ChatView(ft.Container):
         except ValueError:
             pass
 
-        if self.uid is not None:
+        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
             self.update()
 
         self._last_assistant_msg = None
@@ -531,7 +536,7 @@ class ChatView(ft.Container):
 
         self.send_btn.visible = False
         self.stop_btn.visible = True
-        if self.uid is not None:
+        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
             self.update()
 
         chat_message = self.add_message("assistant", "")
@@ -545,12 +550,7 @@ class ChatView(ft.Container):
 
         self.send_btn.visible = True
         self.stop_btn.visible = False
-        if self.uid is not None:
-            self.update()
-
-        self.send_btn.visible = True
-        self.stop_btn.visible = False
-        if self.uid is not None:
+        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
             self.update()
 
     async def stop_generation_click(self, e):
@@ -558,5 +558,5 @@ class ChatView(ft.Container):
         self.api_client.cancel_stream()
         self.stop_btn.visible = False
         self.send_btn.visible = True
-        if self.uid is not None:
+        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
             self.update()
