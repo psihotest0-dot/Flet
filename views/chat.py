@@ -141,7 +141,7 @@ class ChatMessage(ft.Column):
 
     def append_text(self, text: str):
         self.md.value += text
-        if self.md.uid is not None and self.page_ref is not None and getattr(self.page_ref, "session_id", None) is not None:
+        if getattr(self.md, "page", None) is not None and getattr(self.page_ref, "session_id", None) is not None:
             self.md.update()
 
     def add_sources(self, sources: list):
@@ -468,6 +468,8 @@ class ChatView(ft.Container):
             chat_message.finalize_with_error("Нещо се обърка. Опитай отново.")
         except Exception as ex:  # noqa: BLE001
             logger.error(f"Грешка: {ex}")
+            if getattr(self.page, "session_id", None) is not None and self.uid is not None:
+                self.update()
             chat_message.append_text("\n\n**Error getting response.**")
             if fallback_user_text:
                 self.input_field.value = fallback_user_text
@@ -507,6 +509,8 @@ class ChatView(ft.Container):
 
         chat_message = self.add_message("assistant", "")
         self._stop_generation = False
+        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
+            self.update()
 
         await self._stream_response(chat_message, self.api_client.stream_chat(session_id=self.session_id, content=user_text), user_text)
 
@@ -541,6 +545,8 @@ class ChatView(ft.Container):
 
         chat_message = self.add_message("assistant", "")
         self._stop_generation = False
+        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
+            self.update()
 
         await self._stream_response(chat_message, self.api_client.regenerate_chat(session_id=self.session_id))
 
