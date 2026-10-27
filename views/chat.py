@@ -95,9 +95,9 @@ class ChatMessage(ft.Column):
             self.sources_row
         ]
 
+    def did_mount(self):
         if self.sources:
             self.add_sources(self.sources)
-
 
     async def _handle_regenerate(self, e):
         if self.on_regenerate and self.page_ref:
@@ -148,7 +148,8 @@ class ChatMessage(ft.Column):
         if not sources:
             return
 
-        self.sources.extend(sources)
+        if sources is not self.sources:
+            self.sources.extend(sources)
         self.sources_row.controls.clear()
 
         self.sources_row.controls.append(ft.Text("Източници:", size=12, color=ft.colors.GREY_400))
