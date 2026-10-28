@@ -83,25 +83,25 @@ def main(page: ft.Page):
         if success:
             page.open(
                 ft.SnackBar(
-                    ft.Text("Settings saved successfully!", color=ft.colors.WHITE),
+                    ft.Text("Настройките са запазени успешно!", color=ft.colors.WHITE),
                     bgcolor=ft.colors.GREEN
                 )
             )
         else:
             page.open(
                 ft.SnackBar(
-                    ft.Text("Failed to save settings.", color=ft.colors.WHITE),
+                    ft.Text("Неуспешно запазване на настройките.", color=ft.colors.WHITE),
                     bgcolor=ft.colors.RED
                 )
             )
 
     settings_dialog = ft.AlertDialog(
         modal=True,
-        title=ft.Text("Settings"),
+        title=ft.Text("Настройки"),
         content=ft.Column([base_url_field], tight=True),
         actions=[
-            ft.TextButton("Cancel", on_click=close_dlg),
-            ft.TextButton("Save", on_click=save_dlg),
+            ft.TextButton("Отказ", on_click=close_dlg),
+            ft.TextButton("Запази", on_click=save_dlg),
         ],
         actions_alignment=ft.MainAxisAlignment.END,
     )
@@ -109,7 +109,7 @@ def main(page: ft.Page):
     def open_settings(e):
         page.open(settings_dialog)
 
-    status_icon = ft.Icon(name=ft.icons.CIRCLE, color=ft.colors.RED, size=14, tooltip="Disconnected")
+    status_icon = ft.Icon(name=ft.icons.CIRCLE, color=ft.colors.RED, size=14, tooltip="Връзката е прекъсната")
 
     page.appbar = ft.AppBar(
         title=ft.Row([ft.Text("AI Agent"), status_icon], alignment=ft.MainAxisAlignment.START),
@@ -126,10 +126,10 @@ def main(page: ft.Page):
                 is_healthy = await api_client.check_health()
                 if is_healthy:
                     status_icon.color = ft.colors.GREEN
-                    status_icon.tooltip = "Connected"
+                    status_icon.tooltip = "Свързан"
                 else:
                     status_icon.color = ft.colors.RED
-                    status_icon.tooltip = "Disconnected"
+                    status_icon.tooltip = "Връзката е прекъсната"
 
                 if getattr(page, "session_id", None) is not None:
                     page.update()
@@ -158,15 +158,15 @@ def main(page: ft.Page):
         on_change=on_tab_change,
         tabs=[
             ft.Tab(
-                text="Chat",
+                text="Чат",
                 content=ChatView(page, api_client)
             ),
             ft.Tab(
-                text="Memory",
+                text="Памет",
                 content=MemoryView(page, api_client)
             ),
             ft.Tab(
-                text="Files",
+                text="Файлове",
                 content=files_view
             ),
         ],
