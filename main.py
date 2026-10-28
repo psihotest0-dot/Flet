@@ -7,13 +7,14 @@ import flet as ft
 
 logger = logging.getLogger(__name__)
 
+import concurrent.futures
+
 from api.client import APIClient
 from state.settings import load_settings, save_settings
 from views.chat import ChatView
 from views.files import FilesView
 from views.memory import MemoryView
 
-import concurrent.futures
 
 class SafeTaskWrapper:
     def __init__(self, task_future):
