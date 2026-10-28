@@ -27,23 +27,23 @@ class FilesView(ft.Container):
         self.file_picker = ft.FilePicker(on_result=self.on_file_picker_result)
 
         self.upload_btn = ft.ElevatedButton(
-            "Upload File",
+            "Качи файл",
             icon=ft.icons.UPLOAD_FILE,
             on_click=lambda _: self.file_picker.pick_files()
         )
 
         self.refresh_btn = ft.ElevatedButton(
-            "Refresh",
+            "Обнови",
             icon=ft.icons.REFRESH,
             on_click=self.on_refresh_click
         )
 
         self.data_table = ft.DataTable(
             columns=[
-                ft.DataColumn(ft.Text("File Name")),
-                ft.DataColumn(ft.Text("Status")),
+                ft.DataColumn(ft.Text("Име на файл")),
+                ft.DataColumn(ft.Text("Статус")),
                 ft.DataColumn(ft.Text("Категория")),
-                ft.DataColumn(ft.Text("Actions")),
+                ft.DataColumn(ft.Text("Действия")),
             ],
             rows=[]
         )
@@ -64,10 +64,14 @@ class FilesView(ft.Container):
             self.page.overlay.append(self.file_picker)
             self.page.update()
         self._polling = True
-        self.page.run_task(self.initial_load)
-        self.page.run_task(self.poll_statuses)
+        self._load_task = self.page.run_task(self.initial_load)
+        self._poll_task = self.page.run_task(self.poll_statuses)
 
     def will_unmount(self):
+        if hasattr(self, "_load_task") and self._load_task:
+            self._load_task.cancel()
+        if hasattr(self, "_poll_task") and self._poll_task:
+            self._poll_task.cancel()
         if self.file_picker in self.page.overlay:
             self.page.overlay.remove(self.file_picker)
             self.page.update()

@@ -23,20 +23,20 @@ class MemoryView(ft.Container):
         self.expand = True
 
         self.status_dropdown = ft.Dropdown(
-            label="Filter by Status",
+            label="Филтър по статус",
             options=[
-                ft.dropdown.Option("All"),
+                ft.dropdown.Option("Всички"),
                 ft.dropdown.Option("active"),
                 ft.dropdown.Option("candidate"),
                 ft.dropdown.Option("superseded")
             ],
-            value="All",
+            value="Всички",
             on_change=self.on_filter_change,
             width=200
         )
 
         self.refresh_btn = ft.ElevatedButton(
-            "Refresh",
+            "Обнови",
             icon=ft.icons.REFRESH,
             on_click=self.on_refresh_click
         )
@@ -45,9 +45,9 @@ class MemoryView(ft.Container):
 
         self.data_table = ft.DataTable(
             columns=[
-                ft.DataColumn(ft.Text("Content")),
-                ft.DataColumn(ft.Text("Status")),
-                ft.DataColumn(ft.Text("Actions")),
+                ft.DataColumn(ft.Text("Съдържание")),
+                ft.DataColumn(ft.Text("Статус")),
+                ft.DataColumn(ft.Text("Действия")),
             ],
             rows=[]
         )
@@ -62,12 +62,18 @@ class MemoryView(ft.Container):
         )
 
     def did_mount(self):
-        self.page.run_task(self.load_memories)
+        self._load_task = self.page.run_task(self.load_memories)
+
+    def will_unmount(self):
+        if hasattr(self, "_load_task") and self._load_task:
+            self._load_task.cancel()
+        if hasattr(self, "_filter_task") and self._filter_task:
+            self._filter_task.cancel()
 
     async def load_memories(self, *_args):
         try:
             status = self.status_dropdown.value
-            if status == "All":
+            if status == "Всички":
                 status = None
             memories = await self.api_client.list_memories(status=status)
             self.memories = memories
