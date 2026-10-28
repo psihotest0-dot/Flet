@@ -19,6 +19,7 @@ class Settings(BaseModel):
     base_url: str = "http://localhost:8080"
     user_id: str | None = None
     session_id: str | None = None
+    chat_sessions: list[dict] = []
 
 def load_settings() -> Settings:
     """Load settings from the local JSON file."""
