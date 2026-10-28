@@ -13,6 +13,38 @@ from views.chat import ChatView
 from views.files import FilesView
 from views.memory import MemoryView
 
+import concurrent.futures
+
+class SafeTaskWrapper:
+    def __init__(self, task_future):
+        self._task_future = task_future
+
+    def __getattr__(self, name):
+        return getattr(self._task_future, name)
+
+    def cancel(self):
+        orig_exc = self._task_future.exception
+        def safe_exc(*args, **kwargs):
+            try:
+                return orig_exc(*args, **kwargs)
+            except concurrent.futures.CancelledError:
+                return None
+        self._task_future.exception = safe_exc
+        return self._task_future.cancel()
+
+def wrap_run_task(page):
+    if hasattr(page, "_is_wrapped"):
+        return
+    page._is_wrapped = True
+    original_run_task = page.run_task
+
+    def safe_run_task(*args, **kwargs):
+        task_future = original_run_task(*args, **kwargs)
+        return SafeTaskWrapper(task_future)
+
+    page.run_task = safe_run_task
+
+
 logging.basicConfig(
     handlers=[RotatingFileHandler("app.log", maxBytes=1024 * 1024, backupCount=3)],
     level=logging.ERROR,
@@ -20,6 +52,7 @@ logging.basicConfig(
 )
 
 def main(page: ft.Page):
+    wrap_run_task(page)
     page.title = "AI Agent Client"
 
     settings = load_settings()
