@@ -248,7 +248,13 @@ class ChatView(ft.Container):
         settings = load_settings()
         if settings.session_id is None:
             settings.session_id = str(uuid.uuid4())
+            settings.chat_sessions.append({"id": settings.session_id, "name": "Чат 1"})
             save_settings(settings)
+
+        if not settings.chat_sessions and settings.session_id is not None:
+            settings.chat_sessions = [{"id": settings.session_id, "name": "Чат 1"}]
+            save_settings(settings)
+
         self.session_id = settings.session_id
 
         self._stop_generation = False
@@ -270,9 +276,16 @@ class ChatView(ft.Container):
             on_click=self.on_new_chat_click,
         )
 
+        self.session_dropdown = ft.Dropdown(
+            options=[ft.dropdown.Option(key=s["id"], text=s["name"]) for s in settings.chat_sessions],
+            value=self.session_id,
+            width=200,
+            on_change=self.on_session_change,
+        )
+
         self.top_row = ft.Row(
-            controls=[self.new_chat_btn],
-            alignment=ft.MainAxisAlignment.END,
+            controls=[self.session_dropdown, self.new_chat_btn],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         )
 
         self.input_field = ft.TextField(
@@ -314,15 +327,48 @@ class ChatView(ft.Container):
             expand=True,
         )
 
+    async def on_session_change(self, e):
+        new_id = self.session_dropdown.value
+        if new_id and new_id != self.session_id:
+            self.session_id = new_id
+            settings = load_settings()
+            settings.session_id = new_id
+            save_settings(settings)
+
+            self.chat_list.controls.clear()
+            if getattr(self.page, "session_id", None) is not None and self.uid is not None:
+                self.update()
+
+            self._stop_generation = True
+            self.api_client.cancel_stream()
+
+            if hasattr(self, "_load_task") and self._load_task:
+                self._load_task.cancel()
+            self._load_task = self.page.run_task(self.load_history)
+
     async def on_new_chat_click(self, e):
         self.chat_list.controls.clear()
 
         settings = load_settings()
         new_session = str(uuid.uuid4())
+
+        chat_count = len(settings.chat_sessions) + 1
+        new_name = f"Чат {chat_count}"
+
+        settings.chat_sessions.append({"id": new_session, "name": new_name})
         settings.session_id = new_session
         save_settings(settings)
 
         self.session_id = new_session
+
+        self.session_dropdown.options.append(ft.dropdown.Option(key=new_session, text=new_name))
+        self.session_dropdown.value = new_session
+
+        self._stop_generation = True
+        self.api_client.cancel_stream()
+        if hasattr(self, "_load_task") and self._load_task:
+            self._load_task.cancel()
+
         if getattr(self.page, "session_id", None) is not None and self.uid is not None:
             self.update()
 
