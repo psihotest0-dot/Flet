@@ -119,7 +119,7 @@ class MemoryView(ft.Container):
                 alignment=ft.alignment.top_left
             )
             content_field = ft.Container(
-                content=ft.TextField(value=memory.content or "", multiline=True),
+                content=ft.TextField(value=memory.content or "", multiline=True, min_lines=2, max_lines=5),
                 expand=True,
                 visible=False,
                 alignment=ft.alignment.top_left
@@ -297,7 +297,7 @@ class MemoryView(ft.Container):
             self.data_table.rows.append(
                 ft.DataRow(
                     cells=[
-                        ft.DataCell(ft.Row([content_text, content_field], expand=True)),
+                        ft.DataCell(ft.Row([content_text, content_field], expand=True, scroll=ft.ScrollMode.AUTO)),
                         ft.DataCell(ft.Text(memory.status or "")),
                         ft.DataCell(actions_row),
                     ]
