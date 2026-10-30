@@ -121,14 +121,25 @@ def main(page: ft.Page):
         nonlocal api_client
 
         new_url = (base_url_field.value or "").strip()
+        # Re-read the file before writing: the chat view stores its session_id
+        # and chat_sessions there, and saving the snapshot loaded at startup
+        # would silently revert them to an older session.
+        current = load_settings()
         if new_url:
-            settings.base_url = new_url
-        success = save_settings(settings)
+            current.base_url = new_url
+        if not current.user_id:
+            current.user_id = settings.user_id
+        success = save_settings(current)
         page.close(settings_dialog)
 
         if not success:
             show_snackbar(page, "Неуспешно запазване на настройките.")
             return
+
+        settings.base_url = current.base_url
+        settings.user_id = current.user_id
+        settings.session_id = current.session_id
+        settings.chat_sessions = current.chat_sessions
 
         # The old client keeps pointing at the previous URL - replace it and
         # hand the new one to every view that was already created.
@@ -183,8 +194,17 @@ def main(page: ft.Page):
 
     # Views are mounted lazily: creating all three up front issued three API
     # calls and started the files poller before the user opened a single tab.
+    def on_chat_session_changed(session_id: str) -> None:
+        """Reload the already created tabs that belong to the active session."""
+        logger.info("Active chat session changed to %s", session_id)
+        memory_view = views.get(1)
+        if isinstance(memory_view, MemoryView):
+            # Memories are re-read for the newly selected chat so the tab never
+            # keeps showing data fetched for the previous session.
+            page.run_task(memory_view.load_memories)
+
     def create_chat() -> ChatView:
-        return ChatView(page, api_client)
+        return ChatView(page, api_client, on_session_changed=on_chat_session_changed)
 
     def create_memory() -> MemoryView:
         return MemoryView(page, api_client)
@@ -194,7 +214,7 @@ def main(page: ft.Page):
 
     factories = {0: create_chat, 1: create_memory, 2: create_files}
 
-    chat_view = ChatView(page, api_client)
+    chat_view = ChatView(page, api_client, on_session_changed=on_chat_session_changed)
     views[0] = chat_view
 
     tabs = ft.Tabs(

@@ -6,11 +6,12 @@ import asyncio
 import logging
 import time
 import uuid
+from typing import Callable
 
 import flet as ft
 
 from api.client import APIClient, StreamError
-from state.settings import load_settings, save_settings
+from state.settings import Settings, load_settings, save_settings
 from views.ui_utils import safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
@@ -273,25 +274,141 @@ class ChatMessage(ft.Column):
         self.page_ref.open(self.bottom_sheet)
 
 
+CHAT_SESSION_PREFIX = "Чат"
+
+
+def _next_chat_name(chat_sessions: list[dict]) -> str:
+    """Return the first unused "Чат N" label for a brand new chat."""
+    used = {session["name"] for session in chat_sessions}
+    index = 1
+    while f"{CHAT_SESSION_PREFIX} {index}" in used:
+        index += 1
+    return f"{CHAT_SESSION_PREFIX} {index}"
+
+
+def _unique_chat_name(name: str, chat_sessions: list[dict]) -> str:
+    """Return a label that no other chat session is using yet."""
+    name = (name or "").strip()
+    if not name:
+        return _next_chat_name(chat_sessions)
+
+    used = {session["name"] for session in chat_sessions}
+    if name not in used:
+        return name
+
+    index = 2
+    while f"{name} ({index})" in used:
+        index += 1
+    return f"{name} ({index})"
+
+
+def _normalize_chat_sessions(settings: Settings) -> list[dict]:
+    """Return ``settings.chat_sessions`` as clean ``{"id", "name"}`` entries.
+
+    Older builds persisted bare names and a broken write can leave entries
+    without an id. Such entries are re-bound to ``settings.session_id`` when
+    that id is not listed yet, so an already existing chat stays reachable
+    instead of being replaced by a freshly generated session id.
+    """
+    chat_sessions: list[dict] = []
+    used_ids: set[str] = set()
+    nameless_entries: list[dict] = []
+
+    for entry in settings.chat_sessions or []:
+        if isinstance(entry, str):
+            entry = {"name": entry}
+        if not isinstance(entry, dict):
+            continue
+
+        raw_id = entry.get("id") or entry.get("session_id")
+        session_id = str(raw_id).strip() if raw_id else ""
+        name = str(entry.get("name") or entry.get("title") or "").strip()
+
+        if not session_id:
+            # Without an id the entry cannot address a session; keep its name
+            # around in case it belongs to the still active session.
+            nameless_entries.append({"name": name})
+            continue
+        if session_id in used_ids:
+            continue
+
+        used_ids.add(session_id)
+        chat_sessions.append(
+            {"id": session_id, "name": _unique_chat_name(name, chat_sessions)}
+        )
+
+    active_id = (settings.session_id or "").strip()
+    if active_id and active_id not in used_ids:
+        # The active session predates `chat_sessions` (or lost its entry):
+        # keep it and reuse the name of a legacy entry when there is one.
+        name = nameless_entries.pop(0)["name"] if nameless_entries else ""
+        chat_sessions.append(
+            {"id": active_id, "name": _unique_chat_name(name, chat_sessions)}
+        )
+
+    return chat_sessions
+
+
+def _resolve_session_id(chat_sessions: list[dict], selected: str | None) -> str | None:
+    """Map a dropdown value (session id or chat name) to a saved session id."""
+    value = (selected or "").strip()
+    if not value:
+        return None
+
+    for session in chat_sessions:
+        if session["id"] == value:
+            return session["id"]
+    for session in chat_sessions:
+        if session["name"].casefold() == value.casefold():
+            return session["id"]
+    return None
+
+
+def _ensure_chat_session(settings: Settings) -> tuple[str, list[dict]]:
+    """Resolve the session the chat view must open and repair stale settings.
+
+    A saved ``chat_sessions`` entry always wins over generating an id: a new
+    UUID is created only when the settings hold no chat at all.
+    """
+    previous_sessions = settings.chat_sessions
+    previous_session_id = settings.session_id
+
+    chat_sessions = _normalize_chat_sessions(settings)
+    if chat_sessions:
+        active_id = (previous_session_id or "").strip()
+        if not any(session["id"] == active_id for session in chat_sessions):
+            # `session_id` is missing or points nowhere - open the first chat
+            # that is actually stored instead of inventing a new one.
+            active_id = chat_sessions[0]["id"]
+    else:
+        # No chat was ever saved (first run): the only case that mints an id.
+        active_id = (previous_session_id or "").strip() or str(uuid.uuid4())
+        chat_sessions = [{"id": active_id, "name": _next_chat_name(chat_sessions)}]
+
+    if chat_sessions != previous_sessions or active_id != previous_session_id:
+        settings.chat_sessions = chat_sessions
+        settings.session_id = active_id
+        save_settings(settings)
+    return active_id, chat_sessions
+
+
 class ChatView(ft.Container):
     """The main view for the chat interface."""
 
-    def __init__(self, page: ft.Page, api_client: APIClient):
+    def __init__(
+        self,
+        page: ft.Page,
+        api_client: APIClient,
+        on_session_changed: Callable[[str], None] | None = None,
+    ):
         super().__init__()
         self.page = page
         self.api_client = api_client
+        self.on_session_changed = on_session_changed
 
-        settings = load_settings()
-        if settings.session_id is None:
-            settings.session_id = str(uuid.uuid4())
-            settings.chat_sessions.append({"id": settings.session_id, "name": "Чат 1"})
-            save_settings(settings)
-
-        if not settings.chat_sessions and settings.session_id is not None:
-            settings.chat_sessions = [{"id": settings.session_id, "name": "Чат 1"}]
-            save_settings(settings)
-
-        self.session_id = settings.session_id
+        # Never mint a new id while a saved chat exists: the dropdown has to
+        # keep pointing at the session ids stored in settings.json.
+        self.session_id, chat_sessions = _ensure_chat_session(load_settings())
 
         self._stop_generation = False
         self._is_streaming = False
@@ -315,7 +432,10 @@ class ChatView(ft.Container):
         )
 
         self.session_dropdown = ft.Dropdown(
-            options=[ft.dropdown.Option(key=s["id"], text=s["name"]) for s in settings.chat_sessions],
+            options=[
+                ft.dropdown.Option(key=session["id"], text=session["name"])
+                for session in chat_sessions
+            ],
             value=self.session_id,
             width=200,
             on_change=self.on_session_change,
@@ -386,36 +506,85 @@ class ChatView(ft.Container):
         self.stop_btn.disabled = False
         safe_update(self, self.send_btn, self.stop_btn)
 
-    async def on_session_change(self, e):
-        new_id = self.session_dropdown.value
-        if not new_id or new_id == self.session_id:
+    def _apply_session_options(self, chat_sessions: list[dict], selected_id: str | None) -> None:
+        """Re-key the dropdown so every option points at a real session id."""
+        self.session_dropdown.options = [
+            ft.dropdown.Option(key=session["id"], text=session["name"])
+            for session in chat_sessions
+        ]
+        self.session_dropdown.value = selected_id
+        safe_update(self, self.session_dropdown)
+
+    def _notify_session_changed(self, session_id: str) -> None:
+        """Tell the hosting app to reload the views tied to the active chat."""
+        if self.on_session_changed is None:
             return
+        try:
+            self.on_session_changed(session_id)
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("Session change listener failed: %s", ex)
 
-        self.session_id = new_id
-        settings = load_settings()
-        settings.session_id = new_id
-        save_settings(settings)
-
+    def _activate_session(self, session_id: str, reload_history: bool = True) -> None:
+        """Point the view at ``session_id`` and reload what belongs to it."""
+        self.session_id = session_id
         self._reset_conversation()
         self._cancel_running_tasks()
-        if self.page is not None:
+        if reload_history and self.page is not None:
             self._load_task = self.page.run_task(self.load_history)
+        self._notify_session_changed(session_id)
+
+    async def on_session_change(self, e):
+        """Open the chat the user picked, always with its saved session id.
+
+        The dropdown is keyed by session id, but the selected value is resolved
+        against ``settings.json`` first (by id, then by chat name) so that a
+        legacy name-keyed option or an entry without an id still maps back to
+        the session that owns the history, memories and files. A new UUID is
+        generated only for a chat that is not stored yet.
+        """
+        event_control = getattr(e, "control", None)
+        selected = getattr(event_control, "value", None) or self.session_dropdown.value
+        if not selected:
+            return
+
+        settings = load_settings()
+        chat_sessions = _normalize_chat_sessions(settings)
+        session_id = _resolve_session_id(chat_sessions, selected)
+
+        if session_id is None:
+            # A chat that was never persisted: the only legitimate new id.
+            session_id = str(uuid.uuid4())
+            chat_sessions.append(
+                {"id": session_id, "name": _unique_chat_name(str(selected), chat_sessions)}
+            )
+
+        settings.chat_sessions = chat_sessions
+        settings.session_id = session_id
+        save_settings(settings)
+
+        # Re-sync the widget as well: it may have carried a chat name instead
+        # of an id, and the options must stay keyed by the saved ids.
+        self._apply_session_options(chat_sessions, session_id)
+
+        if session_id == self.session_id:
+            return
+
+        self._activate_session(session_id)
 
     async def on_new_chat_click(self, e):
         settings = load_settings()
-        new_session = str(uuid.uuid4())
-        new_name = f"Чат {len(settings.chat_sessions) + 1}"
+        chat_sessions = _normalize_chat_sessions(settings)
 
-        settings.chat_sessions.append({"id": new_session, "name": new_name})
+        new_session = str(uuid.uuid4())
+        chat_sessions.append({"id": new_session, "name": _next_chat_name(chat_sessions)})
+
+        settings.chat_sessions = chat_sessions
         settings.session_id = new_session
         save_settings(settings)
 
-        self.session_id = new_session
-        self.session_dropdown.options.append(ft.dropdown.Option(key=new_session, text=new_name))
-        self.session_dropdown.value = new_session
-
-        self._reset_conversation()
-        self._cancel_running_tasks()
+        self._apply_session_options(chat_sessions, new_session)
+        # A brand new chat has no history to fetch, so only the UI is cleared.
+        self._activate_session(new_session, reload_history=False)
 
     def scroll_to_bottom(self):
         if self.chat_list.uid is not None:

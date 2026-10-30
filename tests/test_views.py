@@ -1,11 +1,14 @@
 import asyncio
+import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import flet as ft
 import pytest
 
 from api.client import APIClient, IngestedFile, Memory
-from views.chat import HISTORY_PAGE_SIZE, ChatView
+from state.settings import Settings, load_settings, save_settings
+from views.chat import HISTORY_PAGE_SIZE, ChatView, _normalize_chat_sessions
 from views.files import FilesView
 from views.memory import MemoryView
 
@@ -193,6 +196,201 @@ async def test_send_message_resets_state_after_stream_error(chat_view, mock_api_
     assert chat_view.stop_btn.visible is False
     # The failed input is restored so the user can retry.
     assert chat_view.input_field.value == "hi"
+
+
+# ---------------------------------------------------------------- chat sessions
+CHAT_1 = "11111111-1111-1111-1111-111111111111"
+CHAT_2 = "22222222-2222-2222-2222-222222222222"
+
+
+def seed_chat_sessions(session_id: str | None = CHAT_1) -> None:
+    save_settings(
+        Settings(
+            user_id="user-1",
+            session_id=session_id,
+            chat_sessions=[
+                {"id": CHAT_1, "name": "Чат 1"},
+                {"id": CHAT_2, "name": "Чат 2"},
+            ],
+        )
+    )
+
+
+def make_chat_view(mock_page, mock_api_client, **kwargs) -> ChatView:
+    view = ChatView(mock_page, mock_api_client, **kwargs)
+    view.update = MagicMock()
+    view.scroll_to_bottom = MagicMock()
+    return view
+
+
+def dropdown_keys(view: ChatView) -> list[str]:
+    return [option.key for option in view.session_dropdown.options]
+
+
+def test_chat_view_opens_the_saved_session(mock_page, mock_api_client):
+    seed_chat_sessions(session_id=CHAT_2)
+
+    view = make_chat_view(mock_page, mock_api_client)
+
+    assert view.session_id == CHAT_2
+    assert dropdown_keys(view) == [CHAT_1, CHAT_2]
+    assert view.session_dropdown.value == CHAT_2
+    assert load_settings().session_id == CHAT_2
+
+
+def test_chat_view_reuses_stored_chat_when_session_id_is_missing(mock_page, mock_api_client):
+    # A settings.json without the active id must not mint a brand new session.
+    seed_chat_sessions(session_id=None)
+
+    view = make_chat_view(mock_page, mock_api_client)
+
+    assert view.session_id == CHAT_1
+    saved = load_settings()
+    assert saved.session_id == CHAT_1
+    assert saved.chat_sessions == [
+        {"id": CHAT_1, "name": "Чат 1"},
+        {"id": CHAT_2, "name": "Чат 2"},
+    ]
+
+
+def test_chat_view_keeps_a_session_missing_from_chat_sessions(mock_page, mock_api_client):
+    save_settings(
+        Settings(
+            user_id="user-1",
+            session_id="legacy-session",
+            chat_sessions=[{"id": CHAT_1, "name": "Чат 1"}],
+        )
+    )
+
+    view = make_chat_view(mock_page, mock_api_client)
+
+    assert view.session_id == "legacy-session"
+    assert "legacy-session" in dropdown_keys(view)
+    assert len(load_settings().chat_sessions) == 2
+
+
+def test_chat_entry_without_an_id_is_rebound_to_the_active_session(mock_page, mock_api_client):
+    # A broken write leaves the active chat without an id; it must be kept and
+    # rebound to the saved session_id instead of being replaced by a new one.
+    save_settings(
+        Settings(user_id="user-1", session_id="legacy", chat_sessions=[{"name": "Чат 1"}])
+    )
+
+    view = make_chat_view(mock_page, mock_api_client)
+
+    assert view.session_id == "legacy"
+    assert load_settings().chat_sessions == [{"id": "legacy", "name": "Чат 1"}]
+
+
+def test_normalize_chat_sessions_tolerates_legacy_and_duplicate_entries():
+    settings = Settings.model_construct(
+        base_url="http://localhost:8080",
+        user_id="user-1",
+        session_id=CHAT_2,
+        chat_sessions=[
+            "Чат 1",  # bare name, as written by an early build
+            {"id": CHAT_2, "name": ""},
+            {"session_id": CHAT_2},  # duplicate id
+            "Чат 2",
+        ],
+    )
+
+    assert _normalize_chat_sessions(settings) == [{"id": CHAT_2, "name": "Чат 1"}]
+
+
+@pytest.mark.asyncio
+async def test_session_change_uses_the_saved_id(mock_page, mock_api_client):
+    seed_chat_sessions(session_id=CHAT_1)
+    view = make_chat_view(mock_page, mock_api_client)
+    mock_page.run_task.reset_mock()
+
+    view.session_dropdown.value = CHAT_2
+    await view.on_session_change(None)
+
+    assert view.session_id == CHAT_2
+    saved = load_settings()
+    assert saved.session_id == CHAT_2
+    # Selecting a chat must reuse its id instead of adding a new session.
+    assert [chat["id"] for chat in saved.chat_sessions] == [CHAT_1, CHAT_2]
+    mock_page.run_task.assert_called_with(view.load_history)
+
+
+@pytest.mark.asyncio
+async def test_session_change_prefers_the_event_value(mock_page, mock_api_client):
+    seed_chat_sessions(session_id=CHAT_1)
+    view = make_chat_view(mock_page, mock_api_client)
+
+    await view.on_session_change(SimpleNamespace(control=SimpleNamespace(value=CHAT_2)))
+
+    assert view.session_id == CHAT_2
+    assert load_settings().session_id == CHAT_2
+
+
+@pytest.mark.asyncio
+async def test_session_change_maps_a_chat_name_to_its_saved_id(mock_page, mock_api_client):
+    # Legacy option keyed by the label instead of the session id.
+    seed_chat_sessions(session_id=CHAT_1)
+    view = make_chat_view(mock_page, mock_api_client)
+
+    view.session_dropdown.value = "Чат 2"
+    await view.on_session_change(None)
+
+    assert view.session_id == CHAT_2
+    assert view.session_dropdown.value == CHAT_2
+    assert load_settings().session_id == CHAT_2
+    assert len(load_settings().chat_sessions) == 2
+
+
+@pytest.mark.asyncio
+async def test_session_change_creates_id_only_for_an_unknown_chat(mock_page, mock_api_client):
+    seed_chat_sessions(session_id=CHAT_1)
+    view = make_chat_view(mock_page, mock_api_client)
+
+    await view.on_session_change(SimpleNamespace(control=SimpleNamespace(value="Нов чат")))
+
+    saved = load_settings()
+    created = [chat for chat in saved.chat_sessions if chat["name"] == "Нов чат"]
+    assert len(created) == 1
+    assert created[0]["id"] == view.session_id == saved.session_id
+    assert uuid.UUID(view.session_id)
+    assert len(saved.chat_sessions) == 3
+
+
+@pytest.mark.asyncio
+async def test_session_change_notifies_the_app_and_same_chat_is_a_noop(mock_page, mock_api_client):
+    seed_chat_sessions(session_id=CHAT_1)
+    changes: list[str] = []
+    view = make_chat_view(mock_page, mock_api_client, on_session_changed=changes.append)
+    mock_page.run_task.reset_mock()
+
+    view.session_dropdown.value = CHAT_1  # already open
+    await view.on_session_change(None)
+
+    assert changes == []
+    mock_page.run_task.assert_not_called()
+
+    view.session_dropdown.value = CHAT_2
+    await view.on_session_change(None)
+
+    assert changes == [CHAT_2]
+    mock_page.run_task.assert_called_with(view.load_history)
+
+
+@pytest.mark.asyncio
+async def test_new_chat_keeps_the_existing_sessions(mock_page, mock_api_client):
+    seed_chat_sessions(session_id=CHAT_1)
+    view = make_chat_view(mock_page, mock_api_client)
+    mock_page.run_task.reset_mock()
+
+    await view.on_new_chat_click(None)
+
+    saved = load_settings()
+    assert [chat["name"] for chat in saved.chat_sessions] == ["Чат 1", "Чат 2", "Чат 3"]
+    assert saved.session_id == view.session_id
+    assert view.session_id not in (CHAT_1, CHAT_2)
+    assert dropdown_keys(view)[-1] == view.session_id
+    # A brand new chat has no history to load.
+    mock_page.run_task.assert_not_called()
 
 
 # ----------------------------------------------------------------- files view
