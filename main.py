@@ -96,17 +96,24 @@ def main(page: ft.Page):
 
     settings = load_settings()
 
-    # Initialize and validate user_id
+    # The stored user_id is the identity that owns the chat, memory and file
+    # history on the backend, so it is reused verbatim. Minting a new one (or
+    # "fixing" it) silently orphans everything that belongs to the old id;
+    # only a settings file without any user_id gets a fresh one.
     if not settings.user_id:
         settings.user_id = str(uuid.uuid4())
         save_settings(settings)
+        logger.info("No user_id in settings, generated one: %s", settings.user_id)
     else:
+        logger.info("Using the stored user_id: %s", settings.user_id)
         try:
             uuid.UUID(settings.user_id)
-        except ValueError as e:
-            logger.error(f"Invalid UUID in settings.user_id, resetting: {e}")
-            settings.user_id = str(uuid.uuid4())
-            save_settings(settings)
+        except ValueError:
+            logger.warning(
+                "settings.user_id %r is not a canonical UUID; keeping the stored "
+                "value so the existing history stays reachable.",
+                settings.user_id,
+            )
 
     base_url_field = ft.TextField(label="Base URL", value=settings.base_url)
 

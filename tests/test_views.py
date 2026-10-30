@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import uuid
 from types import SimpleNamespace
@@ -280,6 +282,50 @@ def test_chat_entry_without_an_id_is_rebound_to_the_active_session(mock_page, mo
 
     assert view.session_id == "legacy"
     assert load_settings().chat_sessions == [{"id": "legacy", "name": "Чат 1"}]
+
+
+def test_chat_view_reconnects_to_a_hand_edited_settings_file(
+    isolated_settings, mock_page, mock_api_client
+):
+    # The reported bug: a trailing comma made load_settings() discard the file,
+    # so main() minted a new user_id and ChatView a new session_id on every run.
+    isolated_settings.write_text(
+        "{\n"
+        '    "base_url": "http://localhost:8080",\n'
+        '    "user_id": "123e4567-e89b-12d3-a456-426614174000",\n'
+        '    "session_id": "7d127e53-3d2e-42db-816a-c3b9a3678372",\n'
+        '    "chat_sessions": [\n'
+        '        {"id": "7d127e53-3d2e-42db-816a-c3b9a3678372", "name": "Чат 1"},\n'
+        "    ]\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    view = make_chat_view(mock_page, mock_api_client)
+
+    assert view.session_id == "7d127e53-3d2e-42db-816a-c3b9a3678372"
+    assert dropdown_keys(view) == ["7d127e53-3d2e-42db-816a-c3b9a3678372"]
+    saved = load_settings()
+    assert saved.user_id == "123e4567-e89b-12d3-a456-426614174000"
+    assert saved.session_id == "7d127e53-3d2e-42db-816a-c3b9a3678372"
+    # No backup: the file was repaired, not thrown away.
+    assert list(isolated_settings.parent.glob("settings.json.broken.*")) == []
+
+
+@pytest.mark.asyncio
+async def test_chat_selection_and_new_chat_keep_the_stored_user_id(
+    mock_page, mock_api_client
+):
+    seed_chat_sessions(session_id=CHAT_1)
+    view = make_chat_view(mock_page, mock_api_client)
+
+    view.session_dropdown.value = CHAT_2
+    await view.on_session_change(None)
+    await view.on_new_chat_click(None)
+
+    saved = load_settings()
+    assert saved.user_id == "user-1"
+    assert saved.session_id == view.session_id
 
 
 def test_normalize_chat_sessions_tolerates_legacy_and_duplicate_entries():

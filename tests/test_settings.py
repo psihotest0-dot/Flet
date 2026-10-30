@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 import state.settings
@@ -49,3 +51,126 @@ def test_load_settings_invalid_json(mock_settings_file):
     backups = list(mock_settings_file.parent.glob("settings.json.broken.*"))
     assert len(backups) == 1
     assert mock_settings_file.exists() is False
+
+
+# ------------------------------------------------- hand edited / legacy files
+ORIGINAL_USER_ID = "123e4567-e89b-12d3-a456-426614174000"
+ORIGINAL_SESSION_ID = "7d127e53-3d2e-42db-816a-c3b9a3678372"
+
+
+def test_hand_edited_trailing_comma_keeps_the_stored_ids(mock_settings_file):
+    # A trailing comma used to raise JSONDecodeError, which renamed the file to
+    # settings.json.broken.* and returned defaults - losing user_id/session_id.
+    mock_settings_file.write_text(
+        "{\n"
+        '    "base_url": "http://localhost:8080",\n'
+        f'    "user_id": "{ORIGINAL_USER_ID}",\n'
+        f'    "session_id": "{ORIGINAL_SESSION_ID}",\n'
+        '    "chat_sessions": [\n'
+        f'        {{"id": "{ORIGINAL_SESSION_ID}", "name": "Чат 1"}},\n'
+        "    ]\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+
+    assert settings.user_id == ORIGINAL_USER_ID
+    assert settings.session_id == ORIGINAL_SESSION_ID
+    assert settings.chat_sessions == [{"id": ORIGINAL_SESSION_ID, "name": "Чат 1"}]
+    # The file is repaired in place instead of being moved aside.
+    assert list(mock_settings_file.parent.glob("settings.json.broken.*")) == []
+    repaired = json.loads(mock_settings_file.read_text(encoding="utf-8"))
+    assert repaired["user_id"] == ORIGINAL_USER_ID
+    assert repaired["session_id"] == ORIGINAL_SESSION_ID
+
+
+def test_utf8_bom_and_comments_keep_the_stored_ids(mock_settings_file):
+    mock_settings_file.write_text(
+        "// hand edited settings\n"
+        "{\n"
+        f'    "user_id": "{ORIGINAL_USER_ID}",\n'
+        f'    "session_id": "{ORIGINAL_SESSION_ID}", /* active chat */\n'
+        '    "base_url": "http://localhost:8080"\n'
+        "}\n",
+        encoding="utf-8-sig",
+    )
+
+    settings = load_settings()
+
+    assert settings.user_id == ORIGINAL_USER_ID
+    assert settings.session_id == ORIGINAL_SESSION_ID
+    # A URL must not be mistaken for a // comment.
+    assert settings.base_url == "http://localhost:8080"
+    assert list(mock_settings_file.parent.glob("settings.json.broken.*")) == []
+
+
+def test_legacy_string_chat_sessions_do_not_reset_the_ids(mock_settings_file):
+    # ``chat_sessions`` used to be validated as list[dict]; a bare name made the
+    # whole document invalid, so the ids were dropped along with it.
+    mock_settings_file.write_text(
+        json.dumps(
+            {
+                "user_id": ORIGINAL_USER_ID,
+                "session_id": ORIGINAL_SESSION_ID,
+                "chat_sessions": ["Чат 1"],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+
+    assert settings.user_id == ORIGINAL_USER_ID
+    assert settings.session_id == ORIGINAL_SESSION_ID
+    assert settings.chat_sessions == [{"name": "Чат 1"}]
+    assert list(mock_settings_file.parent.glob("settings.json.broken.*")) == []
+
+
+def test_unusable_chat_session_entries_are_dropped_without_losing_ids(
+    mock_settings_file,
+):
+    mock_settings_file.write_text(
+        json.dumps(
+            {
+                "user_id": ORIGINAL_USER_ID,
+                "session_id": ORIGINAL_SESSION_ID,
+                "chat_sessions": [
+                    None,
+                    42,
+                    {"id": ORIGINAL_SESSION_ID, "name": "Чат 1"},
+                    {"name": "   "},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+
+    assert settings.user_id == ORIGINAL_USER_ID
+    assert settings.chat_sessions == [{"id": ORIGINAL_SESSION_ID, "name": "Чат 1"}]
+
+
+def test_truncated_file_still_recovers_the_stored_ids(mock_settings_file):
+    # Even a document that cannot be repaired keeps its identity: the ids are
+    # salvaged, the original bytes are backed up and the repaired file is saved.
+    mock_settings_file.write_text(
+        "{\n"
+        f'    "user_id": "{ORIGINAL_USER_ID}",\n'
+        f'    "session_id": "{ORIGINAL_SESSION_ID}"\n',
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+
+    assert settings.user_id == ORIGINAL_USER_ID
+    assert settings.session_id == ORIGINAL_SESSION_ID
+    backups = list(mock_settings_file.parent.glob("settings.json.broken.*"))
+    assert len(backups) == 1
+    repaired = json.loads(mock_settings_file.read_text(encoding="utf-8"))
+    assert repaired["user_id"] == ORIGINAL_USER_ID
+    assert repaired["session_id"] == ORIGINAL_SESSION_ID
+
