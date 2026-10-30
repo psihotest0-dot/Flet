@@ -9,12 +9,20 @@ from pathlib import Path
 import flet as ft
 
 from api.client import APIClient
+from views.ui_utils import confirm_dialog, safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
+
+# Mirrors the limit enforced by APIClient.upload_file; checked before the file is
+# read into memory so a huge file is not loaded just to be rejected.
+MAX_UPLOAD_SIZE = 100 * 1024 * 1024
+POLL_INTERVAL = 3.0
+FINAL_STATUSES = ("completed", "failed")
 
 
 class FilesView(ft.Container):
     """The view for uploading, viewing, and managing files."""
+
     def __init__(self, page: ft.Page, api_client: APIClient):
         super().__init__()
         self.page = page
@@ -29,13 +37,17 @@ class FilesView(ft.Container):
         self.upload_btn = ft.ElevatedButton(
             "Качи файл",
             icon=ft.icons.UPLOAD_FILE,
-            on_click=lambda _: self.file_picker.pick_files()
+            on_click=lambda _: self.file_picker.pick_files(allow_multiple=True),
+        )
+
+        self.upload_progress = ft.ProgressRing(
+            width=16, height=16, stroke_width=2, visible=False
         )
 
         self.refresh_btn = ft.ElevatedButton(
             "Обнови",
             icon=ft.icons.REFRESH,
-            on_click=self.on_refresh_click
+            on_click=self.on_refresh_click,
         )
 
         self.data_table = ft.DataTable(
@@ -45,121 +57,177 @@ class FilesView(ft.Container):
                 ft.DataColumn(ft.Text("Категория")),
                 ft.DataColumn(ft.Text("Действия")),
             ],
-            rows=[]
+            rows=[],
         )
 
         self.content = ft.Column(
             controls=[
-                ft.Row([self.upload_btn, self.refresh_btn], alignment=ft.MainAxisAlignment.CENTER),
-                ft.Column([ft.Row([self.data_table], scroll=ft.ScrollMode.ADAPTIVE)], scroll=ft.ScrollMode.ADAPTIVE, expand=True)
+                ft.Row(
+                    [self.upload_btn, self.upload_progress, self.refresh_btn],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                ft.Column(
+                    [ft.Row([self.data_table], scroll=ft.ScrollMode.ADAPTIVE)],
+                    scroll=ft.ScrollMode.ADAPTIVE,
+                    expand=True,
+                ),
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            expand=True
+            expand=True,
         )
 
         self._polling = False
+        self._active = False
+        self._load_task = None
+        self._poll_task = None
+        # file_id -> status Text control, so a status change re-sends one cell
+        # instead of rebuilding the whole table.
+        self._status_cells: dict[str, ft.Text] = {}
+        self._rows: dict[str, ft.DataRow] = {}
 
+    # -------------------------------------------------------------- lifecycle
     def did_mount(self):
         if self.file_picker not in self.page.overlay:
             self.page.overlay.append(self.file_picker)
             self.page.update()
-        self._polling = True
-        self._load_task = self.page.run_task(self.initial_load)
-        self._poll_task = self.page.run_task(self.poll_statuses)
+        if self._load_task is None:
+            self._load_task = self.page.run_task(self.initial_load)
+        if self._active:
+            self.set_active(True)
+
+    def set_active(self, active: bool):
+        """Poll file statuses only while this tab is the visible one."""
+        self._active = active
+        if active:
+            if self._poll_task is None and self.page is not None:
+                self._polling = True
+                self._poll_task = self.page.run_task(self.poll_statuses)
+        else:
+            self._polling = False
+            if self._poll_task is not None:
+                self._poll_task.cancel()
+                self._poll_task = None
 
     def will_unmount(self):
-        if hasattr(self, "_load_task") and self._load_task:
+        self._polling = False
+        self._active = False
+        if self._load_task is not None:
             self._load_task.cancel()
-        if hasattr(self, "_poll_task") and self._poll_task:
+            self._load_task = None
+        if self._poll_task is not None:
             self._poll_task.cancel()
-        if self.file_picker in self.page.overlay:
+            self._poll_task = None
+        if self.page is not None and self.file_picker in self.page.overlay:
             self.page.overlay.remove(self.file_picker)
             self.page.update()
-        self._polling = False
 
+    # ------------------------------------------------------------------- data
     async def on_refresh_click(self, e):
         await self.initial_load()
 
     async def initial_load(self, *_args):
         try:
             files = await self.api_client.list_files()
-            self.files = files
-            if getattr(self.page, "session_id", None) is not None:
-                self.update_table()
         except asyncio.CancelledError:
-            pass
+            raise
         except Exception as e:  # noqa: BLE001
-            logger.error(f"Грешка: {e}")
-            if getattr(self.page, "session_id", None) is not None:
-                self.page.open(
-                    ft.SnackBar(
-                        ft.Text("Failed to load files.", color=ft.colors.WHITE),
-                        bgcolor=ft.colors.RED
-                    )
-                )
+            logger.error("Failed to load files: %s", e)
+            show_snackbar(self.page, "Неуспешно зареждане на файловете.")
+            return
+        self.files = files
+        self.update_table()
+
+    def _apply_status(self, file_id: str, updated) -> None:
+        for i, file in enumerate(self.files):
+            if file.id == file_id:
+                self.files[i] = updated
+                break
+        cell = self._status_cells.get(file_id)
+        status = updated.status or "Unknown"
+        if cell is not None and cell.value != status:
+            cell.value = status
+            safe_update(self, cell)
 
     async def poll_statuses(self, *_args):
         while self._polling:
-            await asyncio.sleep(3)
-            if not hasattr(self, 'files'):
-                continue
-            active_files = [f for f in self.files if f.status not in ("completed", "failed")]
+            await asyncio.sleep(POLL_INTERVAL)
+            if not self._polling:
+                break
 
-            if not active_files:
+            pending_files = [
+                file for file in self.files
+                if file.id and file.status not in FINAL_STATUSES
+            ]
+            if not pending_files:
                 continue
 
-            for i, file in enumerate(self.files):
-                if file.status in ("completed", "failed"):
+            # Sequential requests used to block the loop for len(pending) * RTT.
+            results = await asyncio.gather(
+                *(self.api_client.get_file_status(file.id) for file in pending_files),
+                return_exceptions=True,
+            )
+            for file, result in zip(pending_files, results):
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+                if isinstance(result, BaseException):
+                    logger.warning("Failed to refresh status of %s: %s", file.id, result)
                     continue
-                if not self._polling:
-                    break
-                if file.id is None:
-                    continue
-                try:
-                    updated_file = await self.api_client.get_file_status(file.id)
-                    if updated_file.status != file.status:
-                        self.files[i] = updated_file
-                        self.update_table()
-                except Exception as e:  # noqa: BLE001
-                    logger.error(f"Грешка: {e}")
+                self._apply_status(file.id, result)
 
     async def on_file_picker_result(self, e: ft.FilePickerResultEvent):
         if not e.files:
             return
 
+        self.upload_btn.disabled = True
+        self.upload_progress.visible = True
+        safe_update(self, self.upload_btn, self.upload_progress)
+
         sem = asyncio.Semaphore(3)
+        errors: list[str] = []
 
         async def upload_single_file(f):
             async with sem:
                 try:
-                    if f.path:
-                        # Using asyncio.to_thread for reading file to avoid blocking
-                        content = await asyncio.to_thread(Path(f.path).read_bytes)
-                        await self.api_client.upload_file(content, f.name)
+                    if not f.path:
+                        return
+                    size = await asyncio.to_thread(lambda: Path(f.path).stat().st_size)
+                    if size > MAX_UPLOAD_SIZE:
+                        errors.append(f"{f.name}: файлът е по-голям от 100 MB")
+                        return
+                    # Reading is blocking, the upload itself is not.
+                    content = await asyncio.to_thread(Path(f.path).read_bytes)
+                    await self.api_client.upload_file(content, f.name)
                 except asyncio.CancelledError:
-                    pass
+                    raise
                 except Exception as ex:  # noqa: BLE001
-                    logger.error(f"Грешка: {ex}")
-                    if getattr(self.page, "session_id", None) is not None:
-                        self.page.open(
-                            ft.SnackBar(
-                                ft.Text(f"Failed to upload {f.name}: {ex}", color=ft.colors.WHITE),
-                                bgcolor=ft.colors.RED
-                            )
-                        )
+                    logger.error("Failed to upload %s: %s", f.name, ex)
+                    errors.append(f"{f.name}: {ex}")
 
-        await asyncio.gather(*(upload_single_file(f) for f in e.files))
+        try:
+            await asyncio.gather(*(upload_single_file(f) for f in e.files))
+        finally:
+            self.upload_btn.disabled = False
+            self.upload_progress.visible = False
+            safe_update(self, self.upload_btn, self.upload_progress)
 
-        # Refresh the list
+        if errors:
+            # A single snackbar for the batch instead of one per failed file.
+            show_snackbar(self.page, "Неуспешно качване: " + "; ".join(errors))
+
         await self.initial_load()
 
     def update_table(self):
         self.data_table.rows.clear()
+        self._status_cells.clear()
+        self._rows.clear()
+
         for file in self.files:
+            status_text = ft.Text(file.status or "Unknown")
             del_btn = ft.IconButton(
                 icon=ft.icons.DELETE,
-                tooltip="Delete",
-                on_click=self.create_delete_handler(file.id)
+                tooltip="Изтрий",
+                on_click=self.create_delete_handler(file.id),
             )
             category_dropdown = ft.Dropdown(
                 value=file.category,
@@ -174,65 +242,80 @@ class FilesView(ft.Container):
                 ],
                 width=160,
                 dense=True,
-                on_change=self.create_category_change_handler(file.id)
+                on_change=self.create_category_change_handler(file.id),
             )
-            self.data_table.rows.append(
-                ft.DataRow(
-                    cells=[
-                        ft.DataCell(ft.Text(file.file_name or "Unknown")),
-                        ft.DataCell(ft.Text(file.status or "Unknown")),
-                        ft.DataCell(category_dropdown),
-                        ft.DataCell(del_btn),
-                    ]
-                )
+            row = ft.DataRow(
+                cells=[
+                    ft.DataCell(ft.Text(file.file_name or "Unknown")),
+                    ft.DataCell(status_text),
+                    ft.DataCell(category_dropdown),
+                    ft.DataCell(del_btn),
+                ]
             )
-        if getattr(self.page, "session_id", None) is not None:
-            self.update()
-            self.page.update()
+            self.data_table.rows.append(row)
+            if file.id:
+                self._status_cells[file.id] = status_text
+                self._rows[file.id] = row
+
+        # Only the table is re-sent, not the whole view.
+        safe_update(self, self.data_table)
+
+    def remove_file_row(self, file_id: str):
+        self.files = [file for file in self.files if file.id != file_id]
+        self._status_cells.pop(file_id, None)
+        row = self._rows.pop(file_id, None)
+        if row is not None:
+            try:
+                self.data_table.rows.remove(row)
+            except ValueError:
+                pass
+            safe_update(self, self.data_table)
 
     def create_category_change_handler(self, file_id: str | None):
         async def handler(e):
             if not file_id:
                 return
+            new_category = e.control.value
             try:
-                await self.api_client.update_file_category(file_id, e.control.value)
-                await self.initial_load()
-                if getattr(self.page, "session_id", None) is not None:
-                    self.page.open(
-                        ft.SnackBar(
-                            ft.Text("Категорията е обновена!", color=ft.colors.WHITE),
-                            bgcolor=ft.colors.GREEN
-                        )
-                    )
+                updated_file = await self.api_client.update_file_category(file_id, new_category)
             except asyncio.CancelledError:
-                pass
+                raise
             except Exception as ex:  # noqa: BLE001
-                logger.error(f"Грешка: {ex}")
-                if getattr(self.page, "session_id", None) is not None:
-                    self.page.open(
-                        ft.SnackBar(
-                            ft.Text(f"Failed to update category: {ex}", color=ft.colors.WHITE),
-                            bgcolor=ft.colors.RED
-                        )
-                    )
+                logger.error("Failed to update category: %s", ex)
+                show_snackbar(self.page, f"Грешка при обновяване на категорията: {ex}")
+                return
+
+            # The dropdown already shows the new value; no reload needed.
+            for i, file in enumerate(self.files):
+                if file.id == file_id:
+                    self.files[i] = updated_file
+                    break
+            show_snackbar(self.page, "Категорията е обновена!", success=True)
+
         return handler
 
     def create_delete_handler(self, file_id: str | None):
         async def handler(e):
             if not file_id:
                 return
+            confirmed = await confirm_dialog(
+                self.page,
+                "Изтриване на файл",
+                "Сигурни ли сте, че искате да изтриете този файл?",
+            )
+            if not confirmed:
+                return
+
             try:
                 await self.api_client.delete_file(file_id)
-                await self.initial_load()
             except asyncio.CancelledError:
-                pass
+                raise
             except Exception as ex:  # noqa: BLE001
-                logger.error(f"Грешка: {ex}")
-                if getattr(self.page, "session_id", None) is not None:
-                    self.page.open(
-                        ft.SnackBar(
-                            ft.Text(f"Failed to delete file: {ex}", color=ft.colors.WHITE),
-                            bgcolor=ft.colors.RED
-                        )
-                    )
+                logger.error("Failed to delete file: %s", ex)
+                show_snackbar(self.page, f"Грешка при изтриване на файла: {ex}")
+                return
+
+            self.remove_file_row(file_id)
+
         return handler
+

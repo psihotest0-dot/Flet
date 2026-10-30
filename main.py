@@ -1,19 +1,23 @@
 import asyncio
+import concurrent.futures
 import logging
 import uuid
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 import flet as ft
-
-logger = logging.getLogger(__name__)
-
-import concurrent.futures
 
 from api.client import APIClient
 from state.settings import load_settings, save_settings
 from views.chat import ChatView
 from views.files import FilesView
 from views.memory import MemoryView
+from views.ui_utils import show_snackbar
+
+logger = logging.getLogger(__name__)
+
+LOG_FILE = Path(__file__).with_name("app.log")
+HEALTH_CHECK_INTERVAL = 10
 
 
 class SafeTaskWrapper:
@@ -33,6 +37,7 @@ class SafeTaskWrapper:
         self._task_future.exception = safe_exc
         return self._task_future.cancel()
 
+
 def wrap_run_task(page):
     if hasattr(page, "_is_wrapped"):
         return
@@ -46,15 +51,48 @@ def wrap_run_task(page):
     page.run_task = safe_run_task
 
 
-logging.basicConfig(
-    handlers=[RotatingFileHandler("app.log", maxBytes=1024 * 1024, backupCount=3)],
-    level=logging.ERROR,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+def setup_logging():
+    logging.basicConfig(
+        handlers=[RotatingFileHandler(LOG_FILE, maxBytes=1024 * 1024, backupCount=3, encoding="utf-8")],
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s"
+    )
+
+
+async def run_health_checks(probe, on_change, interval: float = HEALTH_CHECK_INTERVAL):
+    """Poll ``probe`` forever and call ``on_change(healthy)`` only on a flip.
+
+    Repainting the status indicator on every poll marked the whole appbar dirty
+    every few seconds for no reason.
+    """
+    healthy = None
+    while True:
+        try:
+            is_healthy = await probe()
+        except asyncio.CancelledError:
+            raise
+        except Exception as ex:  # noqa: BLE001
+            logger.warning(f"Health check failed: {ex}")
+            is_healthy = False
+
+        if is_healthy != healthy:
+            healthy = is_healthy
+            on_change(healthy)
+
+        await asyncio.sleep(interval)
+
+
 
 def main(page: ft.Page):
+    setup_logging()
     wrap_run_task(page)
     page.title = "AI Agent Client"
+    page.theme_mode = ft.ThemeMode.DARK
+    page.theme = ft.Theme(color_scheme_seed=ft.colors.BLUE)
+    page.window.width = 1100
+    page.window.height = 800
+    page.window.min_width = 720
+    page.window.min_height = 520
 
     settings = load_settings()
 
@@ -72,28 +110,36 @@ def main(page: ft.Page):
 
     base_url_field = ft.TextField(label="Base URL", value=settings.base_url)
 
+    api_client = APIClient(base_url=settings.base_url, user_id=settings.user_id)
+    # index -> view; tabs are created on first activation (see ensure_view below).
+    views: dict[int, ft.Control] = {}
+
     def close_dlg(e):
         page.close(settings_dialog)
 
     def save_dlg(e):
-        settings.base_url = base_url_field.value
+        nonlocal api_client
+
+        new_url = (base_url_field.value or "").strip()
+        if new_url:
+            settings.base_url = new_url
         success = save_settings(settings)
         page.close(settings_dialog)
 
-        if success:
-            page.open(
-                ft.SnackBar(
-                    ft.Text("Настройките са запазени успешно!", color=ft.colors.WHITE),
-                    bgcolor=ft.colors.GREEN
-                )
-            )
-        else:
-            page.open(
-                ft.SnackBar(
-                    ft.Text("Неуспешно запазване на настройките.", color=ft.colors.WHITE),
-                    bgcolor=ft.colors.RED
-                )
-            )
+        if not success:
+            show_snackbar(page, "Неуспешно запазване на настройките.")
+            return
+
+        # The old client keeps pointing at the previous URL - replace it and
+        # hand the new one to every view that was already created.
+        previous_client = api_client
+        api_client = APIClient(base_url=settings.base_url, user_id=settings.user_id)
+        for view in views.values():
+            view.api_client = api_client
+        if previous_client is not None:
+            page.run_task(previous_client.aclose)
+
+        show_snackbar(page, "Настройките са запазени успешно!", success=True)
 
     settings_dialog = ft.AlertDialog(
         modal=True,
@@ -111,6 +157,14 @@ def main(page: ft.Page):
 
     status_icon = ft.Icon(name=ft.icons.CIRCLE, color=ft.colors.RED, size=14, tooltip="Връзката е прекъсната")
 
+    def set_status(healthy: bool):
+        status_icon.color = ft.colors.GREEN if healthy else ft.colors.RED
+        status_icon.tooltip = "Свързан" if healthy else "Връзката е прекъсната"
+        if status_icon.uid is not None:
+            status_icon.update()
+        else:
+            page.update()
+
     page.appbar = ft.AppBar(
         title=ft.Row([ft.Text("AI Agent"), status_icon], alignment=ft.MainAxisAlignment.START),
         actions=[
@@ -118,62 +172,66 @@ def main(page: ft.Page):
         ]
     )
 
-    api_client = APIClient(base_url=settings.base_url, user_id=settings.user_id)
-
-    async def check_connection():
-        while True:
-            try:
-                is_healthy = await api_client.check_health()
-                if is_healthy:
-                    status_icon.color = ft.colors.GREEN
-                    status_icon.tooltip = "Свързан"
-                else:
-                    status_icon.color = ft.colors.RED
-                    status_icon.tooltip = "Връзката е прекъсната"
-
-                if getattr(page, "session_id", None) is not None:
-                    page.update()
-
-                await asyncio.sleep(5)
-            except asyncio.CancelledError:
-                break
-            except Exception:  # noqa: BLE001
-                await asyncio.sleep(5)
-
-    task_handle = page.run_task(check_connection)
+    task_handle = page.run_task(run_health_checks, api_client.check_health, set_status)
 
     def on_disconnect(e):
         task_handle.cancel()
+        try:
+            page.run_task(api_client.aclose)
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not close the HTTP client cleanly.")
 
-    page.on_disconnect = on_disconnect
+    # Views are mounted lazily: creating all three up front issued three API
+    # calls and started the files poller before the user opened a single tab.
+    def create_chat() -> ChatView:
+        return ChatView(page, api_client)
 
-    files_view = FilesView(page, api_client)
+    def create_memory() -> MemoryView:
+        return MemoryView(page, api_client)
 
-    def on_tab_change(e):
-        pass
+    def create_files() -> FilesView:
+        return FilesView(page, api_client)
 
-    t = ft.Tabs(
+    factories = {0: create_chat, 1: create_memory, 2: create_files}
+
+    chat_view = ChatView(page, api_client)
+    views[0] = chat_view
+
+    tabs = ft.Tabs(
         selected_index=0,
         animation_duration=300,
-        on_change=on_tab_change,
         tabs=[
-            ft.Tab(
-                text="Чат",
-                content=ChatView(page, api_client)
-            ),
-            ft.Tab(
-                text="Памет",
-                content=MemoryView(page, api_client)
-            ),
-            ft.Tab(
-                text="Файлове",
-                content=files_view
-            ),
+            ft.Tab(text="Чат", content=chat_view),
+            ft.Tab(text="Памет"),
+            ft.Tab(text="Файлове"),
         ],
         expand=1,
     )
 
-    page.add(t)
+    def ensure_view(index: int) -> ft.Control:
+        view = views.get(index)
+        if view is None:
+            view = factories[index]()
+            views[index] = view
+            tabs.tabs[index].content = view
+            tabs.update()
+        return view
+
+    def on_tab_change(e):
+        index = e.control.selected_index or 0
+        if index not in factories:
+            return
+        ensure_view(index)
+        files_view = views.get(2)
+        if isinstance(files_view, FilesView):
+            # Poll file statuses only while the "Файлове" tab is visible.
+            files_view.set_active(index == 2)
+
+    tabs.on_change = on_tab_change
+
+    page.add(tabs)
+
 
 if __name__ == "__main__":
     ft.app(target=main)
+

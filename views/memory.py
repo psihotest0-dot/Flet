@@ -8,12 +8,194 @@ import logging
 import flet as ft
 
 from api.client import APIClient
+from views.ui_utils import confirm_dialog, safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
+
+FILTER_ALL = "Всички"
+FILTER_DEBOUNCE = 0.2
+
+
+class MemoryRow(ft.DataRow):
+    """A single memory row that owns its inline edit state.
+
+    Editing or saving a memory used to rebuild the whole ``DataTable`` - every
+    row, dropdown and handler was recreated and the entire table was re-sent to
+    the client. The row is a component now: it mutates only its own cells and
+    re-sends just those controls.
+    """
+
+    def __init__(self, memory, view: MemoryView):
+        super().__init__(cells=[])
+        self.memory = memory
+        self.view = view
+        self._saving = False
+
+        self.content_text = ft.Text(memory.content or "")
+        self.content_text_container = ft.Container(
+            content=self.content_text,
+            expand=True,
+            alignment=ft.alignment.top_left,
+        )
+
+        self.content_field = ft.TextField(
+            value=memory.content or "",
+            multiline=True,
+            min_lines=2,
+            max_lines=5,
+        )
+        self.content_field_container = ft.Container(
+            content=self.content_field,
+            expand=True,
+            visible=False,
+            alignment=ft.alignment.top_left,
+        )
+
+        self.edit_btn = ft.IconButton(icon=ft.icons.EDIT, tooltip="Редактирай", on_click=self._edit)
+        self.save_btn = ft.IconButton(icon=ft.icons.SAVE, tooltip="Запази", visible=False, on_click=self._save)
+        self.cancel_btn = ft.IconButton(icon=ft.icons.CANCEL, tooltip="Отказ", visible=False, on_click=self._cancel)
+        self.delete_btn = ft.IconButton(icon=ft.icons.DELETE, tooltip="Изтрий", on_click=self._delete)
+        self.activate_btn = ft.IconButton(
+            icon=ft.icons.CHECK,
+            icon_color=ft.colors.GREEN,
+            tooltip="Активирай",
+            visible=memory.status == "candidate",
+            on_click=self._activate,
+        )
+        self.status_text = ft.Text(memory.status or "")
+
+        self.actions_row = ft.Row(
+            [self.activate_btn, self.edit_btn, self.save_btn, self.cancel_btn, self.delete_btn]
+        )
+
+        self.cells = [
+            ft.DataCell(
+                ft.Row(
+                    [self.content_text_container, self.content_field_container],
+                    expand=True,
+                    scroll=ft.ScrollMode.AUTO,
+                )
+            ),
+            ft.DataCell(self.status_text),
+            ft.DataCell(self.actions_row),
+        ]
+
+    # ------------------------------------------------------------- edit state
+    def _set_editing(self, editing: bool):
+        self.content_text_container.visible = not editing
+        self.content_field_container.visible = editing
+        self.edit_btn.visible = not editing
+        self.save_btn.visible = editing
+        self.cancel_btn.visible = editing
+        safe_update(
+            self.view,
+            self.content_text_container,
+            self.content_field_container,
+            self.edit_btn,
+            self.save_btn,
+            self.cancel_btn,
+        )
+
+    def _edit(self, e):
+        self.content_field.value = self.memory.content or ""
+        self._set_editing(True)
+
+    def _cancel(self, e):
+        self.content_field.value = self.memory.content or ""
+        self._set_editing(False)
+
+    def apply(self, memory):
+        """Refresh the row from a server response without rebuilding the table."""
+        self.memory = memory
+        self.content_text.value = memory.content or ""
+        self.content_field.value = memory.content or ""
+        self.status_text.value = memory.status or ""
+        self.activate_btn.visible = memory.status == "candidate"
+        safe_update(self.view, self.content_text, self.status_text, self.activate_btn)
+
+    async def _save(self, e):
+        if self._saving or not self.memory.id:
+            return
+
+        new_content = (self.content_field.value or "").strip()
+        if not new_content or new_content == (self.memory.content or ""):
+            # Nothing changed, or the user tried to save an empty memory.
+            self.content_field.value = self.memory.content or ""
+            self._set_editing(False)
+            return
+
+        self._saving = True
+        self.save_btn.disabled = True
+        safe_update(self.view, self.save_btn)
+        try:
+            updated = await self.view.api_client.update_memory(
+                memory_id=self.memory.id,
+                content=new_content,
+                status=self.memory.status,
+                importance=self.memory.importance if self.memory.importance is not None else 0,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as ex:  # noqa: BLE001
+            logger.error("Failed to update memory: %s", ex)
+            show_snackbar(self.view.page, f"Грешка при запазване на спомена: {ex}")
+            return
+        finally:
+            self._saving = False
+            self.save_btn.disabled = False
+            safe_update(self.view, self.save_btn)
+
+        self.view.replace_memory(updated)
+        self.apply(updated)
+        self._set_editing(False)
+
+    async def _activate(self, e):
+        if not self.memory.id:
+            return
+        try:
+            updated = await self.view.api_client.update_memory(
+                memory_id=self.memory.id,
+                content=self.memory.content,
+                status="active",
+                importance=self.memory.importance if self.memory.importance is not None else 0,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as ex:  # noqa: BLE001
+            logger.error("Failed to activate memory: %s", ex)
+            show_snackbar(self.view.page, f"Грешка при активиране на спомена: {ex}")
+            return
+
+        self.view.replace_memory(updated)
+        self.apply(updated)
+        show_snackbar(self.view.page, "Споменът е активиран!", success=True)
+
+    async def _delete(self, e):
+        if not self.memory.id:
+            return
+        confirmed = await confirm_dialog(
+            self.view.page,
+            "Изтриване на спомен",
+            "Сигурни ли сте, че искате да изтриете този спомен?",
+        )
+        if not confirmed:
+            return
+
+        try:
+            await self.view.api_client.delete_memory(self.memory.id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as ex:  # noqa: BLE001
+            logger.error("Failed to delete memory: %s", ex)
+            show_snackbar(self.view.page, f"Грешка при изтриване на спомена: {ex}")
+            return
+
+        self.view.remove_memory_row(self)
 
 
 class MemoryView(ft.Container):
     """The main view for listing, editing, and deleting agent memories."""
+
     def __init__(self, page: ft.Page, api_client: APIClient):
         super().__init__()
         self.page = page
@@ -25,23 +207,23 @@ class MemoryView(ft.Container):
         self.status_dropdown = ft.Dropdown(
             label="Филтър по статус",
             options=[
-                ft.dropdown.Option("Всички"),
+                ft.dropdown.Option(FILTER_ALL),
                 ft.dropdown.Option("active"),
                 ft.dropdown.Option("candidate"),
-                ft.dropdown.Option("superseded")
+                ft.dropdown.Option("superseded"),
             ],
-            value="Всички",
+            value=FILTER_ALL,
             on_change=self.on_filter_change,
-            width=200
+            width=200,
         )
 
         self.refresh_btn = ft.ElevatedButton(
             "Обнови",
             icon=ft.icons.REFRESH,
-            on_click=self.on_refresh_click
+            on_click=self.on_refresh_click,
         )
 
-        self._filter_task = None
+        self.progress = ft.ProgressRing(width=16, height=16, stroke_width=2, visible=False)
 
         self.data_table = ft.DataTable(
             columns=[
@@ -49,55 +231,84 @@ class MemoryView(ft.Container):
                 ft.DataColumn(ft.Text("Статус")),
                 ft.DataColumn(ft.Text("Действия")),
             ],
-            rows=[]
+            rows=[],
+        )
+
+        self.empty_hint = ft.Text(
+            "Няма намерени спомени.", color=ft.colors.GREY_500, visible=False
         )
 
         self.content = ft.Column(
             controls=[
-                ft.Row([self.status_dropdown, self.refresh_btn], alignment=ft.MainAxisAlignment.CENTER),
-                ft.Column([ft.Row([self.data_table], scroll=ft.ScrollMode.ADAPTIVE)], scroll=ft.ScrollMode.ADAPTIVE, expand=True)
+                ft.Row(
+                    [self.status_dropdown, self.refresh_btn, self.progress],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                self.empty_hint,
+                ft.Column(
+                    [ft.Row([self.data_table], scroll=ft.ScrollMode.ADAPTIVE)],
+                    scroll=ft.ScrollMode.ADAPTIVE,
+                    expand=True,
+                ),
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            expand=True
+            expand=True,
         )
+
+        self._filter_task = None
+        self._load_task = None
+        # Monotonic token: a response is applied only if it is still the newest
+        # request, so a slow "all" request cannot overwrite a newer "active" one.
+        self._load_seq = 0
 
     def did_mount(self):
         self._load_task = self.page.run_task(self.load_memories)
 
     def will_unmount(self):
-        if hasattr(self, "_load_task") and self._load_task:
+        if self._load_task is not None:
             self._load_task.cancel()
-        if hasattr(self, "_filter_task") and self._filter_task:
+            self._load_task = None
+        if self._filter_task is not None:
             self._filter_task.cancel()
+            self._filter_task = None
 
     async def load_memories(self, *_args):
+        self._load_seq += 1
+        sequence = self._load_seq
+
+        status = self.status_dropdown.value
+        if status == FILTER_ALL:
+            status = None
+
+        self.progress.visible = True
+        safe_update(self, self.progress)
         try:
-            status = self.status_dropdown.value
-            if status == "Всички":
-                status = None
             memories = await self.api_client.list_memories(status=status)
-            self.memories = memories
-            if getattr(self.page, "session_id", None) is not None:
-                self.update_table()
         except asyncio.CancelledError:
-            pass
+            raise
         except Exception as e:  # noqa: BLE001
-            logger.error(f"Грешка: {e}")
-            if getattr(self.page, "session_id", None) is not None:
-                self.page.open(
-                    ft.SnackBar(
-                        ft.Text("Failed to load memories.", color=ft.colors.WHITE),
-                        bgcolor=ft.colors.RED
-                    )
-                )
+            logger.error("Failed to load memories: %s", e)
+            show_snackbar(self.page, "Неуспешно зареждане на спомените.")
+            return
+        finally:
+            if sequence == self._load_seq:
+                self.progress.visible = False
+                safe_update(self, self.progress)
+
+        if sequence != self._load_seq:
+            return
+
+        self.memories = memories
+        self.update_table()
 
     async def on_filter_change(self, e):
-        if self._filter_task and not self._filter_task.done():
+        if self._filter_task is not None and not self._filter_task.done():
             self._filter_task.cancel()
 
         async def debounced_load():
             try:
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(FILTER_DEBOUNCE)
                 await self.load_memories()
             except asyncio.CancelledError:
                 pass
@@ -110,198 +321,27 @@ class MemoryView(ft.Container):
     def update_table(self):
         self.data_table.rows.clear()
         for memory in self.memories:
+            self.data_table.rows.append(MemoryRow(memory, self))
+        self.empty_hint.visible = not self.memories
+        # Only the table and the hint are re-sent, not the whole view.
+        safe_update(self, self.data_table, self.empty_hint)
 
-            # Inline edit state for each row
+    def replace_memory(self, memory):
+        """Keep ``self.memories`` in sync without re-rendering anything."""
+        for i, existing in enumerate(self.memories):
+            if existing.id == memory.id:
+                self.memories[i] = memory
+                return
+        self.memories.append(memory)
 
-            content_text = ft.Container(
-                content=ft.Text(memory.content or ""),
-                expand=True,
-                alignment=ft.alignment.top_left
-            )
-            content_field = ft.Container(
-                content=ft.TextField(value=memory.content or "", multiline=True, min_lines=2, max_lines=5),
-                expand=True,
-                visible=False,
-                alignment=ft.alignment.top_left
-            )
+    def remove_memory_row(self, row: MemoryRow):
+        memory_id = row.memory.id
+        self.memories = [m for m in self.memories if m.id != memory_id]
+        try:
+            self.data_table.rows.remove(row)
+        except ValueError:
+            pass
+        self.empty_hint.visible = not self.memories
+        safe_update(self, self.data_table, self.empty_hint)
 
-            edit_btn = ft.IconButton(
-                icon=ft.icons.EDIT,
-                tooltip="Edit",
-            )
-            save_btn = ft.IconButton(
-                icon=ft.icons.SAVE,
-                tooltip="Save",
-                visible=False,
-            )
-            cancel_btn = ft.IconButton(
-                icon=ft.icons.CANCEL,
-                tooltip="Cancel",
-                visible=False,
-            )
 
-            delete_btn = ft.IconButton(
-                icon=ft.icons.DELETE,
-                tooltip="Delete",
-            )
-
-            activate_btn = ft.IconButton(
-                icon=ft.icons.CHECK,
-                icon_color=ft.colors.GREEN,
-                tooltip="Activate",
-                visible=memory.status == "candidate"
-            )
-
-            actions_row = ft.Row([activate_btn, edit_btn, save_btn, cancel_btn, delete_btn])
-
-            # Capture variables for closures
-            def create_edit_handler(c_text, c_field, e_btn, s_btn, ca_btn):
-                def on_edit(e):
-                    c_text.visible = False
-                    c_field.visible = True
-                    e_btn.visible = False
-                    s_btn.visible = True
-                    ca_btn.visible = True
-                    if getattr(self.page, "session_id", None) is not None:
-                        self.update()
-                return on_edit
-
-            def create_cancel_handler(c_text, c_field, e_btn, s_btn, ca_btn, mem):
-                def on_cancel(e):
-                    c_text.visible = True
-                    c_field.visible = False
-                    c_field.content.value = mem.content or "" # Reset value
-                    e_btn.visible = True
-                    s_btn.visible = False
-                    ca_btn.visible = False
-                    if getattr(self.page, "session_id", None) is not None:
-                        self.update()
-                return on_cancel
-
-            def create_save_handler(c_text, c_field, e_btn, s_btn, ca_btn, mem):
-                async def on_save(e):
-                    new_content = c_field.content.value
-                    try:
-                        # Assuming importance defaults to 0 if none
-                        importance = mem.importance if mem.importance is not None else 0
-                        updated_mem = await self.api_client.update_memory(
-                            memory_id=mem.id,
-                            content=new_content,
-                            status=mem.status,
-                            importance=importance
-                        )
-                        # Find and update the memory in the local list
-                        for i, m in enumerate(self.memories):
-                            if m.id == updated_mem.id:
-                                self.memories[i] = updated_mem
-                                break
-                        if getattr(self.page, "session_id", None) is not None:
-                            self.update_table()
-                    except asyncio.CancelledError:
-                        pass
-                    except Exception as ex:  # noqa: BLE001
-                        logger.error(f"Грешка: {ex}")
-                        if getattr(self.page, "session_id", None) is not None:
-                            self.page.open(
-                                ft.SnackBar(
-                                    ft.Text(f"Failed to update memory: {ex}", color=ft.colors.WHITE),
-                                    bgcolor=ft.colors.RED
-                                )
-                            )
-                return on_save
-
-            def create_delete_handler(mem):
-                def on_delete_click(e):
-                    # Close dialog handler
-                    def close_dlg(e):
-                        if getattr(self.page, "session_id", None) is not None:
-                            self.page.close(confirm_dialog)
-
-                    # Confirm delete handler
-                    async def confirm_delete(e):
-                        try:
-                            await self.api_client.delete_memory(mem.id)
-                            self.memories = [m for m in self.memories if m.id != mem.id]
-                            if getattr(self.page, "session_id", None) is not None:
-                                self.update_table()
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception as ex:  # noqa: BLE001
-                            logger.error(f"Грешка: {ex}")
-                            if getattr(self.page, "session_id", None) is not None:
-                                self.page.open(
-                                    ft.SnackBar(
-                                        ft.Text(f"Failed to delete memory: {ex}", color=ft.colors.WHITE),
-                                        bgcolor=ft.colors.RED
-                                    )
-                                )
-                        finally:
-                            if getattr(self.page, "session_id", None) is not None:
-                                self.page.close(confirm_dialog)
-
-                    confirm_dialog = ft.AlertDialog(
-                        modal=True,
-                        title=ft.Text("Confirm Delete"),
-                        content=ft.Text("Are you sure you want to delete this memory?"),
-                        actions=[
-                            ft.TextButton("Cancel", on_click=close_dlg),
-                            ft.TextButton("Delete", on_click=confirm_delete, style=ft.ButtonStyle(color=ft.colors.RED)),
-                        ],
-                        actions_alignment=ft.MainAxisAlignment.END,
-                    )
-                    if getattr(self.page, "session_id", None) is not None:
-                        self.page.open(confirm_dialog)
-                return on_delete_click
-
-            def create_activate_handler(mem, a_btn):
-                async def on_activate(e):
-                    try:
-                        importance = mem.importance if mem.importance is not None else 0
-                        updated_mem = await self.api_client.update_memory(
-                            memory_id=mem.id,
-                            content=mem.content,
-                            status="active",
-                            importance=importance
-                        )
-                        for i, m in enumerate(self.memories):
-                            if m.id == updated_mem.id:
-                                self.memories[i] = updated_mem
-                                break
-                        if getattr(self.page, "session_id", None) is not None:
-                            self.update_table()
-                            self.page.open(
-                                ft.SnackBar(
-                                    ft.Text("Споменът е активиран!", color=ft.colors.WHITE),
-                                    bgcolor=ft.colors.GREEN
-                                )
-                            )
-                    except asyncio.CancelledError:
-                        pass
-                    except Exception as ex:  # noqa: BLE001
-                        logger.error(f"Грешка: {ex}")
-                        if getattr(self.page, "session_id", None) is not None:
-                            self.page.open(
-                                ft.SnackBar(
-                                    ft.Text(f"Failed to activate memory: {ex}", color=ft.colors.WHITE),
-                                    bgcolor=ft.colors.RED
-                                )
-                            )
-                return on_activate
-
-            edit_btn.on_click = create_edit_handler(content_text, content_field, edit_btn, save_btn, cancel_btn)
-            cancel_btn.on_click = create_cancel_handler(content_text, content_field, edit_btn, save_btn, cancel_btn, memory)
-            save_btn.on_click = create_save_handler(content_text, content_field, edit_btn, save_btn, cancel_btn, memory)
-            delete_btn.on_click = create_delete_handler(memory)
-            activate_btn.on_click = create_activate_handler(memory, activate_btn)
-
-            self.data_table.rows.append(
-                ft.DataRow(
-                    cells=[
-                        ft.DataCell(ft.Row([content_text, content_field], expand=True, scroll=ft.ScrollMode.AUTO)),
-                        ft.DataCell(ft.Text(memory.status or "")),
-                        ft.DataCell(actions_row),
-                    ]
-                )
-            )
-        if getattr(self.page, "session_id", None) is not None:
-            self.update()

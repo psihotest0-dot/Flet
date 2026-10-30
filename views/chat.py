@@ -11,10 +11,20 @@ import flet as ft
 
 from api.client import APIClient, StreamError
 from state.settings import load_settings, save_settings
+from views.ui_utils import safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
 
 DEBUG_MOCK_SOURCES = False
+
+# Flet 0.24 ListView is not virtualised, so rendering a very long history means
+# building hundreds of markdown widgets. Only the tail is rendered.
+HISTORY_PAGE_SIZE = 100
+# Upper bound of control updates per second while a response is streaming.
+# Each flush is a tree walk plus a synchronous round trip to the Flutter client.
+STREAM_FLUSH_INTERVAL = 0.12
+# How long the stream may stay silent before the "..." indicator is shown again.
+ACTIVITY_INDICATOR_DELAY = 1.0
 
 
 def _get_mock_sources():
@@ -29,6 +39,7 @@ def _get_mock_sources():
 
 class ChatMessage(ft.Column):
     """A component representing a single chat message in the UI."""
+
     def __init__(self, role: str, text: str, sources: list | None = None, page: ft.Page | None = None, on_regenerate: callable | None = None):
         super().__init__()
         self.role = role
@@ -48,7 +59,7 @@ class ChatMessage(ft.Column):
             selectable=True,
             extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
             code_theme="atom-one-dark",
-            on_tap_link=lambda e: self.page_ref.launch_url(e.data) if self.page_ref else None,
+            on_tap_link=self._open_link,
             md_style_sheet=ft.MarkdownStyleSheet(
                 p_text_style=ft.TextStyle(color=self.text_color),
             )
@@ -99,6 +110,15 @@ class ChatMessage(ft.Column):
         if self.sources:
             self.add_sources(self.sources)
 
+    def _open_link(self, e):
+        """Open only web/mail links, never arbitrary URL schemes."""
+        url = (getattr(e, "data", None) or "").strip()
+        if not url.lower().startswith(("http://", "https://", "mailto:")):
+            logger.warning("Blocked non-http link: %s", url)
+            return
+        if self.page_ref is not None:
+            self.page_ref.launch_url(url)
+
     async def _handle_regenerate(self, e):
         if self.on_regenerate and self.page_ref:
             self.page_ref.run_task(self.on_regenerate)
@@ -106,28 +126,23 @@ class ChatMessage(ft.Column):
     def set_regenerate_visible(self, visible: bool):
         if hasattr(self, "regenerate_btn"):
             self.regenerate_btn.visible = visible
-            if self.page_ref is not None and getattr(self.page_ref, "session_id", None) is not None and self.uid is not None:
-                self.update()
+            # Only the button is re-sent, not the whole markdown block.
+            safe_update(self, self.regenerate_btn)
 
     def show_activity_indicator(self):
         if not self.activity_indicator.visible:
             self.activity_indicator.visible = True
-            if self.page_ref is not None and getattr(self.page_ref, "session_id", None) is not None and self.uid is not None:
-                self.update()
+            safe_update(self, self.activity_indicator)
 
     def hide_activity_indicator(self):
         if self.activity_indicator.visible:
             self.activity_indicator.visible = False
-            if self.page_ref is not None and getattr(self.page_ref, "session_id", None) is not None and self.uid is not None:
-                self.update()
+            safe_update(self, self.activity_indicator)
 
     def finalize_with_error(self, error_msg: str):
         self.md.value += f"\n\n**<span style='color:red;'>{error_msg}</span>**"
         self.hide_activity_indicator()
-        if self.md.uid is not None and self.page_ref is not None and getattr(self.page_ref, "session_id", None) is not None:
-            self.md.update()
-        if self.uid is not None and self.page_ref is not None and getattr(self.page_ref, "session_id", None) is not None:
-            self.update()
+        safe_update(self, self.md)
 
     async def copy_to_clipboard(self, e):
         if self.page_ref:
@@ -140,30 +155,45 @@ class ChatMessage(ft.Column):
             )
 
     def append_text(self, text: str):
+        """Append streamed text; only the Markdown control is sent to the client."""
         self.md.value += text
-        if getattr(self.md, "page", None) is not None and getattr(self.page_ref, "session_id", None) is not None:
-            self.md.update()
+        safe_update(self, self.md)
+
+    @staticmethod
+    def _source_key(source) -> tuple:
+        if not isinstance(source, dict):
+            return (str(source), "")
+        return (
+            source.get("title") or source.get("file_name") or "Unknown",
+            source.get("content_snippet")
+            or source.get("text_snippet")
+            or source.get("text")
+            or "",
+        )
 
     def add_sources(self, sources: list):
         if not sources:
             return
 
         if sources is not self.sources:
-            self.sources.extend(sources)
-        self.sources_row.controls.clear()
+            known = {self._source_key(src) for src in self.sources}
+            new_sources = [src for src in sources if self._source_key(src) not in known]
+            if not new_sources:
+                # The same references arrived twice - nothing to redraw.
+                return
+            self.sources.extend(new_sources)
 
+        self.sources_row.controls.clear()
         self.sources_row.controls.append(ft.Text("Източници:", size=12, color=ft.colors.GREY_400))
 
         # Group sources by filename
         grouped_sources = {}
         for src in self.sources:
-            title = src.get("title", src.get("file_name", "Unknown"))
-            if title not in grouped_sources:
-                grouped_sources[title] = []
-            grouped_sources[title].append(src)
-
-        def create_chip_callback(file_sources):
-            return lambda e: self.open_sources_panel(file_sources)
+            if isinstance(src, dict):
+                title = src.get("title") or src.get("file_name") or "Unknown"
+            else:
+                title = "Unknown"
+            grouped_sources.setdefault(title, []).append(src)
 
         for title, file_sources in grouped_sources.items():
             count = len(file_sources)
@@ -173,13 +203,16 @@ class ChatMessage(ft.Column):
             chip = ft.Chip(
                 label=ft.Text(short_label, size=12),
                 leading=ft.Icon(ft.icons.INSERT_DRIVE_FILE, size=14),
-                on_click=create_chip_callback(file_sources)
+                on_click=lambda e, file_sources=file_sources: self.open_sources_panel(file_sources),
             )
             self.sources_row.controls.append(chip)
 
         self.sources_row.visible = True
-        if self.uid is not None and self.page_ref is not None and getattr(self.page_ref, "session_id", None) is not None:
-            self.update()
+        if self.sources_row.uid is not None:
+            safe_update(self, self.sources_row)
+        else:
+            # First paint (e.g. called from did_mount): send the whole message.
+            safe_update(self)
 
     def open_sources_panel(self, sources_to_display: list | None = None):
         if not self.page_ref:
@@ -192,10 +225,12 @@ class ChatMessage(ft.Column):
         list_view.controls.append(ft.Text("Източници (RAG)", size=20, weight=ft.FontWeight.BOLD))
 
         for src in display_list:
-            title = src.get("title", src.get("file_name", "Unknown"))
-            src_type = src.get("type", src.get("source_type", "Документ"))
+            if not isinstance(src, dict):
+                src = {"title": str(src)}
+            title = src.get("title") or src.get("file_name") or "Unknown"
+            src_type = src.get("type") or src.get("source_type") or "Документ"
             score = src.get("score", "N/A")
-            snippet = src.get("content_snippet", "")
+            snippet = src.get("content_snippet") or src.get("text_snippet") or src.get("text") or ""
 
             # If score is a number, format it, otherwise leave as is
             try:
@@ -206,7 +241,7 @@ class ChatMessage(ft.Column):
                 else:
                     score_str = f"{score_float:.1f}%"
             except (ValueError, TypeError) as e:
-                logger.error(f"Failed to convert score '{score}' to float: {e}")
+                logger.warning("Failed to convert score '%s' to float: %s", score, e)
                 score_str = str(score)
 
             item = ft.Container(
@@ -240,6 +275,7 @@ class ChatMessage(ft.Column):
 
 class ChatView(ft.Container):
     """The main view for the chat interface."""
+
     def __init__(self, page: ft.Page, api_client: APIClient):
         super().__init__()
         self.page = page
@@ -258,8 +294,10 @@ class ChatView(ft.Container):
         self.session_id = settings.session_id
 
         self._stop_generation = False
+        self._is_streaming = False
         self._last_assistant_msg = None
         self._last_assistant_row = None
+        self._load_task = None
 
         self.expand = True
 
@@ -289,7 +327,7 @@ class ChatView(ft.Container):
         )
 
         self.input_field = ft.TextField(
-            hint_text="Type a message...",
+            hint_text="Напиши съобщение...",
             autofocus=True,
             shift_enter=True,
             min_lines=1,
@@ -300,14 +338,14 @@ class ChatView(ft.Container):
 
         self.send_btn = ft.IconButton(
             icon=ft.icons.SEND,
-            tooltip="Send",
+            tooltip="Изпрати",
             on_click=self.send_message_click,
         )
 
         self.stop_btn = ft.IconButton(
             icon=ft.icons.STOP,
             icon_color=ft.colors.RED,
-            tooltip="Stop",
+            tooltip="Спри",
             visible=False,
             on_click=self.stop_generation_click,
         )
@@ -327,51 +365,57 @@ class ChatView(ft.Container):
             expand=True,
         )
 
+    # ------------------------------------------------------------------ state
+    def _reset_conversation(self):
+        """Drop everything that points at the previous session."""
+        self._stop_generation = True
+        self._last_assistant_msg = None
+        self._last_assistant_row = None
+        self.chat_list.controls.clear()
+        safe_update(self)
+
+    def _cancel_running_tasks(self):
+        self.api_client.cancel_stream()
+        if self._load_task is not None:
+            self._load_task.cancel()
+            self._load_task = None
+
+    def _set_streaming_ui(self, streaming: bool):
+        self.send_btn.visible = not streaming
+        self.stop_btn.visible = streaming
+        self.stop_btn.disabled = False
+        safe_update(self, self.send_btn, self.stop_btn)
+
     async def on_session_change(self, e):
         new_id = self.session_dropdown.value
-        if new_id and new_id != self.session_id:
-            self.session_id = new_id
-            settings = load_settings()
-            settings.session_id = new_id
-            save_settings(settings)
+        if not new_id or new_id == self.session_id:
+            return
 
-            self.chat_list.controls.clear()
-            if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-                self.update()
+        self.session_id = new_id
+        settings = load_settings()
+        settings.session_id = new_id
+        save_settings(settings)
 
-            self._stop_generation = True
-            self.api_client.cancel_stream()
-
-            if hasattr(self, "_load_task") and self._load_task:
-                self._load_task.cancel()
+        self._reset_conversation()
+        self._cancel_running_tasks()
+        if self.page is not None:
             self._load_task = self.page.run_task(self.load_history)
 
     async def on_new_chat_click(self, e):
-        self.chat_list.controls.clear()
-
         settings = load_settings()
         new_session = str(uuid.uuid4())
-
-        chat_count = len(settings.chat_sessions) + 1
-        new_name = f"Чат {chat_count}"
+        new_name = f"Чат {len(settings.chat_sessions) + 1}"
 
         settings.chat_sessions.append({"id": new_session, "name": new_name})
         settings.session_id = new_session
         save_settings(settings)
 
         self.session_id = new_session
-
         self.session_dropdown.options.append(ft.dropdown.Option(key=new_session, text=new_name))
         self.session_dropdown.value = new_session
 
-        self._stop_generation = True
-        self.api_client.cancel_stream()
-        if hasattr(self, "_load_task") and self._load_task:
-            self._load_task.cancel()
-
-        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-            self.update()
-
+        self._reset_conversation()
+        self._cancel_running_tasks()
 
     def scroll_to_bottom(self):
         if self.chat_list.uid is not None:
@@ -380,33 +424,58 @@ class ChatView(ft.Container):
     def did_mount(self):
         if DEBUG_MOCK_SOURCES:
             self.add_message("assistant", "Здравейте! Аз съм Лили. Как мога да ви помогна днес?", sources=_get_mock_sources())
-        self._load_task = self.page.run_task(self.load_history)
+        if self.page is not None:
+            self._load_task = self.page.run_task(self.load_history)
 
     def will_unmount(self):
-        if hasattr(self, "_load_task") and self._load_task:
-            self._load_task.cancel()
+        self._cancel_running_tasks()
 
     async def load_history(self, *_args):
+        """Render the session history with a single UI update at the end."""
+        session_id = self.session_id
         try:
-            messages = await self.api_client.get_messages(session_id=self.session_id)
-            self.chat_list.controls.clear()
-
-            last_msg_obj = None
-            for msg in messages:
-                role = msg.role or "user"
-                content = msg.content or ""
-                last_msg_obj = self.add_message(role, content)
-
-            if last_msg_obj and last_msg_obj.role == "assistant":
-                self._last_assistant_msg = last_msg_obj
-                self._last_assistant_row = last_msg_obj._row
-                self._last_assistant_msg.set_regenerate_visible(True)
+            messages = await self.api_client.get_messages(session_id=session_id)
         except asyncio.CancelledError:
-            pass
+            raise
         except Exception as e:  # noqa: BLE001
-            logger.error(f"Failed to load chat history: {e}")
+            logger.error("Failed to load chat history: %s", e)
+            return
 
-    def add_message(self, role: str, text: str, sources: list | None = None) -> ChatMessage:
+        # The user switched sessions while the request was in flight.
+        if session_id != self.session_id:
+            return
+
+        self.chat_list.controls.clear()
+        self._last_assistant_msg = None
+        self._last_assistant_row = None
+
+        truncated = len(messages) > HISTORY_PAGE_SIZE
+        visible = messages[-HISTORY_PAGE_SIZE:] if truncated else messages
+        if truncated:
+            self.chat_list.controls.append(
+                ft.Text(
+                    f"Показани са последните {HISTORY_PAGE_SIZE} съобщения.",
+                    size=11,
+                    color=ft.colors.GREY_500,
+                )
+            )
+
+        last_msg_obj = None
+        for msg in visible:
+            last_msg_obj = self.add_message(
+                msg.role or "user", msg.content or "", notify=False
+            )
+
+        # One update + one scroll for the whole history instead of one per message.
+        safe_update(self)
+        self.scroll_to_bottom()
+
+        if last_msg_obj and last_msg_obj.role == "assistant":
+            self._last_assistant_msg = last_msg_obj
+            self._last_assistant_row = last_msg_obj._row
+            last_msg_obj.set_regenerate_visible(True)
+
+    def add_message(self, role: str, text: str, sources: list | None = None, notify: bool = True) -> ChatMessage:
         is_user = role == "user"
         on_regenerate = self.regenerate_last if not is_user else None
         chat_message = ChatMessage(role=role, text=text, sources=sources, page=self.page, on_regenerate=on_regenerate)
@@ -425,37 +494,50 @@ class ChatView(ft.Container):
 
         self.chat_list.controls.append(row)
         chat_message._row = row
-        if self.uid is not None and getattr(self.page, "session_id", None) is not None:
-            self.update()
+        if notify:
+            safe_update(self)
             self.scroll_to_bottom()
         return chat_message
 
-
     async def _stream_response(self, chat_message, stream_coro, fallback_user_text=""):
-        is_streaming = True
+        """Consume the SSE stream and paint it with as few updates as possible.
+
+        Text chunks are buffered locally and flushed at most once per
+        STREAM_FLUSH_INTERVAL; the view is updated once when the stream ends
+        (instead of once per chunk, which used to walk and re-send the whole
+        chat tree dozens of times per second).
+        """
+        stream_open = True
         last_chunk_time = time.time()
 
         async def show_activity_after_delay():
             try:
-                while is_streaming:
-                    await asyncio.sleep(0.5)
-                    if (time.time() - last_chunk_time) >= 1.0 and is_streaming:
+                while stream_open:
+                    await asyncio.sleep(0.25)
+                    if stream_open and (time.time() - last_chunk_time) >= ACTIVITY_INDICATOR_DELAY:
                         chat_message.show_activity_indicator()
-                        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-                            self.update()
-                            self.scroll_to_bottom()
             except asyncio.CancelledError:
                 pass
 
-        activity_task = self.page.run_task(show_activity_after_delay)
+        activity_task = None
+        if self.page is not None:
+            activity_task = self.page.run_task(show_activity_after_delay)
+
+        pending_text = ""
+
+        def flush_text():
+            nonlocal pending_text
+            if pending_text:
+                chat_message.append_text(pending_text)
+                pending_text = ""
 
         try:
-            last_update_time = time.time()
-            pending_text = ""
+            last_flush_time = time.time()
 
             async for chunk in stream_coro:
                 last_chunk_time = time.time()
                 chat_message.hide_activity_indicator()
+
                 if self._stop_generation:
                     break
 
@@ -466,149 +548,138 @@ class ChatView(ft.Container):
                             chat_message.add_sources(data)
                         elif isinstance(data, dict):
                             for key in ("facts", "chunks", "sources"):
-                                if key in data and isinstance(data[key], list):
+                                if isinstance(data.get(key), list):
                                     chat_message.add_sources(data[key])
-                        self.scroll_to_bottom()
                         continue
 
-                    if "text" in chunk:
-                        pending_text += chunk["text"]
-
-                    if "content" in chunk:
-                        pending_text += chunk["content"]
+                    for key in ("text", "content"):
+                        value = chunk.get(key)
+                        if isinstance(value, str):
+                            pending_text += value
 
                     if "error" in chunk:
-                        pending_text += f"\n\n**Error:** {chunk['error']}"
+                        pending_text += f"\n\n**Грешка:** {chunk['error']}"
 
                     for source_key in ("facts", "chunks", "sources"):
-                        if source_key in chunk and isinstance(chunk[source_key], list):
+                        if isinstance(chunk.get(source_key), list):
                             chat_message.add_sources(chunk[source_key])
 
                 elif isinstance(chunk, str):
                     pending_text += chunk
 
                 current_time = time.time()
-                if current_time - last_update_time >= 0.05:
-                    if pending_text:
-                        chat_message.append_text(pending_text)
-                        pending_text = ""
-                    if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-                        self.update()
-                        self.scroll_to_bottom()
-                    last_update_time = current_time
+                if current_time - last_flush_time >= STREAM_FLUSH_INTERVAL:
+                    flush_text()
+                    last_flush_time = current_time
 
-            if pending_text:
-                chat_message.append_text(pending_text)
-                if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-                    self.update()
-                    self.scroll_to_bottom()
+            flush_text()
 
         except asyncio.CancelledError:
-            if pending_text:
-                chat_message.append_text(pending_text)
-                if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-                    self.update()
-                    self.scroll_to_bottom()
+            flush_text()
         except StreamError as ex:
-            logger.error(f"Stream error: {ex}")
+            logger.error("Stream error: %s", ex)
+            flush_text()
             chat_message.finalize_with_error("Нещо се обърка. Опитай отново.")
-        except Exception as ex:  # noqa: BLE001
-            logger.error(f"Грешка: {ex}")
-            if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-                self.update()
-            chat_message.append_text("\n\n**Error getting response.**")
+        except Exception as ex:
+            logger.exception("Unexpected streaming error")
+            flush_text()
+            chat_message.append_text("\n\n**Грешка при получаване на отговора.**")
             if fallback_user_text:
                 self.input_field.value = fallback_user_text
-            self.page.open(
-                ft.SnackBar(
-                    ft.Text(f"Failed to stream response: {ex}", color=ft.colors.WHITE),
-                    bgcolor=ft.colors.RED
-                )
-            )
+            show_snackbar(self.page, f"Грешка при получаване на отговора: {ex}")
         finally:
-            is_streaming = False
+            stream_open = False
             chat_message.hide_activity_indicator()
             if activity_task:
                 activity_task.cancel()
-
-        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-            self.update()
+            # Exactly one full-view update for the finished message.
+            safe_update(self)
 
     async def send_message_click(self, e):
-        if not self.input_field.value:
+        if self._is_streaming:
+            # A response is already being streamed - ignore double submits.
             return
 
-        user_text = self.input_field.value
-        self.input_field.value = ""
-        self.input_field.focus()
+        text = (self.input_field.value or "").strip()
+        if not text:
+            return
 
-        self.send_btn.visible = False
-        self.stop_btn.visible = True
+        self._is_streaming = True
+        self._stop_generation = False
+        session_id = self.session_id
+
+        self.input_field.value = ""
+        if self.input_field.uid is not None:
+            # focus() calls update() internally, so skip it for a detached field.
+            self.input_field.focus()
+        self._set_streaming_ui(True)
 
         if self._last_assistant_msg:
             self._last_assistant_msg.set_regenerate_visible(False)
 
-        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-            self.update()
-
-        self.add_message("user", user_text)
-
-        chat_message = self.add_message("assistant", "")
-        self._stop_generation = False
-        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-            self.update()
-
-        await self._stream_response(chat_message, self.api_client.stream_chat(session_id=self.session_id, content=user_text), user_text)
-
-        self._last_assistant_msg = chat_message
-        self._last_assistant_row = chat_message._row
-        self._last_assistant_msg.set_regenerate_visible(True)
-
-        self.send_btn.visible = True
-        self.stop_btn.visible = False
-        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-            self.update()
-
-    async def regenerate_last(self, *_args):
-        if not self._last_assistant_msg or not self._last_assistant_row:
-            return
+        self.add_message("user", text, notify=False)
+        chat_message = self.add_message("assistant", "", notify=False)
+        safe_update(self)
+        self.scroll_to_bottom()
 
         try:
-            self.chat_list.controls.remove(self._last_assistant_row)
-        except ValueError:
+            await self._stream_response(
+                chat_message,
+                self.api_client.stream_chat(session_id=session_id, content=text),
+                text,
+            )
+        except asyncio.CancelledError:
             pass
+        finally:
+            self._is_streaming = False
+            self._stop_generation = False
+            self._set_streaming_ui(False)
+            if session_id == self.session_id:
+                self._last_assistant_msg = chat_message
+                self._last_assistant_row = chat_message._row
+                chat_message.set_regenerate_visible(True)
 
-        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-            self.update()
+    async def regenerate_last(self, *_args):
+        if self._is_streaming:
+            return
+        if not self._last_assistant_msg or not self._last_assistant_row:
+            return
+        if self._last_assistant_row not in self.chat_list.controls:
+            return
 
+        self._is_streaming = True
+        self._stop_generation = False
+        session_id = self.session_id
+
+        self._last_assistant_msg.set_regenerate_visible(False)
+        self.chat_list.controls.remove(self._last_assistant_row)
         self._last_assistant_msg = None
         self._last_assistant_row = None
 
-        self.send_btn.visible = False
-        self.stop_btn.visible = True
-        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-            self.update()
-
-        chat_message = self.add_message("assistant", "")
-        self._stop_generation = False
-        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-            self.update()
-
-        await self._stream_response(chat_message, self.api_client.regenerate_chat(session_id=self.session_id))
-
-        self._last_assistant_msg = chat_message
-        self._last_assistant_row = chat_message._row
-        self._last_assistant_msg.set_regenerate_visible(True)
-
-        self.send_btn.visible = True
-        self.stop_btn.visible = False
-        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-            self.update()
+        chat_message = None
+        try:
+            self._set_streaming_ui(True)
+            chat_message = self.add_message("assistant", "", notify=False)
+            safe_update(self)
+            self.scroll_to_bottom()
+            await self._stream_response(
+                chat_message, self.api_client.regenerate_chat(session_id=session_id)
+            )
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._is_streaming = False
+            self._stop_generation = False
+            self._set_streaming_ui(False)
+            if chat_message is not None and session_id == self.session_id:
+                self._last_assistant_msg = chat_message
+                self._last_assistant_row = chat_message._row
+                chat_message.set_regenerate_visible(True)
 
     async def stop_generation_click(self, e):
         self._stop_generation = True
         self.api_client.cancel_stream()
-        self.stop_btn.visible = False
-        self.send_btn.visible = True
-        if getattr(self.page, "session_id", None) is not None and self.uid is not None:
-            self.update()
+        self.stop_btn.disabled = True
+        safe_update(self, self.stop_btn)
+
+

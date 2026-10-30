@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-SETTINGS_FILE = Path("settings.json")
+SETTINGS_FILE = Path(__file__).resolve().parent.parent / "settings.json"
 
 class Settings(BaseModel):
     """Application settings, loaded from and saved to a local JSON file."""

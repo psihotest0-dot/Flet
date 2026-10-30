@@ -92,7 +92,8 @@ class APIClient:
             response = await self.client.get("/healthz", timeout=5.0)
             return response.status_code == 200
         except (httpx.HTTPError, httpx.TimeoutException) as e:
-            logger.error(f"Health check failed: {e}")
+            # Polled every few seconds - keep it out of the error log.
+            logger.debug(f"Health check failed: {e}")
             return False
 
     async def upload_file(self, file_content: bytes, filename: str, mime_type: str = "application/octet-stream") -> IngestedFile:
