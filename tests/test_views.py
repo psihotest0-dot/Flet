@@ -11,7 +11,7 @@ import pytest
 from api.client import APIClient, IngestedFile, Memory
 from state.settings import Settings, load_settings, save_settings
 from views.chat import HISTORY_PAGE_SIZE, ChatView, _normalize_chat_sessions
-from views.files import FilesView
+from views.files import FilesView, embedding_state
 from views.memory import MemoryView
 
 
@@ -440,27 +440,163 @@ async def test_new_chat_keeps_the_existing_sessions(mock_page, mock_api_client):
 
 
 # ----------------------------------------------------------------- files view
-@pytest.mark.asyncio
-async def test_poll_updates_single_status_cell(mock_page, mock_api_client):
+def _files_view(mock_page, mock_api_client, files):
     view = FilesView(mock_page, mock_api_client)
-    view.files = [
-        IngestedFile(id="f1", file_name="a.txt", status="processing", category="general"),
-    ]
+    view.files = files
     view.update_table()
+    return view
+
+
+@pytest.mark.asyncio
+async def test_poll_updates_status_and_embedding_cells(mock_page, mock_api_client):
+    view = _files_view(
+        mock_page,
+        mock_api_client,
+        [
+            IngestedFile(
+                id="f1",
+                file_name="a.txt",
+                status="processing",
+                category="general",
+                embedding_status="processing",
+            )
+        ],
+    )
     status_cell = view._status_cells["f1"]
+    embedding_cell = view._embedding_cells["f1"]
     rows_before = view.data_table.rows
 
     updated = IngestedFile(
-        id="f1", file_name="a.txt", status="completed", category="general"
+        id="f1",
+        file_name="a.txt",
+        status="completed",
+        category="general",
+        chunk_count=7,
+        has_embeddings=True,
+        embedding_status="completed",
     )
     with patch("views.files.safe_update") as safe_update_mock:
         view._apply_status("f1", updated)
 
-    # Only the status cell is re-sent - the table is not rebuilt.
-    safe_update_mock.assert_called_once_with(view, status_cell)
+    # Both changed cells travel in one update - the table is not rebuilt.
+    safe_update_mock.assert_called_once_with(view, status_cell, embedding_cell)
     assert status_cell.value == "completed"
+    assert embedding_cell.value == "Готово · 7 части"
+    assert embedding_cell.color == ft.colors.GREEN
     assert view.data_table.rows is rows_before
     assert view.files[0].status == "completed"
+    assert view.files[0].chunk_count == 7
+
+
+@pytest.mark.asyncio
+async def test_poll_skips_unchanged_cells(mock_page, mock_api_client):
+    file = IngestedFile(
+        id="f1",
+        file_name="a.txt",
+        status="completed",
+        chunk_count=3,
+        has_embeddings=True,
+        embedding_status="completed",
+    )
+    view = _files_view(mock_page, mock_api_client, [file])
+
+    with patch("views.files.safe_update") as safe_update_mock:
+        view._apply_status("f1", file.model_copy())
+
+    # Nothing changed, so nothing is re-sent to the client.
+    safe_update_mock.assert_not_called()
+
+
+def test_update_table_renders_embedding_column(mock_page, mock_api_client):
+    view = _files_view(
+        mock_page,
+        mock_api_client,
+        [
+            IngestedFile(
+                id="f1",
+                file_name="indexed.pdf",
+                status="completed",
+                chunk_count=12,
+                has_embeddings=True,
+                embedding_status="completed",
+            ),
+            IngestedFile(
+                id="f2",
+                file_name="scan.pdf",
+                status="completed",
+                chunk_count=0,
+                has_embeddings=False,
+                embedding_status="empty",
+            ),
+        ],
+    )
+
+    assert [column.label.value for column in view.data_table.columns] == [
+        "Име на файл",
+        "Статус",
+        "Вектори",
+        "Категория",
+        "Действия",
+    ]
+    assert view._embedding_cells["f1"].value == "Готово · 12 части"
+    assert view._embedding_cells["f2"].value == "Няма текст"
+    # The second row keeps its cells aligned with the headers.
+    assert len(view.data_table.rows[1].cells) == len(view.data_table.columns)
+
+
+@pytest.mark.parametrize(
+    ("file", "expected"),
+    [
+        (IngestedFile(status="pending"), ("Изчаква", ft.colors.AMBER)),
+        (IngestedFile(status="processing"), ("Обработва се", ft.colors.BLUE)),
+        (
+            IngestedFile(
+                status="completed",
+                chunk_count=2,
+                has_embeddings=True,
+                embedding_status="completed",
+            ),
+            ("Готово · 2 части", ft.colors.GREEN),
+        ),
+        (
+            IngestedFile(
+                status="completed",
+                chunk_count=1,
+                has_embeddings=True,
+                embedding_status="completed",
+            ),
+            ("Готово · 1 част", ft.colors.GREEN),
+        ),
+        (
+            IngestedFile(
+                status="completed",
+                chunk_count=0,
+                has_embeddings=False,
+                embedding_status="empty",
+            ),
+            ("Няма текст", ft.colors.ORANGE),
+        ),
+        (IngestedFile(status="failed"), ("Грешка", ft.colors.RED)),
+        # Payload from a backend without embedding metadata: fall back to status.
+        (IngestedFile(status="completed"), ("Готово", ft.colors.GREEN)),
+    ],
+)
+def test_embedding_state_maps_backend_statuses(file, expected):
+    label, color, _tooltip = embedding_state(file)
+    assert (label, color) == expected
+
+
+def test_embedding_state_explains_an_empty_file():
+    label, _color, tooltip = embedding_state(
+        IngestedFile(
+            status="completed",
+            chunk_count=0,
+            has_embeddings=False,
+            embedding_status="empty",
+        )
+    )
+    assert label == "Няма текст"
+    assert "няма да бъде намерен" in tooltip
 
 
 # ---------------------------------------------------------------- memory view

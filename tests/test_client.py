@@ -157,6 +157,46 @@ async def test_list_files_success(client):
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_list_files_parses_embedding_metadata(client):
+    mock_response = [
+        {
+            "id": "123e4567-e89b-12d3-a456-426614174001",
+            "user_id": "123e4567-e89b-12d3-a456-426614174000",
+            "file_name": "indexed.pdf",
+            "mime_type": "application/pdf",
+            "file_size": 2048,
+            "status": "completed",
+            "category": "general",
+            "manual_override": False,
+            "chunk_count": 42,
+            "has_embeddings": True,
+            "embedding_status": "completed",
+            "created_at": "2023-01-01T00:00:00Z",
+            "updated_at": "2023-01-01T00:00:00Z",
+        },
+        {
+            "id": "123e4567-e89b-12d3-a456-426614174002",
+            "file_name": "scan.pdf",
+            "status": "completed",
+            "category": "general",
+            "chunk_count": 0,
+            "has_embeddings": False,
+            "embedding_status": "empty",
+        },
+    ]
+    respx.get("http://localhost:8080/v1/files").mock(
+        return_value=httpx.Response(200, json=mock_response)
+    )
+
+    result = await client.list_files()
+
+    assert [file.chunk_count for file in result] == [42, 0]
+    assert [file.has_embeddings for file in result] == [True, False]
+    assert [file.embedding_status for file in result] == ["completed", "empty"]
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_get_file_status_success(client):
     mock_response = {
         "id": "123e4567-e89b-12d3-a456-426614174001",

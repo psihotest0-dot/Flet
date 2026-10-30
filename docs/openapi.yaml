@@ -372,6 +372,24 @@ components:
           type: integer
         status:
           type: string
+        category:
+          type: string
+        manual_override:
+          type: boolean
+        chunk_count:
+          type: integer
+          description: |
+            Number of embedded chunks stored for the file. Zero means the file
+            cannot be found by retrieval even after ingestion finishes.
+        has_embeddings:
+          type: boolean
+          description: True when the file has at least one embedded chunk.
+        embedding_status:
+          type: string
+          enum: [pending, processing, completed, failed, empty]
+          description: |
+            Vector state of the file. `completed` with `chunk_count` 0 is
+            reported as `empty` so it is not mistaken for a searchable file.
         local_path:
           type: string
         created_at:

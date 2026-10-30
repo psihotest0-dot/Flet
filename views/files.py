@@ -8,7 +8,7 @@ from pathlib import Path
 
 import flet as ft
 
-from api.client import APIClient
+from api.client import APIClient, IngestedFile
 from views.ui_utils import confirm_dialog, safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,63 @@ logger = logging.getLogger(__name__)
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024
 POLL_INTERVAL = 3.0
 FINAL_STATUSES = ("completed", "failed")
+
+# Backend `embedding_status` values (see internal/api/dto.go) mapped to the label
+# and colour shown in the "Вектори" column. A file can finish ingestion with no
+# chunks at all (scanned PDF, empty document) - the API reports that as "empty"
+# so it is not confused with a searchable "completed" file.
+EMBEDDING_STATES = {
+    "pending": ("Изчаква", ft.colors.AMBER),
+    "processing": ("Обработва се", ft.colors.BLUE),
+    "completed": ("Готово", ft.colors.GREEN),
+    "empty": ("Няма текст", ft.colors.ORANGE),
+    "failed": ("Грешка", ft.colors.RED),
+}
+
+EMBEDDING_TOOLTIPS = {
+    "pending": "Чака обработка.",
+    "processing": "Извлича се текстът и се създават части за търсене.",
+    "completed": "Файлът участва в търсенето в чата.",
+    "empty": (
+        "Обработен, но без части (празен или неразпознат текст). "
+        "Файлът няма да бъде намерен при търсене."
+    ),
+    "failed": "Обработката е неуспешна - файлът не участва в търсенето.",
+}
+UNKNOWN_EMBEDDING_TOOLTIP = "Няма информация за индексирането на файла."
+
+
+def chunk_label(count: int | None) -> str:
+    """Human readable chunk count using the Bulgarian plural forms."""
+    if count is None:
+        return ""
+    if count == 0:
+        return "няма части"
+    if count == 1:
+        return "1 част"
+    return f"{count} части"
+
+
+def embedding_state(file: IngestedFile) -> tuple[str, str, str]:
+    """Return ``(label, color, tooltip)`` describing the file's vectors.
+
+    The backend derives ``embedding_status`` from the ingest status plus the
+    stored chunk count. Payloads from an older backend only carry ``status``,
+    so they are mapped through the same table instead of showing a blank cell.
+    """
+    status = file.embedding_status or file.status or ""
+    if status == "completed" and file.has_embeddings is False:
+        # Completed, but nothing was stored to search through.
+        status = "empty"
+
+    label, color = EMBEDDING_STATES.get(
+        status, (status or "Неизвестно", ft.colors.GREY)
+    )
+    tooltip = EMBEDDING_TOOLTIPS.get(status, UNKNOWN_EMBEDDING_TOOLTIP)
+
+    if status == "completed" and file.chunk_count:
+        return f"{label} · {chunk_label(file.chunk_count)}", color, tooltip
+    return label, color, tooltip
 
 
 class FilesView(ft.Container):
@@ -54,6 +111,12 @@ class FilesView(ft.Container):
             columns=[
                 ft.DataColumn(ft.Text("Име на файл")),
                 ft.DataColumn(ft.Text("Статус")),
+                ft.DataColumn(
+                    ft.Text(
+                        "Вектори",
+                        tooltip="Части, по които файлът се търси в чата",
+                    )
+                ),
                 ft.DataColumn(ft.Text("Категория")),
                 ft.DataColumn(ft.Text("Действия")),
             ],
@@ -84,6 +147,7 @@ class FilesView(ft.Container):
         # file_id -> status Text control, so a status change re-sends one cell
         # instead of rebuilding the whole table.
         self._status_cells: dict[str, ft.Text] = {}
+        self._embedding_cells: dict[str, ft.Text] = {}
         self._rows: dict[str, ft.DataRow] = {}
 
     # -------------------------------------------------------------- lifecycle
@@ -139,15 +203,36 @@ class FilesView(ft.Container):
         self.update_table()
 
     def _apply_status(self, file_id: str, updated) -> None:
+        """Refresh the cells of a single row after a polled status response."""
         for i, file in enumerate(self.files):
             if file.id == file_id:
                 self.files[i] = updated
                 break
+
+        dirty: list[ft.Control] = []
+
         cell = self._status_cells.get(file_id)
         status = updated.status or "Unknown"
         if cell is not None and cell.value != status:
             cell.value = status
-            safe_update(self, cell)
+            dirty.append(cell)
+
+        # The chunk count travels with the same payload, so the "Вектори" cell is
+        # refreshed in the same round trip instead of a second request.
+        embedding_cell = self._embedding_cells.get(file_id)
+        label, color, tooltip = embedding_state(updated)
+        if embedding_cell is not None and (
+            embedding_cell.value != label
+            or embedding_cell.color != color
+            or embedding_cell.tooltip != tooltip
+        ):
+            embedding_cell.value = label
+            embedding_cell.color = color
+            embedding_cell.tooltip = tooltip
+            dirty.append(embedding_cell)
+
+        if dirty:
+            safe_update(self, *dirty)
 
     async def poll_statuses(self, *_args):
         while self._polling:
@@ -220,10 +305,13 @@ class FilesView(ft.Container):
     def update_table(self):
         self.data_table.rows.clear()
         self._status_cells.clear()
+        self._embedding_cells.clear()
         self._rows.clear()
 
         for file in self.files:
             status_text = ft.Text(file.status or "Unknown")
+            label, color, tooltip = embedding_state(file)
+            embedding_text = ft.Text(label, size=12, color=color, tooltip=tooltip)
             del_btn = ft.IconButton(
                 icon=ft.icons.DELETE,
                 tooltip="Изтрий",
@@ -248,6 +336,7 @@ class FilesView(ft.Container):
                 cells=[
                     ft.DataCell(ft.Text(file.file_name or "Unknown")),
                     ft.DataCell(status_text),
+                    ft.DataCell(embedding_text),
                     ft.DataCell(category_dropdown),
                     ft.DataCell(del_btn),
                 ]
@@ -255,6 +344,7 @@ class FilesView(ft.Container):
             self.data_table.rows.append(row)
             if file.id:
                 self._status_cells[file.id] = status_text
+                self._embedding_cells[file.id] = embedding_text
                 self._rows[file.id] = row
 
         # Only the table is re-sent, not the whole view.
@@ -263,6 +353,7 @@ class FilesView(ft.Container):
     def remove_file_row(self, file_id: str):
         self.files = [file for file in self.files if file.id != file_id]
         self._status_cells.pop(file_id, None)
+        self._embedding_cells.pop(file_id, None)
         row = self._rows.pop(file_id, None)
         if row is not None:
             try:

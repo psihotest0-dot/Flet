@@ -58,6 +58,12 @@ class IngestedFile(BaseModel):
     status: str | None = None
     category: str | None = None
     manual_override: bool | None = None
+    # Vector state reported by the backend: a file that finished ingestion with
+    # zero chunks cannot be found by retrieval, which the API reports as
+    # embedding_status "empty" instead of "completed".
+    chunk_count: int | None = None
+    has_embeddings: bool | None = None
+    embedding_status: str | None = None
     local_path: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
