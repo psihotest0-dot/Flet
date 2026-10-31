@@ -6,29 +6,14 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import flet as ft
+import httpx
 import pytest
 
-from api.client import APIClient, IngestedFile, Memory
+from api.client import APIError, IngestedFile, Memory, Message, StreamError
 from state.settings import Settings, load_settings, save_settings
 from views.chat import HISTORY_PAGE_SIZE, ChatView, _normalize_chat_sessions
 from views.files import FilesView, embedding_state
 from views.memory import MemoryView
-
-
-@pytest.fixture
-def mock_page():
-    page = MagicMock(spec=ft.Page)
-    page.overlay = []
-    return page
-
-
-@pytest.fixture
-def mock_api_client():
-    client = MagicMock(spec=APIClient)
-    client.get_messages = AsyncMock(return_value=[])
-    client.list_memories = AsyncMock(return_value=[])
-    client.list_files = AsyncMock(return_value=[])
-    return client
 
 
 def mounted(view_class):
@@ -96,7 +81,7 @@ async def test_files_view_polls_only_when_tab_is_active(mock_page, mock_api_clie
 async def test_load_history_batches_updates(chat_view, mock_api_client):
     mock_api_client.get_messages = AsyncMock(
         return_value=[
-            MagicMock(role="user" if i % 2 == 0 else "assistant", content=f"msg {i}")
+            Message(role="user" if i % 2 == 0 else "assistant", content=f"msg {i}")
             for i in range(50)
         ]
     )
@@ -114,7 +99,7 @@ async def test_load_history_batches_updates(chat_view, mock_api_client):
 async def test_load_history_caps_rendered_messages(chat_view, mock_api_client):
     mock_api_client.get_messages = AsyncMock(
         return_value=[
-            MagicMock(role="user", content="x") for _ in range(HISTORY_PAGE_SIZE + 20)
+            Message(role="user", content="x") for _ in range(HISTORY_PAGE_SIZE + 20)
         ]
     )
 
@@ -127,10 +112,10 @@ async def test_load_history_caps_rendered_messages(chat_view, mock_api_client):
 
 @pytest.mark.asyncio
 async def test_load_history_ignores_stale_session(chat_view, mock_api_client):
-    async def get_messages(session_id):
+    async def get_messages(session_id, limit=None):
         # The user switched sessions while the request was in flight.
         chat_view.session_id = "another-session"
-        return [MagicMock(role="user", content="stale")]
+        return [Message(role="user", content="stale")]
 
     mock_api_client.get_messages = get_messages
 
@@ -138,6 +123,57 @@ async def test_load_history_ignores_stale_session(chat_view, mock_api_client):
         await chat_view.load_history()
 
     assert chat_view.chat_list.controls == []
+
+
+@pytest.mark.asyncio
+async def test_load_history_requests_a_full_page(chat_view, mock_api_client):
+    with mounted(ChatView):
+        await chat_view.load_history()
+
+    # The backend returns only 50 messages unless it is asked for more.
+    mock_api_client.get_messages.assert_awaited_once_with(
+        session_id=chat_view.session_id, limit=HISTORY_PAGE_SIZE
+    )
+
+
+STORED_SOURCES = [
+    {
+        "chunk_id": "c1",
+        "file_name": "book.pdf",
+        "page_number": 3,
+        "content_snippet": "Река Дунав е граница.",
+        "score": 87.5,
+        "score_type": "cosine",
+        "source_type": "text",
+    }
+]
+
+
+@pytest.mark.asyncio
+async def test_load_history_keeps_the_sources_of_stored_answers(
+    chat_view, mock_api_client
+):
+    mock_api_client.get_messages = AsyncMock(
+        return_value=[
+            Message(role="user", content="question"),
+            Message(role="assistant", content="answer", sources=STORED_SOURCES),
+        ]
+    )
+
+    with mounted(ChatView):
+        await chat_view.load_history()
+
+    question, answer = [row.controls[0].content for row in chat_view.chat_list.controls]
+    assert question.sources == []
+    assert answer.sources == STORED_SOURCES
+
+    answer.did_mount()
+    assert answer.sources_row.visible is True
+    chips = [c for c in answer.sources_row.controls if isinstance(c, ft.Chip)]
+    assert [chip.label.value for chip in chips] == ["book.pdf"]
+    # A message without references keeps its source row hidden.
+    question.did_mount()
+    assert question.sources_row.visible is False
 
 
 @pytest.mark.asyncio
@@ -198,6 +234,148 @@ async def test_send_message_resets_state_after_stream_error(chat_view, mock_api_
     assert chat_view.stop_btn.visible is False
     # The failed input is restored so the user can retry.
     assert chat_view.input_field.value == "hi"
+
+
+# ----------------------------------------------------------------- chat errors
+def failing_stream(error, *chunks):
+    """A chat/regenerate stream that yields ``chunks`` and then raises ``error``."""
+
+    async def stream(**_kwargs):
+        for chunk in chunks:
+            yield chunk
+        raise error
+
+    return MagicMock(side_effect=lambda **kwargs: stream(**kwargs))
+
+
+def chat_messages(view: ChatView):
+    """The ChatMessage controls of the list, oldest first."""
+    return [row.controls[0].content for row in view.chat_list.controls]
+
+
+@pytest.mark.asyncio
+async def test_stream_error_is_shown_as_red_text_not_html(chat_view, mock_api_client):
+    mock_api_client.stream_chat = failing_stream(
+        StreamError("Failed to generate a response (request_id: 1)"),
+        {"content": "partial"},
+    )
+    chat_view.input_field.value = "hi"
+
+    await chat_view.send_message_click(None)
+
+    _question, answer = chat_messages(chat_view)
+    # The body stays plain Markdown - no HTML tags that would be shown verbatim.
+    assert answer.md.value == "partial"
+    assert "<" not in answer.md.value
+    assert answer.error_text in answer.controls
+    assert answer.error_text.visible is True
+    assert answer.error_text.value == "Нещо се обърка. Опитай отново."
+    assert answer.error_text.color == ft.colors.RED
+    # The backend already stored the user's turn: it is not put back in the input.
+    assert chat_view.input_field.value == ""
+
+
+@pytest.mark.parametrize(
+    ("error", "expected", "input_is_restored"),
+    [
+        (httpx.ConnectError("refused"), "Бекендът не е достъпен", True),
+        (httpx.ReadTimeout("slow"), "Бекендът не е достъпен", True),
+        (APIError(503, "llm unavailable"), "Грешка в бекенда (HTTP 503)", True),
+        (
+            APIError(400, "content must be at most 32000 characters"),
+            "Заявката е отхвърлена: content must be at most 32000 characters",
+            True,
+        ),
+        (StreamError("boom"), "Нещо се обърка", False),
+        (RuntimeError("boom"), "Грешка при получаване на отговора", True),
+    ],
+    ids=["connect-error", "read-timeout", "5xx", "4xx", "stream-error", "unexpected"],
+)
+@pytest.mark.asyncio
+async def test_chat_tells_the_kinds_of_failure_apart(
+    chat_view, mock_api_client, error, expected, input_is_restored
+):
+    mock_api_client.stream_chat = failing_stream(error)
+    chat_view.input_field.value = "hi"
+
+    await chat_view.send_message_click(None)
+
+    answer = chat_messages(chat_view)[-1]
+    assert answer.error_text.visible is True
+    assert expected in answer.error_text.value
+    assert answer.error_text.color == ft.colors.RED
+    assert chat_view.input_field.value == ("hi" if input_is_restored else "")
+
+
+async def load_answered_chat(view: ChatView, api_client):
+    api_client.get_messages = AsyncMock(
+        return_value=[
+            Message(role="user", content="question"),
+            Message(role="assistant", content="old answer"),
+        ]
+    )
+    with mounted(ChatView):
+        await view.load_history()
+
+
+@pytest.mark.asyncio
+async def test_regeneration_replaces_the_previous_answer(chat_view, mock_api_client):
+    await load_answered_chat(chat_view, mock_api_client)
+    question_row, old_row = chat_view.chat_list.controls
+    mock_api_client.regenerate_chat = MagicMock(
+        side_effect=lambda **kw: _chunks({"content": "new answer"})
+    )
+
+    await chat_view.regenerate_last()
+
+    assert len(chat_view.chat_list.controls) == 2
+    assert chat_view.chat_list.controls[0] is question_row
+    new_answer = chat_messages(chat_view)[1]
+    assert new_answer.md.value == "new answer"
+    assert chat_view.chat_list.controls[1] is not old_row
+    assert chat_view._last_assistant_msg is new_answer
+
+
+async def _chunks(*chunks):
+    for chunk in chunks:
+        yield chunk
+
+
+@pytest.mark.parametrize(
+    ("error", "chunks", "expected"),
+    [
+        (APIError(500, "boom"), (), "HTTP 500"),
+        (httpx.ConnectError("refused"), (), "Бекендът не е достъпен"),
+        # Fails after part of the new answer was already painted.
+        (StreamError("boom"), ({"content": "half of a new answ"},), "Нещо се обърка"),
+    ],
+    ids=["api-error", "connect-error", "stream-error-after-text"],
+)
+@pytest.mark.asyncio
+async def test_failed_regeneration_puts_the_previous_answer_back(
+    chat_view, mock_api_client, error, chunks, expected
+):
+    await load_answered_chat(chat_view, mock_api_client)
+    question_row, old_row = chat_view.chat_list.controls
+    old_answer = chat_view._last_assistant_msg
+    mock_api_client.regenerate_chat = failing_stream(error, *chunks)
+
+    with patch("views.chat.show_snackbar") as snackbar:
+        await chat_view.regenerate_last()
+
+    # The backend keeps the old answer when regeneration fails, so the screen
+    # must show it again instead of an empty gap or a half-written reply.
+    assert len(chat_view.chat_list.controls) == 2
+    assert chat_view.chat_list.controls[0] is question_row
+    assert chat_view.chat_list.controls[1] is old_row
+    assert chat_view._last_assistant_msg is old_answer
+    assert chat_view._last_assistant_row is old_row
+    assert old_answer.md.value == "old answer"
+    assert old_answer.regenerate_btn.visible is True
+    snackbar.assert_called_once()
+    assert expected in snackbar.call_args.args[1]
+    assert chat_view._is_streaming is False
+    assert chat_view.send_btn.visible is True
 
 
 # ---------------------------------------------------------------- chat sessions
@@ -586,6 +764,26 @@ def test_embedding_state_maps_backend_statuses(file, expected):
     assert (label, color) == expected
 
 
+@pytest.mark.asyncio
+async def test_failed_upload_shows_the_backend_text(
+    mock_page, mock_api_client, tmp_path
+):
+    picked = tmp_path / "big.bin"
+    picked.write_bytes(b"x")
+    mock_api_client.upload_file = AsyncMock(side_effect=APIError(413, "file too large"))
+    view = FilesView(mock_page, mock_api_client)
+
+    with patch("views.files.safe_update"), patch(
+        "views.files.show_snackbar"
+    ) as snackbar:
+        await view.on_file_picker_result(
+            SimpleNamespace(files=[SimpleNamespace(name="big.bin", path=str(picked))])
+        )
+
+    snackbar.assert_called_once()
+    assert "big.bin: file too large" in snackbar.call_args.args[1]
+
+
 def test_embedding_state_explains_an_empty_file():
     label, _color, tooltip = embedding_state(
         IngestedFile(
@@ -686,6 +884,27 @@ async def test_memory_row_save_error_keeps_edit_mode(mock_page, mock_api_client)
 
 
 @pytest.mark.asyncio
+async def test_memory_row_save_error_shows_the_backend_text(mock_page, mock_api_client):
+    _view, row = _memory_row(
+        mock_page, mock_api_client, Memory(id="m1", content="old", status="active")
+    )
+    mock_api_client.update_memory = AsyncMock(
+        side_effect=APIError(400, "content must be at most 32000 characters")
+    )
+
+    with patch("views.memory.safe_update"), patch(
+        "views.memory.show_snackbar"
+    ) as snackbar:
+        row._edit(None)
+        row.content_field.value = "new"
+        await row._save(None)
+
+    snackbar.assert_called_once()
+    assert "content must be at most 32000 characters" in snackbar.call_args.args[1]
+    assert "Client error" not in snackbar.call_args.args[1]
+
+
+@pytest.mark.asyncio
 async def test_memory_row_activate_updates_status_in_place(mock_page, mock_api_client):
     view, row = _memory_row(
         mock_page, mock_api_client, Memory(id="m1", content="a", status="candidate", importance=3)
@@ -749,6 +968,238 @@ async def test_memory_row_ignores_updates_for_detached_view(mock_page, mock_api_
     row._edit(None)  # must not raise
 
     assert row.content_field_container.visible is True
+
+
+# ------------------------------------------------------- memory: importance
+@pytest.mark.parametrize("stored", [None, 0], ids=["missing", "legacy-zero"])
+@pytest.mark.asyncio
+async def test_memory_row_save_never_sends_zero_importance(
+    mock_page, mock_api_client, stored
+):
+    # The backend answers 400 to importance 0 (valid: 1-10).
+    _view, row = _memory_row(
+        mock_page,
+        mock_api_client,
+        Memory(id="m1", content="old", status="active", importance=stored),
+    )
+    mock_api_client.update_memory = AsyncMock(
+        return_value=Memory(id="m1", content="new", status="active", importance=5)
+    )
+
+    with patch("views.memory.safe_update"):
+        row.content_field.value = "new"
+        await row._save(None)
+
+    mock_api_client.update_memory.assert_awaited_once_with(
+        memory_id="m1", content="new", status="active", importance=5
+    )
+
+
+@pytest.mark.asyncio
+async def test_memory_row_activate_without_importance_sends_a_valid_one(
+    mock_page, mock_api_client
+):
+    _view, row = _memory_row(
+        mock_page, mock_api_client, Memory(id="m1", content="a", status="candidate")
+    )
+    mock_api_client.update_memory = AsyncMock(
+        return_value=Memory(id="m1", content="a", status="active", importance=5)
+    )
+
+    with patch("views.memory.safe_update"):
+        await row._activate(None)
+
+    mock_api_client.update_memory.assert_awaited_once_with(
+        memory_id="m1", content="a", status="active", importance=5
+    )
+
+
+def test_memory_table_shows_importance_next_to_the_content(mock_page, mock_api_client):
+    view, row = _memory_row(
+        mock_page,
+        mock_api_client,
+        Memory(id="m1", content="a", status="active", importance=3),
+    )
+
+    assert [column.label.value for column in view.data_table.columns] == [
+        "Съдържание",
+        "Важност",
+        "Статус",
+        "Действия",
+    ]
+    assert len(row.cells) == len(view.data_table.columns)
+    assert row.importance_text.value == "3"
+    assert [option.key for option in row.importance_dropdown.options] == [
+        str(value) for value in range(1, 11)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_memory_row_importance_can_be_edited_on_its_own(
+    mock_page, mock_api_client
+):
+    view, row = _memory_row(
+        mock_page,
+        mock_api_client,
+        Memory(id="m1", content="same", status="active", importance=3),
+    )
+    mock_api_client.update_memory = AsyncMock(
+        return_value=Memory(id="m1", content="same", status="active", importance=8)
+    )
+
+    with patch("views.memory.safe_update"):
+        row._edit(None)
+        assert row.importance_dropdown.visible is True
+        assert row.importance_text.visible is False
+        assert row.importance_dropdown.value == "3"
+
+        row.importance_dropdown.value = "8"
+        await row._save(None)
+
+    mock_api_client.update_memory.assert_awaited_once_with(
+        memory_id="m1", content="same", status="active", importance=8
+    )
+    assert row.importance_text.value == "8"
+    assert row.importance_text.visible is True
+    assert row.importance_dropdown.visible is False
+    assert view.memories[0].importance == 8
+
+
+@pytest.mark.asyncio
+async def test_memory_row_save_without_any_change_is_a_noop(
+    mock_page, mock_api_client
+):
+    _view, row = _memory_row(
+        mock_page,
+        mock_api_client,
+        Memory(id="m1", content="same", status="active", importance=3),
+    )
+
+    with patch("views.memory.safe_update"):
+        row._edit(None)
+        await row._save(None)
+
+    mock_api_client.update_memory.assert_not_called()
+    assert row.content_text_container.visible is True
+
+
+@pytest.mark.asyncio
+async def test_memory_row_cancel_restores_the_importance(mock_page, mock_api_client):
+    _view, row = _memory_row(
+        mock_page,
+        mock_api_client,
+        Memory(id="m1", content="same", status="active", importance=3),
+    )
+
+    with patch("views.memory.safe_update"):
+        row._edit(None)
+        row.importance_dropdown.value = "9"
+        row._cancel(None)
+
+    assert row.importance_dropdown.value == "3"
+    assert row.importance_text.value == "3"
+
+
+def test_memory_content_tooltip_names_the_fact_key(mock_page, mock_api_client):
+    _view, with_key = _memory_row(
+        mock_page,
+        mock_api_client,
+        Memory(id="m1", content="a", metadata={"fact_key": "user.city"}),
+    )
+    _view, without_key = _memory_row(
+        mock_page, mock_api_client, Memory(id="m2", content="b", metadata=None)
+    )
+
+    assert with_key.content_text.tooltip == "fact_key: user.city"
+    assert not without_key.content_text.tooltip
+
+
+# ----------------------------------------------------------- memory: new memory
+def _memory_view_with_dialog(mock_page, mock_api_client) -> MemoryView:
+    view = MemoryView(mock_page, mock_api_client)
+    view.on_new_click(None)
+    return view
+
+
+@pytest.mark.asyncio
+async def test_new_memory_dialog_creates_an_active_memory_and_reloads(
+    mock_page, mock_api_client
+):
+    view = _memory_view_with_dialog(mock_page, mock_api_client)
+    mock_page.open.assert_called_once_with(view.new_dialog)
+    mock_api_client.create_memory = AsyncMock(
+        return_value=Memory(id="m9", content="x", status="active", importance=7)
+    )
+    view.new_content_field.value = "  Предпочитам кратки отговори.  "
+    view.new_importance.value = "7"
+
+    with patch("views.memory.show_snackbar") as snackbar:
+        await view.on_new_save(None)
+
+    mock_api_client.create_memory.assert_awaited_once_with(
+        content="Предпочитам кратки отговори.", status="active", importance=7
+    )
+    mock_page.close.assert_called_once_with(view.new_dialog)
+    # The table is re-read, so the status filter decides what is shown.
+    mock_api_client.list_memories.assert_awaited_once()
+    snackbar.assert_called_once()
+    assert view._creating is False
+
+
+def test_new_memory_dialog_starts_empty_with_the_default_importance(
+    mock_page, mock_api_client
+):
+    view = MemoryView(mock_page, mock_api_client)
+    view.new_content_field.value = "left over"
+    view.new_importance.value = "9"
+
+    view.on_new_click(None)
+
+    assert view.new_content_field.value == ""
+    assert view.new_importance.value == "5"
+
+
+@pytest.mark.asyncio
+async def test_new_memory_needs_some_text(mock_page, mock_api_client):
+    view = _memory_view_with_dialog(mock_page, mock_api_client)
+    view.new_content_field.value = "   "
+
+    await view.on_new_save(None)
+
+    mock_api_client.create_memory.assert_not_called()
+    assert view.new_content_field.error_text
+    mock_page.close.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (APIError(409, '{"id":"m1"}'), "Такъв спомен вече съществува."),
+        (
+            APIError(400, "content must be at most 32000 characters"),
+            "content must be at most 32000 characters",
+        ),
+        (httpx.ConnectError("refused"), "Бекендът не е достъпен."),
+        (RuntimeError("boom"), "Неуспешно запазване на спомена."),
+    ],
+    ids=["duplicate", "rejected", "unreachable", "unexpected"],
+)
+@pytest.mark.asyncio
+async def test_new_memory_failure_keeps_the_dialog_open(
+    mock_page, mock_api_client, error, expected
+):
+    view = _memory_view_with_dialog(mock_page, mock_api_client)
+    mock_api_client.create_memory = AsyncMock(side_effect=error)
+    view.new_content_field.value = "a fact"
+
+    await view.on_new_save(None)
+
+    assert view.new_content_field.error_text == expected
+    mock_page.close.assert_not_called()
+    mock_api_client.list_memories.assert_not_called()
+    # The user can fix the text and try again.
+    assert view._creating is False
+    assert view.new_save_btn.disabled is False
 
 
 # -------------------------------------------------------------------- helpers

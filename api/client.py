@@ -15,6 +15,12 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
+# The backend accepts 1 (trivia) .. 10 (critical) and answers 400 to anything
+# else - including a missing value, which it reads as 0.
+MIN_IMPORTANCE = 1
+MAX_IMPORTANCE = 10
+DEFAULT_IMPORTANCE = 5
+
 
 class Message(BaseModel):
     """Represents a chat message."""
@@ -24,6 +30,9 @@ class Message(BaseModel):
     role: str | None = None
     content: str | None = None
     created_at: datetime | None = None
+    # Where an assistant answer came from (same shape as the SSE ``sources``
+    # event); stored with the message so the references survive a reload.
+    sources: list[dict[str, Any]] | None = None
 
 
 class Memory(BaseModel):
@@ -45,6 +54,42 @@ class Memory(BaseModel):
 
 class StreamError(Exception):
     """Exception raised for errors in the stream."""
+
+
+# Backend error bodies are short plain-text sentences; anything longer is a
+# stack trace or an HTML page that does not belong in a snackbar.
+ERROR_MESSAGE_LIMIT = 200
+
+
+class APIError(Exception):
+    """The backend answered with an error status.
+
+    ``message`` is the plain-text body the backend sent (for example
+    ``importance must be between 1 and 10``), so the UI can show it instead of
+    the generic ``Client error '400 Bad Request' for url ...`` of httpx.
+    """
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+    @classmethod
+    def from_response(cls, response: httpx.Response) -> APIError:
+        text = " ".join(response.text.split())
+        if len(text) > ERROR_MESSAGE_LIMIT:
+            text = text[: ERROR_MESSAGE_LIMIT - 3].rstrip() + "..."
+        if not text:
+            text = f"HTTP {response.status_code} {response.reason_phrase}".strip()
+        return cls(response.status_code, text)
+
+
+def _raise_for_status(response: httpx.Response) -> None:
+    """``raise_for_status`` that raises :class:`APIError` with the backend text."""
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        raise APIError.from_response(response) from e
 
 
 class IngestedFile(BaseModel):
@@ -120,14 +165,14 @@ class APIClient:
             if e.response.status_code == 409:
                 await e.response.aread()
                 return IngestedFile(**e.response.json())
-            raise
+            raise APIError.from_response(response) from e
         return IngestedFile(**response.json())
 
     async def delete_file(self, file_id: str) -> None:
         """Delete a file by its ID."""
         headers = {"X-User-ID": self.user_id}
         response = await self.client.delete(f"/v1/files/{file_id}", headers=headers)
-        response.raise_for_status()
+        _raise_for_status(response)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=0.5, min=0.5, max=4))
     async def _get(self, endpoint: str, **kwargs) -> httpx.Response:
@@ -153,7 +198,7 @@ class APIClient:
         headers = {"X-User-ID": self.user_id}
         payload = {"category": category, "manual_override": True}
         response = await self.client.patch(f"/v1/files/{file_id}/category", headers=headers, json=payload)
-        response.raise_for_status()
+        _raise_for_status(response)
         return IngestedFile(**response.json())
 
     async def create_memory(self, content: str, status: str = "candidate", source_message_id: str | None = None, importance: int | None = None, metadata: dict[str, Any] | None = None) -> Memory:
@@ -162,18 +207,22 @@ class APIClient:
         payload = {"content": content, "status": status}
         if source_message_id:
             payload["source_message_id"] = source_message_id
-        if importance is not None:
-            payload["importance"] = importance
+        payload["importance"] = importance if importance is not None else DEFAULT_IMPORTANCE
         if metadata is not None:
             payload["metadata"] = metadata
         response = await self.client.post("/memories", headers=headers, json=payload)
-        response.raise_for_status()
+        _raise_for_status(response)
         return Memory(**response.json())
 
-    async def get_messages(self, session_id: str) -> list[Message]:
-        """Get chat messages for a session."""
+    async def get_messages(self, session_id: str, limit: int | None = None) -> list[Message]:
+        """Get chat messages for a session (oldest first).
+
+        Without ``limit`` the backend returns only its default page (50).
+        """
         headers = {"X-User-ID": self.user_id}
-        params = {"session_id": session_id}
+        params: dict[str, Any] = {"session_id": session_id}
+        if limit is not None:
+            params["limit"] = limit
         response = await self._get("/messages", headers=headers, params=params)
         return [Message(**item) for item in response.json()]
 
@@ -193,14 +242,14 @@ class APIClient:
         if metadata is not None:
             payload["metadata"] = metadata
         response = await self.client.put(f"/memories/{memory_id}", headers=headers, json=payload)
-        response.raise_for_status()
+        _raise_for_status(response)
         return Memory(**response.json())
 
     async def delete_memory(self, memory_id: str) -> None:
         """Delete a memory by its ID."""
         headers = {"X-User-ID": self.user_id}
         response = await self.client.delete(f"/memories/{memory_id}", headers=headers)
-        response.raise_for_status()
+        _raise_for_status(response)
 
 
     async def regenerate_chat(self, session_id: str):
@@ -216,7 +265,7 @@ class APIClient:
                 except httpx.HTTPStatusError as e:
                     await e.response.aread()
                     logger.error("Error streaming regenerated chat. Status: %s, URL: %s, Response: %s", e.response.status_code, e.request.url, e.response.text)
-                    raise
+                    raise APIError.from_response(e.response) from e
 
                 async for sse in event_source.aiter_sse():
                     if sse.data == "[DONE]":
@@ -255,7 +304,7 @@ class APIClient:
                 except httpx.HTTPStatusError as e:
                     await e.response.aread()
                     logger.error("Error streaming chat. Status: %s, URL: %s, Response: %s", e.response.status_code, e.request.url, e.response.text)
-                    raise
+                    raise APIError.from_response(e.response) from e
 
                 async for sse in event_source.aiter_sse():
                     if sse.data == "[DONE]":

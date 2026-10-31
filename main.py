@@ -12,12 +12,15 @@ from state.settings import load_settings, save_settings
 from views.chat import ChatView
 from views.files import FilesView
 from views.memory import MemoryView
+from views.settings_dialog import SettingsDialog
 from views.ui_utils import show_snackbar
 
 logger = logging.getLogger(__name__)
 
 LOG_FILE = Path(__file__).with_name("app.log")
 HEALTH_CHECK_INTERVAL = 10
+# Libraries that log every single request on INFO.
+NOISY_LOGGERS = ("httpx", "httpcore")
 
 
 class SafeTaskWrapper:
@@ -51,12 +54,21 @@ def wrap_run_task(page):
     page.run_task = safe_run_task
 
 
+def short_id(value: str) -> str:
+    """First 8 characters of an identifier - enough for the log, not the key."""
+    return value[:8]
+
+
 def setup_logging():
     logging.basicConfig(
         handlers=[RotatingFileHandler(LOG_FILE, maxBytes=1024 * 1024, backupCount=3, encoding="utf-8")],
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s"
     )
+    # httpx logs every request on INFO - the health poll alone is a line every
+    # 10 seconds, which drowned the real messages in app.log.
+    for name in NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 async def run_health_checks(probe, on_change, interval: float = HEALTH_CHECK_INTERVAL):
@@ -103,41 +115,34 @@ def main(page: ft.Page):
     if not settings.user_id:
         settings.user_id = str(uuid.uuid4())
         save_settings(settings)
-        logger.info("No user_id in settings, generated one: %s", settings.user_id)
+        logger.info("No user_id in settings, generated one: %s", short_id(settings.user_id))
     else:
-        logger.info("Using the stored user_id: %s", settings.user_id)
+        logger.info("Using the stored user_id: %s", short_id(settings.user_id))
         try:
             uuid.UUID(settings.user_id)
         except ValueError:
             logger.warning(
-                "settings.user_id %r is not a canonical UUID; keeping the stored "
+                "settings.user_id %s... is not a canonical UUID; keeping the stored "
                 "value so the existing history stays reachable.",
-                settings.user_id,
+                short_id(settings.user_id),
             )
-
-    base_url_field = ft.TextField(label="Base URL", value=settings.base_url)
 
     api_client = APIClient(base_url=settings.base_url, user_id=settings.user_id)
     # index -> view; tabs are created on first activation (see ensure_view below).
     views: dict[int, ft.Control] = {}
 
-    def close_dlg(e):
-        page.close(settings_dialog)
-
-    def save_dlg(e):
+    def apply_settings(new_url: str):
+        """Persist the validated Base URL and point every view at a new client."""
         nonlocal api_client
 
-        new_url = (base_url_field.value or "").strip()
         # Re-read the file before writing: the chat view stores its session_id
         # and chat_sessions there, and saving the snapshot loaded at startup
         # would silently revert them to an older session.
         current = load_settings()
-        if new_url:
-            current.base_url = new_url
+        current.base_url = new_url
         if not current.user_id:
             current.user_id = settings.user_id
         success = save_settings(current)
-        page.close(settings_dialog)
 
         if not success:
             show_snackbar(page, "Неуспешно запазване на настройките.")
@@ -159,19 +164,15 @@ def main(page: ft.Page):
 
         show_snackbar(page, "Настройките са запазени успешно!", success=True)
 
-    settings_dialog = ft.AlertDialog(
-        modal=True,
-        title=ft.Text("Настройки"),
-        content=ft.Column([base_url_field], tight=True),
-        actions=[
-            ft.TextButton("Отказ", on_click=close_dlg),
-            ft.TextButton("Запази", on_click=save_dlg),
-        ],
-        actions_alignment=ft.MainAxisAlignment.END,
+    settings_dialog = SettingsDialog(
+        page,
+        user_id=settings.user_id,
+        base_url=settings.base_url,
+        on_save=apply_settings,
     )
 
     def open_settings(e):
-        page.open(settings_dialog)
+        settings_dialog.open(settings.base_url)
 
     status_icon = ft.Icon(name=ft.icons.CIRCLE, color=ft.colors.RED, size=14, tooltip="Връзката е прекъсната")
 
@@ -190,7 +191,13 @@ def main(page: ft.Page):
         ]
     )
 
-    task_handle = page.run_task(run_health_checks, api_client.check_health, set_status)
+    async def probe_backend() -> bool:
+        # Looked up on every poll: saving a new Base URL replaces ``api_client``
+        # and closes the old one, so a bound ``api_client.check_health`` would
+        # keep the indicator red for good.
+        return await api_client.check_health()
+
+    task_handle = page.run_task(run_health_checks, probe_backend, set_status)
 
     def on_disconnect(e):
         task_handle.cancel()
@@ -202,13 +209,12 @@ def main(page: ft.Page):
     # Views are mounted lazily: creating all three up front issued three API
     # calls and started the files poller before the user opened a single tab.
     def on_chat_session_changed(session_id: str) -> None:
-        """Reload the already created tabs that belong to the active session."""
+        """React to another chat being opened.
+
+        Memories belong to the user, not to a chat, so the Memory tab is not
+        reloaded here - it refreshes when its tab is opened.
+        """
         logger.info("Active chat session changed to %s", session_id)
-        memory_view = views.get(1)
-        if isinstance(memory_view, MemoryView):
-            # Memories are re-read for the newly selected chat so the tab never
-            # keeps showing data fetched for the previous session.
-            page.run_task(memory_view.load_memories)
 
     def create_chat() -> ChatView:
         return ChatView(page, api_client, on_session_changed=on_chat_session_changed)
@@ -248,7 +254,13 @@ def main(page: ft.Page):
         index = e.control.selected_index or 0
         if index not in factories:
             return
-        ensure_view(index)
+        existed = index in views
+        view = ensure_view(index)
+        if index == 1 and existed:
+            # A new view loads itself when it is mounted. An existing one is
+            # re-read on every visit: memories also appear in the background
+            # (the consolidation job proposes candidates after a chat).
+            page.run_task(view.load_memories)
         files_view = views.get(2)
         if isinstance(files_view, FilesView):
             # Poll file statuses only while the "Файлове" tab is visible.

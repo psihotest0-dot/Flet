@@ -6,6 +6,9 @@ import asyncio
 import logging
 
 import flet as ft
+import httpx
+
+from api.client import APIError, StreamError
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,20 @@ def safe_update(owner: ft.Control, *controls: ft.Control) -> None:
     for control in controls or (owner,):
         if control.uid is not None:
             control.update()
+
+
+def describe_error(error: BaseException) -> str:
+    """User-facing text that tells apart the ways a chat request can fail."""
+    if isinstance(error, httpx.TransportError):
+        # Connection refused, DNS, timeout or a connection dropped mid-stream.
+        return "Бекендът не е достъпен. Провери връзката и опитай отново."
+    if isinstance(error, APIError):
+        if error.status >= 500:
+            return f"Грешка в бекенда (HTTP {error.status}). Опитай отново по-късно."
+        return f"Заявката е отхвърлена: {error.message}"
+    if isinstance(error, StreamError):
+        return "Нещо се обърка. Опитай отново."
+    return "Грешка при получаване на отговора."
 
 
 def show_snackbar(page: ft.Page | None, message: str, success: bool = False) -> None:

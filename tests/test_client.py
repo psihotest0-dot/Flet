@@ -1,8 +1,10 @@
+import json
+
 import httpx
 import pytest
 import respx
 
-from api.client import APIClient, IngestedFile, Memory
+from api.client import APIClient, APIError, IngestedFile, Memory
 
 
 @pytest.fixture
@@ -105,8 +107,9 @@ async def test_upload_file_too_large(client):
 async def test_upload_file_server_error(client):
     respx.post("http://localhost:8080/v1/files").mock(return_value=httpx.Response(500, json={"error": "Internal Server Error"}))
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(APIError) as exc_info:
         await client.upload_file(b"test content", "test.txt", "text/plain")
+    assert exc_info.value.status == 500
 
 
 @respx.mock
@@ -122,8 +125,9 @@ async def test_delete_file_success(client):
 async def test_delete_file_not_found(client):
     respx.delete("http://localhost:8080/v1/files/123e4567-e89b-12d3-a456-426614174001").mock(return_value=httpx.Response(404))
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(APIError) as exc_info:
         await client.delete_file("123e4567-e89b-12d3-a456-426614174001")
+    assert exc_info.value.status == 404
 
 
 @respx.mock
@@ -238,8 +242,9 @@ async def test_update_file_category_success(client):
 async def test_update_file_category_not_found(client):
     respx.patch("http://localhost:8080/v1/files/123e4567-e89b-12d3-a456-426614174001/category").mock(return_value=httpx.Response(404))
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(APIError) as exc_info:
         await client.update_file_category("123e4567-e89b-12d3-a456-426614174001", "medicine")
+    assert exc_info.value.status == 404
 
 
 @respx.mock
@@ -267,16 +272,18 @@ async def test_create_memory_success(client):
 async def test_create_memory_conflict(client):
     respx.post("http://localhost:8080/memories").mock(return_value=httpx.Response(409, json={"error": "Conflict"}))
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(APIError) as exc_info:
         await client.create_memory("This is a memory")
+    assert exc_info.value.status == 409
 
 @respx.mock
 @pytest.mark.asyncio
 async def test_create_memory_server_error(client):
     respx.post("http://localhost:8080/memories").mock(return_value=httpx.Response(500, json={"error": "Internal Server Error"}))
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(APIError) as exc_info:
         await client.create_memory("This is a memory")
+    assert exc_info.value.status == 500
 
 @respx.mock
 @pytest.mark.asyncio
@@ -353,8 +360,9 @@ async def test_update_memory_success(client):
 async def test_update_memory_not_found(client):
     respx.put("http://localhost:8080/memories/123e4567-e89b-12d3-a456-426614174001").mock(return_value=httpx.Response(404))
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(APIError) as exc_info:
         await client.update_memory("123e4567-e89b-12d3-a456-426614174001", content="Updated memory", status="active", importance=2)
+    assert exc_info.value.status == 404
 
 @respx.mock
 @pytest.mark.asyncio
@@ -368,8 +376,9 @@ async def test_delete_memory_success(client):
 async def test_delete_memory_not_found(client):
     respx.delete("http://localhost:8080/memories/123e4567-e89b-12d3-a456-426614174001").mock(return_value=httpx.Response(404))
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(APIError) as exc_info:
         await client.delete_memory("123e4567-e89b-12d3-a456-426614174001")
+    assert exc_info.value.status == 404
 
 @respx.mock
 @pytest.mark.asyncio
@@ -414,9 +423,10 @@ async def test_stream_chat_http_error(client):
     respx.post("http://localhost:8080/chat/stream").mock(return_value=httpx.Response(500, json={"error": "Internal Error"}))
 
     generator = client.stream_chat(session_id="session-123", content="Hi")
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(APIError) as exc_info:
         async for _ in generator:
             pass
+    assert exc_info.value.status == 500
 
 @respx.mock
 @pytest.mark.asyncio
@@ -435,3 +445,159 @@ async def test_stream_chat_json_decode_error(client):
     assert len(results) == 2
     assert results[0] == "invalid_json"
     assert results[1] == {"type": "sources", "data": "invalid_sources_json"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_messages_sends_limit_and_parses_sources(client):
+    route = respx.get("http://localhost:8080/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"id": "m1", "role": "user", "content": "question"},
+                {
+                    "id": "m2",
+                    "role": "assistant",
+                    "content": "answer",
+                    "sources": [
+                        {
+                            "chunk_id": "c1",
+                            "file_name": "book.pdf",
+                            "page_number": 3,
+                            "content_snippet": "text",
+                            "score": 87.5,
+                            "score_type": "cosine",
+                            "source_type": "text",
+                        }
+                    ],
+                },
+            ],
+        )
+    )
+
+    result = await client.get_messages("session-123", limit=100)
+
+    params = route.calls.last.request.url.params
+    assert params["session_id"] == "session-123"
+    assert params["limit"] == "100"
+    assert result[0].sources is None
+    assert result[1].sources[0]["file_name"] == "book.pdf"
+    assert result[1].sources[0]["page_number"] == 3
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_messages_omits_limit_by_default(client):
+    route = respx.get("http://localhost:8080/messages").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+
+    await client.get_messages("session-123")
+
+    assert "limit" not in route.calls.last.request.url.params
+
+
+# ------------------------------------------------------------------- APIError
+@respx.mock
+@pytest.mark.asyncio
+async def test_api_error_carries_the_backend_text(client):
+    # The backend answers with http.Error: a plain sentence plus a newline.
+    respx.put("http://localhost:8080/memories/m1").mock(
+        return_value=httpx.Response(
+            400,
+            text="importance must be between 1 and 10\n",
+            headers={"Content-Type": "text/plain; charset=utf-8"},
+        )
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        await client.update_memory("m1", content="x", status="active", importance=0)
+
+    error = exc_info.value
+    assert error.status == 400
+    assert error.message == "importance must be between 1 and 10"
+    # The UI shows str(error) - not httpx's "Client error '400 Bad Request' ...".
+    assert str(error) == "importance must be between 1 and 10"
+    assert isinstance(error.__cause__, httpx.HTTPStatusError)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_api_error_trims_a_long_body(client):
+    respx.post("http://localhost:8080/memories").mock(
+        return_value=httpx.Response(500, text="boom " * 200)
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        await client.create_memory("x")
+
+    assert len(exc_info.value.message) <= 200
+    assert exc_info.value.message.endswith("...")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_api_error_without_a_body_names_the_status(client):
+    respx.delete("http://localhost:8080/memories/m1").mock(
+        return_value=httpx.Response(404)
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        await client.delete_memory("m1")
+
+    assert exc_info.value.message == "HTTP 404 Not Found"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_upload_error_shows_the_backend_text(client):
+    respx.post("http://localhost:8080/v1/files").mock(
+        return_value=httpx.Response(413, text="file too large\n")
+    )
+
+    with pytest.raises(APIError, match="file too large") as exc_info:
+        await client.upload_file(b"x", "big.bin")
+
+    assert exc_info.value.status == 413
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_category_error_shows_the_backend_text(client):
+    respx.patch("http://localhost:8080/v1/files/f1/category").mock(
+        return_value=httpx.Response(400, text="invalid category\n")
+    )
+
+    with pytest.raises(APIError, match="invalid category"):
+        await client.update_file_category("f1", "nope")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_error_status_carries_the_backend_text(client):
+    respx.post("http://localhost:8080/chat/regenerate").mock(
+        return_value=httpx.Response(400, text="no user message found to regenerate from\n")
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        async for _ in client.regenerate_chat(session_id="session-123"):
+            pass
+
+    assert exc_info.value.status == 400
+    assert exc_info.value.message == "no user message found to regenerate from"
+
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_create_memory_always_sends_a_valid_importance(client):
+    # The backend reads a missing importance as 0 and answers 400.
+    route = respx.post("http://localhost:8080/memories").mock(
+        return_value=httpx.Response(201, json={"id": "m1", "content": "x"})
+    )
+
+    await client.create_memory("x")
+    await client.create_memory("y", importance=9)
+
+    sent = [json.loads(call.request.content) for call in route.calls]
+    assert [body["importance"] for body in sent] == [5, 9]

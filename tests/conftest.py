@@ -1,6 +1,10 @@
+from unittest.mock import AsyncMock, MagicMock
+
+import flet as ft
 import pytest
 
 import state.settings as settings_module
+from api.client import APIClient
 
 
 @pytest.fixture(autouse=True)
@@ -13,3 +17,19 @@ def isolated_settings(tmp_path, monkeypatch):
     settings_file = tmp_path / "settings.json"
     monkeypatch.setattr(settings_module, "SETTINGS_FILE", settings_file)
     return settings_file
+
+
+@pytest.fixture
+def mock_page():
+    page = MagicMock(spec=ft.Page)
+    page.overlay = []
+    return page
+
+
+@pytest.fixture
+def mock_api_client():
+    client = MagicMock(spec=APIClient)
+    client.get_messages = AsyncMock(return_value=[])
+    client.list_memories = AsyncMock(return_value=[])
+    client.list_files = AsyncMock(return_value=[])
+    return client

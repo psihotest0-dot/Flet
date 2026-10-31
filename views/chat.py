@@ -9,10 +9,11 @@ import uuid
 from typing import Callable
 
 import flet as ft
+import httpx
 
-from api.client import APIClient, StreamError
+from api.client import APIClient, APIError, StreamError
 from state.settings import Settings, load_settings, save_settings
-from views.ui_utils import safe_update, show_snackbar
+from views.ui_utils import describe_error, safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
 
@@ -99,10 +100,12 @@ class ChatMessage(ft.Column):
         self.sources_row = ft.Row(wrap=True, visible=False)
         self.bottom_sheet = None
         self.activity_indicator = ft.Text("...", size=20, color=ft.colors.GREY_500, visible=False)
+        self.error_text = ft.Text("", color=ft.colors.RED, selectable=True, visible=False)
 
         self.controls = [
             self.top_row,
             self.msg_container,
+            self.error_text,
             self.activity_indicator,
             self.sources_row
         ]
@@ -141,9 +144,15 @@ class ChatMessage(ft.Column):
             safe_update(self, self.activity_indicator)
 
     def finalize_with_error(self, error_msg: str):
-        self.md.value += f"\n\n**<span style='color:red;'>{error_msg}</span>**"
+        """Show ``error_msg`` as its own red line under the message.
+
+        The body is Markdown, which does not render inline HTML: the former
+        ``<span style='color:red;'>`` was displayed as raw tags.
+        """
+        self.error_text.value = error_msg
+        self.error_text.visible = True
         self.hide_activity_indicator()
-        safe_update(self, self.md)
+        safe_update(self, self.error_text)
 
     async def copy_to_clipboard(self, e):
         if self.page_ref:
@@ -603,7 +612,9 @@ class ChatView(ft.Container):
         """Render the session history with a single UI update at the end."""
         session_id = self.session_id
         try:
-            messages = await self.api_client.get_messages(session_id=session_id)
+            messages = await self.api_client.get_messages(
+                session_id=session_id, limit=HISTORY_PAGE_SIZE
+            )
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001
@@ -632,7 +643,10 @@ class ChatView(ft.Container):
         last_msg_obj = None
         for msg in visible:
             last_msg_obj = self.add_message(
-                msg.role or "user", msg.content or "", notify=False
+                msg.role or "user",
+                msg.content or "",
+                sources=msg.sources,
+                notify=False,
             )
 
         # One update + one scroll for the whole history instead of one per message.
@@ -675,7 +689,11 @@ class ChatView(ft.Container):
         STREAM_FLUSH_INTERVAL; the view is updated once when the stream ends
         (instead of once per chunk, which used to walk and re-send the whole
         chat tree dozens of times per second).
+
+        Returns the user-facing error text when the stream failed (it is also
+        shown under the message), ``None`` when it finished or was stopped.
         """
+        error_text = None
         stream_open = True
         last_chunk_time = time.time()
 
@@ -745,17 +763,18 @@ class ChatView(ft.Container):
 
         except asyncio.CancelledError:
             flush_text()
-        except StreamError as ex:
-            logger.error("Stream error: %s", ex)
-            flush_text()
-            chat_message.finalize_with_error("Нещо се обърка. Опитай отново.")
         except Exception as ex:
-            logger.exception("Unexpected streaming error")
+            if isinstance(ex, (StreamError, APIError, httpx.TransportError)):
+                logger.error("Chat request failed: %r", ex)
+            else:
+                logger.exception("Unexpected streaming error")
             flush_text()
-            chat_message.append_text("\n\n**Грешка при получаване на отговора.**")
-            if fallback_user_text:
+            error_text = describe_error(ex)
+            chat_message.finalize_with_error(error_text)
+            # After a StreamError the backend already has the user's turn, so
+            # putting it back in the input would only invite a duplicate.
+            if fallback_user_text and not isinstance(ex, StreamError):
                 self.input_field.value = fallback_user_text
-            show_snackbar(self.page, f"Грешка при получаване на отговора: {ex}")
         finally:
             stream_open = False
             chat_message.hide_activity_indicator()
@@ -763,6 +782,7 @@ class ChatView(ft.Container):
                 activity_task.cancel()
             # Exactly one full-view update for the finished message.
             safe_update(self)
+        return error_text
 
     async def send_message_click(self, e):
         if self._is_streaming:
@@ -820,18 +840,23 @@ class ChatView(ft.Container):
         self._stop_generation = False
         session_id = self.session_id
 
-        self._last_assistant_msg.set_regenerate_visible(False)
-        self.chat_list.controls.remove(self._last_assistant_row)
+        previous_msg = self._last_assistant_msg
+        previous_row = self._last_assistant_row
+        position = self.chat_list.controls.index(previous_row)
+
+        previous_msg.set_regenerate_visible(False)
+        self.chat_list.controls.remove(previous_row)
         self._last_assistant_msg = None
         self._last_assistant_row = None
 
         chat_message = None
+        error = None
         try:
             self._set_streaming_ui(True)
             chat_message = self.add_message("assistant", "", notify=False)
             safe_update(self)
             self.scroll_to_bottom()
-            await self._stream_response(
+            error = await self._stream_response(
                 chat_message, self.api_client.regenerate_chat(session_id=session_id)
             )
         except asyncio.CancelledError:
@@ -840,10 +865,34 @@ class ChatView(ft.Container):
             self._is_streaming = False
             self._stop_generation = False
             self._set_streaming_ui(False)
-            if chat_message is not None and session_id == self.session_id:
-                self._last_assistant_msg = chat_message
-                self._last_assistant_row = chat_message._row
-                chat_message.set_regenerate_visible(True)
+            if session_id == self.session_id:
+                if error is not None or chat_message is None:
+                    self._restore_previous_answer(
+                        chat_message, previous_msg, previous_row, position
+                    )
+                    if error is not None:
+                        show_snackbar(self.page, error)
+                else:
+                    self._last_assistant_msg = chat_message
+                    self._last_assistant_row = chat_message._row
+                    chat_message.set_regenerate_visible(True)
+
+    def _restore_previous_answer(self, failed_message, previous_msg, previous_row, position):
+        """Put the replaced answer back after a failed regeneration.
+
+        The backend swaps the stored answer only once a complete new one exists,
+        so after a failure the previous reply is still the one in the history.
+        """
+        if failed_message is not None and failed_message._row in self.chat_list.controls:
+            self.chat_list.controls.remove(failed_message._row)
+        if previous_row not in self.chat_list.controls:
+            self.chat_list.controls.insert(
+                min(position, len(self.chat_list.controls)), previous_row
+            )
+        self._last_assistant_msg = previous_msg
+        self._last_assistant_row = previous_row
+        previous_msg.set_regenerate_visible(True)
+        safe_update(self)
 
     async def stop_generation_click(self, e):
         self._stop_generation = True

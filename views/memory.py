@@ -6,14 +6,52 @@ import asyncio
 import logging
 
 import flet as ft
+import httpx
 
-from api.client import APIClient
+from api.client import (
+    DEFAULT_IMPORTANCE,
+    MAX_IMPORTANCE,
+    MIN_IMPORTANCE,
+    APIClient,
+    APIError,
+)
 from views.ui_utils import confirm_dialog, safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
 
 FILTER_ALL = "Всички"
 FILTER_DEBOUNCE = 0.2
+
+# Status of a memory the user types in by hand. It states a fact on purpose, so
+# it takes effect right away instead of waiting as a "candidate" for activation.
+NEW_MEMORY_STATUS = "active"
+IMPORTANCE_OPTIONS = [str(value) for value in range(MIN_IMPORTANCE, MAX_IMPORTANCE + 1)]
+
+
+def importance_or_default(value: int | None) -> int:
+    """The importance to send for a memory.
+
+    The backend answers 400 to anything outside 1-10, so a missing value (or a
+    legacy 0) falls back to the default instead of being sent as is.
+    """
+    if value is not None and MIN_IMPORTANCE <= value <= MAX_IMPORTANCE:
+        return value
+    return DEFAULT_IMPORTANCE
+
+
+def fact_key_tooltip(memory) -> str | None:
+    """Tooltip naming the fact a memory belongs to (set by the consolidation job)."""
+    fact_key = (memory.metadata or {}).get("fact_key")
+    return f"fact_key: {fact_key}" if fact_key else None
+
+
+def importance_dropdown(value: int | None, **kwargs) -> ft.Dropdown:
+    return ft.Dropdown(
+        options=[ft.dropdown.Option(option) for option in IMPORTANCE_OPTIONS],
+        value=str(importance_or_default(value)),
+        dense=True,
+        **kwargs,
+    )
 
 
 class MemoryRow(ft.DataRow):
@@ -31,7 +69,7 @@ class MemoryRow(ft.DataRow):
         self.view = view
         self._saving = False
 
-        self.content_text = ft.Text(memory.content or "")
+        self.content_text = ft.Text(memory.content or "", tooltip=fact_key_tooltip(memory))
         self.content_text_container = ft.Container(
             content=self.content_text,
             expand=True,
@@ -49,6 +87,11 @@ class MemoryRow(ft.DataRow):
             expand=True,
             visible=False,
             alignment=ft.alignment.top_left,
+        )
+
+        self.importance_text = ft.Text(self._importance_label(memory))
+        self.importance_dropdown = importance_dropdown(
+            memory.importance, width=90, visible=False
         )
 
         self.edit_btn = ft.IconButton(icon=ft.icons.EDIT, tooltip="Редактирай", on_click=self._edit)
@@ -76,14 +119,21 @@ class MemoryRow(ft.DataRow):
                     scroll=ft.ScrollMode.AUTO,
                 )
             ),
+            ft.DataCell(ft.Row([self.importance_text, self.importance_dropdown])),
             ft.DataCell(self.status_text),
             ft.DataCell(self.actions_row),
         ]
+
+    @staticmethod
+    def _importance_label(memory) -> str:
+        return "" if memory.importance is None else str(memory.importance)
 
     # ------------------------------------------------------------- edit state
     def _set_editing(self, editing: bool):
         self.content_text_container.visible = not editing
         self.content_field_container.visible = editing
+        self.importance_text.visible = not editing
+        self.importance_dropdown.visible = editing
         self.edit_btn.visible = not editing
         self.save_btn.visible = editing
         self.cancel_btn.visible = editing
@@ -91,36 +141,57 @@ class MemoryRow(ft.DataRow):
             self.view,
             self.content_text_container,
             self.content_field_container,
+            self.importance_text,
+            self.importance_dropdown,
             self.edit_btn,
             self.save_btn,
             self.cancel_btn,
         )
 
-    def _edit(self, e):
+    def _reset_fields(self):
+        """Put the editors back to what the server last returned."""
         self.content_field.value = self.memory.content or ""
+        self.importance_dropdown.value = str(importance_or_default(self.memory.importance))
+
+    def _edit(self, e):
+        self._reset_fields()
         self._set_editing(True)
 
     def _cancel(self, e):
-        self.content_field.value = self.memory.content or ""
+        self._reset_fields()
         self._set_editing(False)
 
     def apply(self, memory):
         """Refresh the row from a server response without rebuilding the table."""
         self.memory = memory
         self.content_text.value = memory.content or ""
-        self.content_field.value = memory.content or ""
+        self.content_text.tooltip = fact_key_tooltip(memory)
+        self.importance_text.value = self._importance_label(memory)
+        self._reset_fields()
         self.status_text.value = memory.status or ""
         self.activate_btn.visible = memory.status == "candidate"
-        safe_update(self.view, self.content_text, self.status_text, self.activate_btn)
+        safe_update(
+            self.view,
+            self.content_text,
+            self.importance_text,
+            self.status_text,
+            self.activate_btn,
+        )
 
     async def _save(self, e):
         if self._saving or not self.memory.id:
             return
 
         new_content = (self.content_field.value or "").strip()
-        if not new_content or new_content == (self.memory.content or ""):
+        new_importance = int(
+            self.importance_dropdown.value or importance_or_default(self.memory.importance)
+        )
+        unchanged = new_content == (self.memory.content or "") and (
+            new_importance == importance_or_default(self.memory.importance)
+        )
+        if not new_content or unchanged:
             # Nothing changed, or the user tried to save an empty memory.
-            self.content_field.value = self.memory.content or ""
+            self._reset_fields()
             self._set_editing(False)
             return
 
@@ -132,7 +203,7 @@ class MemoryRow(ft.DataRow):
                 memory_id=self.memory.id,
                 content=new_content,
                 status=self.memory.status,
-                importance=self.memory.importance if self.memory.importance is not None else 0,
+                importance=new_importance,
             )
         except asyncio.CancelledError:
             raise
@@ -157,7 +228,7 @@ class MemoryRow(ft.DataRow):
                 memory_id=self.memory.id,
                 content=self.memory.content,
                 status="active",
-                importance=self.memory.importance if self.memory.importance is not None else 0,
+                importance=importance_or_default(self.memory.importance),
             )
         except asyncio.CancelledError:
             raise
@@ -223,11 +294,18 @@ class MemoryView(ft.Container):
             on_click=self.on_refresh_click,
         )
 
+        self.new_btn = ft.ElevatedButton(
+            "Нов спомен",
+            icon=ft.icons.ADD,
+            on_click=self.on_new_click,
+        )
+
         self.progress = ft.ProgressRing(width=16, height=16, stroke_width=2, visible=False)
 
         self.data_table = ft.DataTable(
             columns=[
                 ft.DataColumn(ft.Text("Съдържание")),
+                ft.DataColumn(ft.Text("Важност", tooltip="От 1 (дреболия) до 10 (критично)")),
                 ft.DataColumn(ft.Text("Статус")),
                 ft.DataColumn(ft.Text("Действия")),
             ],
@@ -241,7 +319,7 @@ class MemoryView(ft.Container):
         self.content = ft.Column(
             controls=[
                 ft.Row(
-                    [self.status_dropdown, self.refresh_btn, self.progress],
+                    [self.status_dropdown, self.refresh_btn, self.new_btn, self.progress],
                     alignment=ft.MainAxisAlignment.CENTER,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
@@ -255,6 +333,34 @@ class MemoryView(ft.Container):
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             expand=True,
         )
+
+        self.new_content_field = ft.TextField(
+            label="Спомен",
+            hint_text="Напр. Предпочитам кратки отговори.",
+            multiline=True,
+            min_lines=3,
+            max_lines=8,
+            autofocus=True,
+        )
+        self.new_importance = importance_dropdown(
+            None, label="Важност", width=120
+        )
+        self.new_save_btn = ft.TextButton("Запази", on_click=self.on_new_save)
+        self.new_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Нов спомен"),
+            content=ft.Column(
+                [self.new_content_field, self.new_importance],
+                tight=True,
+                width=480,
+            ),
+            actions=[
+                ft.TextButton("Отказ", on_click=self.on_new_cancel),
+                self.new_save_btn,
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self._creating = False
 
         self._filter_task = None
         self._load_task = None
@@ -318,6 +424,66 @@ class MemoryView(ft.Container):
     async def on_refresh_click(self, e):
         await self.load_memories()
 
+    # ------------------------------------------------------------ new memory
+    def on_new_click(self, e):
+        self.new_content_field.value = ""
+        self.new_content_field.error_text = None
+        self.new_importance.value = str(DEFAULT_IMPORTANCE)
+        self.page.open(self.new_dialog)
+
+    def on_new_cancel(self, e):
+        self.page.close(self.new_dialog)
+
+    def _show_new_error(self, message: str):
+        self.new_content_field.error_text = message
+        safe_update(self.new_dialog, self.new_content_field)
+
+    async def on_new_save(self, e):
+        if self._creating:
+            return
+        content = (self.new_content_field.value or "").strip()
+        if not content:
+            self._show_new_error("Въведи текст на спомена.")
+            return
+
+        self._creating = True
+        self.new_save_btn.disabled = True
+        safe_update(self.new_dialog, self.new_save_btn)
+        try:
+            await self.api_client.create_memory(
+                content=content,
+                status=NEW_MEMORY_STATUS,
+                importance=int(self.new_importance.value or DEFAULT_IMPORTANCE),
+            )
+        except asyncio.CancelledError:
+            raise
+        except APIError as ex:
+            logger.error("Failed to create memory: %s", ex)
+            # 409: the backend already holds a memory with exactly this text.
+            self._show_new_error(
+                "Такъв спомен вече съществува." if ex.status == 409 else str(ex)
+            )
+            return
+        except Exception as ex:  # noqa: BLE001
+            logger.error("Failed to create memory: %s", ex)
+            self._show_new_error(
+                "Бекендът не е достъпен."
+                if isinstance(ex, httpx.TransportError)
+                else "Неуспешно запазване на спомена."
+            )
+            return
+        finally:
+            self._creating = False
+            self.new_save_btn.disabled = False
+            safe_update(self.new_dialog, self.new_save_btn)
+
+        self.page.close(self.new_dialog)
+        show_snackbar(self.page, "Споменът е добавен!", success=True)
+        # Re-read instead of inserting locally: the active status filter decides
+        # whether the new memory belongs in the table at all.
+        await self.load_memories()
+
+    # ----------------------------------------------------------------- table
     def update_table(self):
         self.data_table.rows.clear()
         for memory in self.memories:
@@ -343,5 +509,3 @@ class MemoryView(ft.Container):
             pass
         self.empty_hint.visible = not self.memories
         safe_update(self, self.data_table, self.empty_hint)
-
-

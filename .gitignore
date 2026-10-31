@@ -7,3 +7,8 @@ settings.json
 *.tmp
 .coverage
 flet_output.log
+settings.json.broken.*
+settings.tmp.*
+.pytest_cache/
+.ruff_cache/
+app.log.*
