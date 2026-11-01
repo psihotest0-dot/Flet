@@ -25,7 +25,7 @@
   `{id, user_id, session_id, role, content, created_at, sources?: [...]}`. `sources[]`: `{chunk_id, file_name, page_number?, content_snippet, score (0–100), score_type ("cosine"|"rrf"), source_type ("memory"|"concept"|"text"|"ocr")}`.
 - `POST /chat/stream` (SSE): първо `event: sources` (JSON масив); после `data: {"reasoning_content": "..."}` и/или `data: {"content": "..."}`; край `data: [DONE]`;
   грешка = `event: error` с `{"error": "..."}`. `POST /chat/regenerate` — същият формат. **Мисленето се скрива във Flet и така остава** (клиентът игнорира `reasoning_content`).
-- **Предложения (бекенд задача 34).** Асистентът не записва глобално правило сам, а спомен — само ако в хода не е чел външен текст; иначе оставя *предложение*.
+- **Предложения (бекенд задача 34).** Асистентът не записва глобално правило сам, а оставя *предложение*. Споменът се записва веднага (решение на собственика, 2026-11-01); `kind: "create_memory"` още се обработва от API-то и картата, но бекендът вече не го създава.
   SSE: преди `[DONE]` идва `event: proposals` с JSON масив `{id, kind ("save_global_rule"|"create_memory"), summary, key?, value?, content?, importance?, external_sources[], session_id, created_at}`.
   `GET /proposals` (отворените, от старо към ново), `POST /proposals/{id}/approve` и `/reject` (404 няма такова, 409 вече решено, **422** би надвишило лимита от 20 правила — остава отворено).
   `GET /rules` → `{id, key, value, enabled, updated_at}[]`, `DELETE /rules/{id}` (204/404). `external_sources` ∈ `web_search`, `web_fetch`, `search_documents`, `retrieved_documents`.

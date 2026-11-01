@@ -259,6 +259,13 @@ class MemoryRow(ft.DataRow):
             await self.view.api_client.delete_memory(self.memory.id)
         except asyncio.CancelledError:
             raise
+        except APIError as ex:
+            # 404: the memory is gone already (deleted from another client). What the
+            # user wanted is true, so the row goes too.
+            if ex.status != 404:
+                logger.error("Failed to delete memory: %s", ex)
+                show_snackbar(self.view.page, f"Грешка при изтриване на спомена: {ex}")
+                return
         except Exception as ex:  # noqa: BLE001
             logger.error("Failed to delete memory: %s", ex)
             show_snackbar(self.view.page, f"Грешка при изтриване на спомена: {ex}")

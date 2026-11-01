@@ -1061,6 +1061,40 @@ async def test_memory_row_delete_removes_row(mock_page, mock_api_client):
 
 
 @pytest.mark.asyncio
+async def test_memory_row_delete_of_a_memory_that_is_gone_removes_the_row(mock_page, mock_api_client):
+    # The backend answers 404 for a memory that does not exist any more.
+    view, row = _memory_row(
+        mock_page, mock_api_client, Memory(id="m1", content="a", status="active")
+    )
+    mock_api_client.delete_memory = AsyncMock(side_effect=APIError(404, "memory not found"))
+
+    with patch("views.memory.safe_update"), patch(
+        "views.memory.confirm_dialog", new=AsyncMock(return_value=True)
+    ):
+        await row._delete(None)
+
+    assert view.data_table.rows == []
+    assert view.memories == []
+    mock_page.open.assert_not_called()  # no error snackbar: nothing went wrong
+
+
+@pytest.mark.asyncio
+async def test_memory_row_delete_error_keeps_row_and_says_so(mock_page, mock_api_client):
+    view, row = _memory_row(
+        mock_page, mock_api_client, Memory(id="m1", content="a", status="active")
+    )
+    mock_api_client.delete_memory = AsyncMock(side_effect=APIError(500, "internal server error"))
+
+    with patch("views.memory.safe_update"), patch(
+        "views.memory.confirm_dialog", new=AsyncMock(return_value=True)
+    ):
+        await row._delete(None)
+
+    assert view.data_table.rows == [row]
+    assert "Грешка при изтриване" in mock_page.open.call_args.args[0].content.value
+
+
+@pytest.mark.asyncio
 async def test_memory_row_delete_cancelled_keeps_row(mock_page, mock_api_client):
     view, row = _memory_row(
         mock_page, mock_api_client, Memory(id="m1", content="a", status="active")
