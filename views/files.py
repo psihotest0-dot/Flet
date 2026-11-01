@@ -8,7 +8,7 @@ from pathlib import Path
 
 import flet as ft
 
-from api.client import APIClient, IngestedFile
+from api.client import SUPPORTED_EXTENSIONS, APIClient, IngestedFile, is_supported_file
 from views.ui_utils import confirm_dialog, safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
@@ -94,7 +94,11 @@ class FilesView(ft.Container):
         self.upload_btn = ft.ElevatedButton(
             "Качи файл",
             icon=ft.icons.UPLOAD_FILE,
-            on_click=lambda _: self.file_picker.pick_files(allow_multiple=True),
+            on_click=lambda _: self.file_picker.pick_files(
+                allow_multiple=True,
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=list(SUPPORTED_EXTENSIONS),
+            ),
         )
 
         self.upload_progress = ft.ProgressRing(
@@ -270,11 +274,17 @@ class FilesView(ft.Container):
 
         sem = asyncio.Semaphore(3)
         errors: list[str] = []
+        duplicates: list[str] = []
 
         async def upload_single_file(f):
             async with sem:
                 try:
                     if not f.path:
+                        return
+                    if not is_supported_file(f.name):
+                        # The picker is filtered, but a file can still arrive from
+                        # elsewhere; the backend would accept it and fail later.
+                        errors.append(f"{f.name}: форматът не се поддържа")
                         return
                     size = await asyncio.to_thread(lambda: Path(f.path).stat().st_size)
                     if size > MAX_UPLOAD_SIZE:
@@ -282,7 +292,9 @@ class FilesView(ft.Container):
                         return
                     # Reading is blocking, the upload itself is not.
                     content = await asyncio.to_thread(Path(f.path).read_bytes)
-                    await self.api_client.upload_file(content, f.name)
+                    result = await self.api_client.upload_file(content, f.name)
+                    if result.duplicate:
+                        duplicates.append(f.name)
                 except asyncio.CancelledError:
                     raise
                 except Exception as ex:  # noqa: BLE001
@@ -296,9 +308,15 @@ class FilesView(ft.Container):
             self.upload_progress.visible = False
             safe_update(self, self.upload_btn, self.upload_progress)
 
+        # A single snackbar for the batch instead of one per file; a snackbar
+        # replaces the previous one, so errors and duplicates share it.
+        notes = []
         if errors:
-            # A single snackbar for the batch instead of one per failed file.
-            show_snackbar(self.page, "Неуспешно качване: " + "; ".join(errors))
+            notes.append("Неуспешно качване: " + "; ".join(errors))
+        if duplicates:
+            notes.append("Файлът вече е качен: " + ", ".join(duplicates))
+        if notes:
+            show_snackbar(self.page, "\n".join(notes), success=not errors)
 
         await self.initial_load()
 

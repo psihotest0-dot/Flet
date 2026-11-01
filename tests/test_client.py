@@ -4,7 +4,15 @@ import httpx
 import pytest
 import respx
 
-from api.client import APIClient, APIError, IngestedFile, Memory
+from api.client import (
+    SUPPORTED_EXTENSIONS,
+    APIClient,
+    APIError,
+    IngestedFile,
+    Memory,
+    UploadResult,
+    is_supported_file,
+)
 
 
 @pytest.fixture
@@ -80,9 +88,11 @@ async def test_upload_file_success(client):
 
     result = await client.upload_file(b"test content", "test.txt", "text/plain")
 
-    assert isinstance(result, IngestedFile)
-    assert result.id == "123e4567-e89b-12d3-a456-426614174001"
-    assert result.file_name == "test.txt"
+    assert isinstance(result, UploadResult)
+    assert isinstance(result.file, IngestedFile)
+    assert result.file.id == "123e4567-e89b-12d3-a456-426614174001"
+    assert result.file.file_name == "test.txt"
+    assert result.duplicate is False
 
 
 @respx.mock
@@ -91,8 +101,9 @@ async def test_upload_file_conflict(client):
     respx.post("http://localhost:8080/v1/files").mock(return_value=httpx.Response(409, json={"id": "conflict_id", "file_name": "test.txt", "status": "completed"}))
 
     result = await client.upload_file(b"test content", "test.txt")
-    assert result.id == "conflict_id"
-    assert result.file_name == "test.txt"
+    assert result.duplicate is True
+    assert result.file.id == "conflict_id"
+    assert result.file.file_name == "test.txt"
 
 
 @pytest.mark.asyncio
@@ -601,3 +612,23 @@ async def test_create_memory_always_sends_a_valid_importance(client):
 
     sent = [json.loads(call.request.content) for call in route.calls]
     assert [body["importance"] for body in sent] == [5, 9]
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["a.txt", "A.PDF", "book.epub", "scan.TIFF", "photo.jpeg", "notes.md", "table.xlsx", "page.htm"],
+)
+def test_supported_files(name):
+    assert is_supported_file(name)
+
+
+@pytest.mark.parametrize(
+    "name", ["old.doc", "text.rtf", "slides.pptx", "archive.zip", "noextension", ".txt.bak", "logo.svg", ""]
+)
+def test_unsupported_files(name):
+    assert not is_supported_file(name)
+
+
+def test_picker_extensions_are_lowercase_without_dots():
+    # FilePicker wants bare extensions.
+    assert all(ext == ext.lower() and "." not in ext for ext in SUPPORTED_EXTENSIONS)

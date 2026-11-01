@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -20,6 +21,21 @@ logger = logging.getLogger(__name__)
 MIN_IMPORTANCE = 1
 MAX_IMPORTANCE = 10
 DEFAULT_IMPORTANCE = 5
+
+# File types the backend can turn into text (internal/ingest in C:\GO): text
+# formats, documents and images (OCR). The upload endpoint accepts anything, but
+# any other file ends as a failed ingest, so the picker offers only these.
+SUPPORTED_EXTENSIONS = (
+    "txt", "md", "csv", "json", "yaml", "yml", "log",
+    "html", "htm", "pdf", "docx", "xlsx", "epub",
+    "png", "jpg", "jpeg", "tif", "tiff", "bmp",
+)
+
+
+def is_supported_file(filename: str) -> bool:
+    """Whether the backend can read a file with this name (by its extension)."""
+    _, dot, ext = filename.rpartition(".")
+    return bool(dot) and ext.lower() in SUPPORTED_EXTENSIONS
 
 
 class Message(BaseModel):
@@ -114,6 +130,13 @@ class IngestedFile(BaseModel):
     updated_at: datetime | None = None
 
 
+@dataclass(frozen=True)
+class UploadResult:
+    """The outcome of an upload: the stored file, and whether it was already there."""
+    file: IngestedFile
+    duplicate: bool = False
+
+
 class APIClient:
     """Client for making asynchronous requests to the AI agent backend API."""
     def __init__(self, base_url: str, user_id: str):
@@ -147,8 +170,12 @@ class APIClient:
             logger.debug(f"Health check failed: {e}")
             return False
 
-    async def upload_file(self, file_content: bytes, filename: str, mime_type: str = "application/octet-stream") -> IngestedFile:
-        """Upload a file to the backend."""
+    async def upload_file(self, file_content: bytes, filename: str, mime_type: str = "application/octet-stream") -> UploadResult:
+        """Upload a file to the backend.
+
+        A file the backend already holds (same content) is not an error: the
+        result carries the existing file with ``duplicate=True``.
+        """
         if len(file_content) > 100 * 1024 * 1024:
             raise ValueError("File too large. Maximum size is 100MB.")
         headers = {"X-User-ID": self.user_id}
@@ -164,9 +191,9 @@ class APIClient:
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 409:
                 await e.response.aread()
-                return IngestedFile(**e.response.json())
+                return UploadResult(IngestedFile(**e.response.json()), duplicate=True)
             raise APIError.from_response(response) from e
-        return IngestedFile(**response.json())
+        return UploadResult(IngestedFile(**response.json()))
 
     async def delete_file(self, file_id: str) -> None:
         """Delete a file by its ID."""

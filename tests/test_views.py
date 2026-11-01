@@ -9,7 +9,15 @@ import flet as ft
 import httpx
 import pytest
 
-from api.client import APIError, IngestedFile, Memory, Message, StreamError
+from api.client import (
+    SUPPORTED_EXTENSIONS,
+    APIError,
+    IngestedFile,
+    Memory,
+    Message,
+    StreamError,
+    UploadResult,
+)
 from state.settings import Settings, load_settings, save_settings
 from views.chat import HISTORY_PAGE_SIZE, ChatView, _normalize_chat_sessions
 from views.files import FilesView, embedding_state
@@ -768,7 +776,7 @@ def test_embedding_state_maps_backend_statuses(file, expected):
 async def test_failed_upload_shows_the_backend_text(
     mock_page, mock_api_client, tmp_path
 ):
-    picked = tmp_path / "big.bin"
+    picked = tmp_path / "big.pdf"
     picked.write_bytes(b"x")
     mock_api_client.upload_file = AsyncMock(side_effect=APIError(413, "file too large"))
     view = FilesView(mock_page, mock_api_client)
@@ -777,11 +785,120 @@ async def test_failed_upload_shows_the_backend_text(
         "views.files.show_snackbar"
     ) as snackbar:
         await view.on_file_picker_result(
-            SimpleNamespace(files=[SimpleNamespace(name="big.bin", path=str(picked))])
+            SimpleNamespace(files=[SimpleNamespace(name="big.pdf", path=str(picked))])
         )
 
     snackbar.assert_called_once()
-    assert "big.bin: file too large" in snackbar.call_args.args[1]
+    assert "big.pdf: file too large" in snackbar.call_args.args[1]
+
+
+def _picked(tmp_path, *names):
+    """Files as the picker reports them: a name and a path on disk."""
+    files = []
+    for name in names:
+        path = tmp_path / name
+        path.write_bytes(b"x")
+        files.append(SimpleNamespace(name=name, path=str(path)))
+    return SimpleNamespace(files=files)
+
+
+@pytest.mark.asyncio
+async def test_unsupported_file_is_not_uploaded(mock_page, mock_api_client, tmp_path):
+    mock_api_client.upload_file = AsyncMock(
+        return_value=UploadResult(IngestedFile(id="1", file_name="ok.txt"))
+    )
+    view = FilesView(mock_page, mock_api_client)
+
+    with patch("views.files.safe_update"), patch(
+        "views.files.show_snackbar"
+    ) as snackbar:
+        await view.on_file_picker_result(_picked(tmp_path, "letter.doc", "slides.pptx", "ok.txt"))
+
+    # Only the supported file reaches the backend.
+    assert [c.args[1] for c in mock_api_client.upload_file.call_args_list] == ["ok.txt"]
+    message = snackbar.call_args.args[1]
+    assert "letter.doc: форматът не се поддържа" in message
+    assert "slides.pptx: форматът не се поддържа" in message
+    assert snackbar.call_args.kwargs.get("success") is False
+
+
+@pytest.mark.asyncio
+async def test_duplicate_upload_is_announced(mock_page, mock_api_client, tmp_path):
+    existing = IngestedFile(id="1", file_name="book.pdf", status="completed")
+
+    # Uploads run concurrently, so the answer must depend on the file, not on
+    # the order of the calls.
+    async def upload(_content, name, *_args):
+        return UploadResult(existing, duplicate=True) if name == "book.pdf" else UploadResult(
+            IngestedFile(id="2", file_name=name)
+        )
+
+    mock_api_client.upload_file = AsyncMock(side_effect=upload)
+    view = FilesView(mock_page, mock_api_client)
+
+    with patch("views.files.safe_update"), patch(
+        "views.files.show_snackbar"
+    ) as snackbar:
+        await view.on_file_picker_result(_picked(tmp_path, "book.pdf", "new.txt"))
+
+    snackbar.assert_called_once()
+    assert snackbar.call_args.args[1] == "Файлът вече е качен: book.pdf"
+    # Not an error: a duplicate is shown as information, not in red.
+    assert snackbar.call_args.kwargs.get("success") is True
+
+
+@pytest.mark.asyncio
+async def test_new_file_and_duplicate_are_reported_together_with_errors(
+    mock_page, mock_api_client, tmp_path
+):
+    async def upload(_content, name, *_args):
+        if name == "b.pdf":
+            raise APIError(413, "file too large")
+        return UploadResult(IngestedFile(id="1", file_name=name), duplicate=True)
+
+    mock_api_client.upload_file = AsyncMock(side_effect=upload)
+    view = FilesView(mock_page, mock_api_client)
+
+    with patch("views.files.safe_update"), patch(
+        "views.files.show_snackbar"
+    ) as snackbar:
+        await view.on_file_picker_result(_picked(tmp_path, "a.pdf", "b.pdf"))
+
+    message = snackbar.call_args.args[1]
+    assert "Неуспешно качване: b.pdf: file too large" in message
+    assert "Файлът вече е качен: a.pdf" in message
+    assert snackbar.call_args.kwargs.get("success") is False
+
+
+@pytest.mark.asyncio
+async def test_a_plain_upload_shows_no_message(mock_page, mock_api_client, tmp_path):
+    mock_api_client.upload_file = AsyncMock(
+        return_value=UploadResult(IngestedFile(id="1", file_name="a.txt"))
+    )
+    view = FilesView(mock_page, mock_api_client)
+
+    with patch("views.files.safe_update"), patch(
+        "views.files.show_snackbar"
+    ) as snackbar:
+        await view.on_file_picker_result(_picked(tmp_path, "a.txt"))
+
+    snackbar.assert_not_called()
+
+
+def test_file_picker_offers_only_supported_extensions(mock_page, mock_api_client):
+    view = FilesView(mock_page, mock_api_client)
+    view.file_picker.pick_files = MagicMock()
+
+    view.upload_btn.on_click(None)
+
+    kwargs = view.file_picker.pick_files.call_args.kwargs
+    assert kwargs["file_type"] == ft.FilePickerFileType.CUSTOM
+    assert kwargs["allowed_extensions"] == list(SUPPORTED_EXTENSIONS)
+    assert kwargs["allow_multiple"] is True
+    for ext in ("pdf", "docx", "epub", "txt", "png"):
+        assert ext in kwargs["allowed_extensions"]
+    for ext in ("doc", "rtf", "zip"):
+        assert ext not in kwargs["allowed_extensions"]
 
 
 def test_embedding_state_explains_an_empty_file():
