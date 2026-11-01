@@ -6,13 +6,13 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import Callable
+from collections.abc import Callable
 
 import flet as ft
 import httpx
 
 from api.client import APIClient, APIError, Proposal, StreamError
-from state.settings import Settings, load_settings, save_settings
+from state.settings import DEFAULT_DISPLAY_NAME, Settings, load_settings, save_settings
 from views.proposals import ProposalCard
 from views.ui_utils import describe_error, safe_update, show_snackbar
 
@@ -40,10 +40,62 @@ def _get_mock_sources():
     ]
 
 
+# What the backend's ``source_type`` is called in the sources panel.
+SOURCE_TYPE_LABELS = {
+    "memory": "Памет",
+    "concept": "Концепция",
+    "text": "Текст",
+    "ocr": "OCR",
+}
+# How the backend's ``score_type`` is called next to the score.
+SCORE_TYPE_LABELS = {
+    "cosine": "косинусово",
+    "rrf": "RRF",
+}
+DEFAULT_SOURCE_LABEL = "Документ"
+
+
+def source_type_label(source_type) -> str:
+    """The panel's name of a ``source_type``; an unknown one is shown as it came."""
+    key = str(source_type).strip() if source_type else ""
+    if not key:
+        return DEFAULT_SOURCE_LABEL
+    return SOURCE_TYPE_LABELS.get(key.lower(), key)
+
+
+def format_source_score(score, score_type=None) -> str:
+    """Format a source's score for the panel.
+
+    The backend sends the score on a 0-100 scale (it multiplies cosine scores by
+    100 and normalises RRF ones), so the number is shown as it is - this client
+    used to guess the scale and turned a real 0.8 % into 80 %. A value that is
+    not a number is shown as text.
+    """
+    try:
+        text = f"{float(score):.1f}%"
+    except (ValueError, TypeError) as e:
+        logger.warning("Failed to convert score '%s' to float: %s", score, e)
+        text = str(score)
+    kind = str(score_type).strip() if score_type else ""
+    if not kind:
+        return text
+    return f"{text} ({SCORE_TYPE_LABELS.get(kind.lower(), kind)})"
+
+
+def source_details(src: dict) -> str:
+    """The grey line under a source's title: type, page (if known) and score."""
+    parts = [source_type_label(src.get("source_type") or src.get("type"))]
+    page_number = src.get("page_number")
+    if page_number not in (None, ""):
+        parts.append(f"стр. {page_number}")
+    parts.append(f"Сходство: {format_source_score(src.get('score', 'N/A'), src.get('score_type'))}")
+    return "• " + " • ".join(parts)
+
+
 class ChatMessage(ft.Column):
     """A component representing a single chat message in the UI."""
 
-    def __init__(self, role: str, text: str, sources: list | None = None, page: ft.Page | None = None, on_regenerate: callable | None = None, api_client: APIClient | None = None):
+    def __init__(self, role: str, text: str, sources: list | None = None, page: ft.Page | None = None, on_regenerate: callable | None = None, api_client: APIClient | None = None, user_name: str = DEFAULT_DISPLAY_NAME):
         super().__init__()
         self.role = role
         self.api_client = api_client
@@ -55,7 +107,7 @@ class ChatMessage(ft.Column):
         self.horizontal_alignment = ft.CrossAxisAlignment.END if role == "user" else ft.CrossAxisAlignment.START
 
         self.text_color = ft.colors.LIGHT_BLUE_200 if role == "user" else ft.colors.PINK_200
-        self.sender_name = "Ивайло" if role == "user" else "Лили"
+        self.sender_name = user_name if role == "user" else "Лили"
         self.bgcolor = ft.colors.BLUE_GREY_800 if role == "user" else ft.colors.BLUE_GREY_900
 
         self.md = ft.Markdown(
@@ -272,27 +324,13 @@ class ChatMessage(ft.Column):
             if not isinstance(src, dict):
                 src = {"title": str(src)}
             title = src.get("title") or src.get("file_name") or "Unknown"
-            src_type = src.get("type") or src.get("source_type") or "Документ"
-            score = src.get("score", "N/A")
             snippet = src.get("content_snippet") or src.get("text_snippet") or src.get("text") or ""
-
-            # If score is a number, format it, otherwise leave as is
-            try:
-                score_float = float(score)
-                # Ensure it looks like a percentage if it's 0-1 or 0-100
-                if score_float <= 1.0:
-                    score_str = f"{score_float*100:.1f}%"
-                else:
-                    score_str = f"{score_float:.1f}%"
-            except (ValueError, TypeError) as e:
-                logger.warning("Failed to convert score '%s' to float: %s", score, e)
-                score_str = str(score)
 
             item = ft.Container(
                 content=ft.Column([
                     ft.Row([
                         ft.Text(title, weight=ft.FontWeight.BOLD, size=16),
-                        ft.Text(f"• {src_type} • Сходство: {score_str}", size=12, color=ft.colors.GREY_400)
+                        ft.Text(source_details(src), size=12, color=ft.colors.GREY_400)
                     ]),
                     ft.Text(snippet, selectable=True, size=14, color=ft.colors.GREY_300)
                 ]),
@@ -451,7 +489,10 @@ class ChatView(ft.Container):
 
         # Never mint a new id while a saved chat exists: the dropdown has to
         # keep pointing at the session ids stored in settings.json.
-        self.session_id, chat_sessions = _ensure_chat_session(load_settings())
+        settings = load_settings()
+        self.session_id, chat_sessions = _ensure_chat_session(settings)
+        # How the user's own messages are labelled (the ``display_name`` setting).
+        self.display_name = settings.display_name
 
         self._stop_generation = False
         self._is_streaming = False
@@ -692,10 +733,24 @@ class ChatView(ft.Container):
             self._last_assistant_row = last_msg_obj._row
             last_msg_obj.set_regenerate_visible(True)
 
+    def set_display_name(self, name: str) -> None:
+        """Use ``name`` for the user's messages, the ones already on screen too."""
+        self.display_name = name
+        changed = []
+        for row in self.chat_list.controls:
+            container = row.controls[0] if getattr(row, "controls", None) else None
+            message = getattr(container, "content", None)
+            if isinstance(message, ChatMessage) and message.role == "user":
+                message.sender_name = name
+                message.sender_label.value = name
+                changed.append(message.sender_label)
+        if changed:
+            safe_update(self, *changed)
+
     def add_message(self, role: str, text: str, sources: list | None = None, notify: bool = True) -> ChatMessage:
         is_user = role == "user"
         on_regenerate = self.regenerate_last if not is_user else None
-        chat_message = ChatMessage(role=role, text=text, sources=sources, page=self.page, on_regenerate=on_regenerate, api_client=self.api_client)
+        chat_message = ChatMessage(role=role, text=text, sources=sources, page=self.page, on_regenerate=on_regenerate, api_client=self.api_client, user_name=self.display_name)
 
         container_wrapper = ft.Container(
             content=chat_message,

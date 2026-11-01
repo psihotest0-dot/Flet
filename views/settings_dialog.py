@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-"""Settings dialog: backend address, connection check and the user_id."""
+"""Settings dialog: backend address, connection check, chat name and the user_id."""
 
 import asyncio
 import logging
-from typing import Callable
+from collections.abc import Callable
 from urllib.parse import urlsplit
 
 import flet as ft
 
 from api.client import APIClient
+from state.settings import DEFAULT_DISPLAY_NAME, MAX_DISPLAY_NAME_CHARS
 from views.ui_utils import safe_update
 
 logger = logging.getLogger(__name__)
@@ -46,11 +47,20 @@ def validate_base_url(value: str | None) -> str:
     return url.rstrip("/")
 
 
-class SettingsDialog:
-    """Modal dialog for the Base URL and a read-only view of the ``user_id``.
+def clean_display_name(value: str | None) -> str:
+    """The name for the user's chat messages: trimmed, at most the allowed length.
 
-    Saving only validates and hands the clean URL to ``on_save``; persisting it
-    and swapping the API client stays with the app (``main.py``).
+    A blank name means "the default", as in ``Settings``.
+    """
+    name = (value or "").strip()[:MAX_DISPLAY_NAME_CHARS].strip()
+    return name or DEFAULT_DISPLAY_NAME
+
+
+class SettingsDialog:
+    """Modal dialog for the Base URL, the chat name and a read-only ``user_id``.
+
+    Saving only validates and hands the clean URL and name to ``on_save``;
+    persisting them and swapping the API client stays with the app (``main.py``).
     """
 
     def __init__(
@@ -58,7 +68,8 @@ class SettingsDialog:
         page: ft.Page,
         user_id: str | None,
         base_url: str,
-        on_save: Callable[[str], None],
+        on_save: Callable[[str, str], None],
+        display_name: str = DEFAULT_DISPLAY_NAME,
     ):
         self.page = page
         self.user_id = user_id or ""
@@ -79,6 +90,14 @@ class SettingsDialog:
             width=16, height=16, stroke_width=2, visible=False
         )
         self.check_result = ft.Text("", size=13, visible=False)
+
+        self.display_name_field = ft.TextField(
+            label="Име в чата",
+            value=display_name,
+            max_length=MAX_DISPLAY_NAME_CHARS,
+            helper_text=f"Как се казваш в чата. Празно = „{DEFAULT_DISPLAY_NAME}“.",
+            on_submit=self._save,
+        )
 
         self.user_id_field = ft.TextField(
             label="User ID",
@@ -104,6 +123,7 @@ class SettingsDialog:
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     self.check_result,
+                    self.display_name_field,
                     ft.Divider(),
                     ft.Row([self.user_id_field, self.copy_btn]),
                     ft.Text(USER_ID_NOTE, size=12, color=ft.colors.GREY_500),
@@ -119,10 +139,11 @@ class SettingsDialog:
         )
 
     # ------------------------------------------------------------------ open
-    def open(self, base_url: str) -> None:
-        """Show the dialog with the currently saved address and a clean state."""
+    def open(self, base_url: str, display_name: str = DEFAULT_DISPLAY_NAME) -> None:
+        """Show the dialog with the currently saved values and a clean state."""
         self.base_url_field.value = base_url
         self.base_url_field.error_text = None
+        self.display_name_field.value = display_name
         self.check_result.visible = False
         self.copy_btn.icon = ft.icons.COPY
         self.copy_btn.icon_color = None
@@ -137,7 +158,7 @@ class SettingsDialog:
         if url is None:
             return
         self.page.close(self.dialog)
-        self._on_save(url)
+        self._on_save(url, clean_display_name(self.display_name_field.value))
 
     def _validated_url(self) -> str | None:
         """The clean address, or ``None`` after marking the field as invalid."""

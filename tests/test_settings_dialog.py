@@ -5,7 +5,7 @@ import httpx
 import pytest
 import respx
 
-from views.settings_dialog import SettingsDialog, validate_base_url
+from views.settings_dialog import SettingsDialog, clean_display_name, validate_base_url
 
 USER_ID = "123e4567-e89b-12d3-a456-426614174000"
 SAVED_URL = "http://127.0.0.1:8080"
@@ -13,12 +13,15 @@ SAVED_URL = "http://127.0.0.1:8080"
 
 @pytest.fixture
 def saved():
+    """What ``on_save`` received, as ``(url, display_name)`` pairs."""
     return []
 
 
 @pytest.fixture
 def dialog(mock_page, saved):
-    return SettingsDialog(mock_page, USER_ID, SAVED_URL, on_save=saved.append)
+    return SettingsDialog(
+        mock_page, USER_ID, SAVED_URL, on_save=lambda url, name: saved.append((url, name))
+    )
 
 
 # ----------------------------------------------------------------- validation
@@ -81,7 +84,7 @@ def test_valid_url_is_saved_normalised_and_closes_the_dialog(dialog, saved, mock
 
     dialog._save(None)
 
-    assert saved == ["http://127.0.0.1:9000"]
+    assert saved == [("http://127.0.0.1:9000", "Ти")]
     assert not dialog.base_url_field.error_text
     mock_page.close.assert_called_once_with(dialog.dialog)
 
@@ -101,9 +104,12 @@ def test_open_resets_what_was_typed_and_shown_before(dialog, mock_page):
     dialog._show_result("Няма връзка", ft.colors.RED)
     dialog._copy_user_id(None)
 
-    dialog.open(SAVED_URL)
+    dialog.display_name_field.value = "typed but not saved"
+
+    dialog.open(SAVED_URL, "Иван")
 
     assert dialog.base_url_field.value == SAVED_URL
+    assert dialog.display_name_field.value == "Иван"
     assert not dialog.base_url_field.error_text
     assert dialog.check_result.visible is False
     assert dialog.copy_btn.icon == ft.icons.COPY
@@ -190,3 +196,54 @@ async def test_check_connection_refuses_an_invalid_address_without_a_request(dia
     assert dialog.base_url_field.error_text
     assert dialog.check_result.visible is False
     assert dialog.check_btn.disabled is False
+
+
+# ---------------------------------------------------------------- display name
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Иван", "Иван"),
+        ("  Иван Петров  ", "Иван Петров"),
+        ("", "Ти"),
+        ("   ", "Ти"),
+        (None, "Ти"),
+        ("я" * 100, "я" * 40),
+    ],
+)
+def test_clean_display_name(raw, expected):
+    assert clean_display_name(raw) == expected
+
+
+def test_chat_name_is_saved_with_the_address(dialog, saved):
+    dialog.display_name_field.value = "  Иван  "
+
+    dialog._save(None)
+
+    assert saved == [(SAVED_URL, "Иван")]
+
+
+def test_blank_chat_name_is_saved_as_the_default(dialog, saved):
+    dialog.display_name_field.value = "   "
+
+    dialog._save(None)
+
+    assert saved == [(SAVED_URL, "Ти")]
+
+
+def test_chat_name_is_not_saved_when_the_address_is_invalid(dialog, saved):
+    dialog.display_name_field.value = "Иван"
+    dialog.base_url_field.value = "ftp://host"
+
+    dialog._save(None)
+
+    assert saved == []
+
+
+def test_dialog_shows_the_saved_chat_name_and_limits_its_length(mock_page):
+    dialog = SettingsDialog(
+        mock_page, USER_ID, SAVED_URL, on_save=lambda url, name: None, display_name="Иван"
+    )
+
+    assert dialog.display_name_field.value == "Иван"
+    assert dialog.display_name_field.max_length == 40
+    assert dialog.display_name_field in dialog.dialog.content.controls

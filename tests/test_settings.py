@@ -174,3 +174,52 @@ def test_truncated_file_still_recovers_the_stored_ids(mock_settings_file):
     assert repaired["user_id"] == ORIGINAL_USER_ID
     assert repaired["session_id"] == ORIGINAL_SESSION_ID
 
+
+# ----------------------------------------------------------------- display_name
+def test_display_name_defaults_to_you():
+    assert Settings().display_name == "Ти"
+    assert load_settings().display_name == "Ти"
+
+
+def test_display_name_is_saved_and_loaded(mock_settings_file):
+    save_settings(Settings(display_name="Иван"))
+
+    assert load_settings().display_name == "Иван"
+    assert json.loads(mock_settings_file.read_text(encoding="utf-8"))["display_name"] == "Иван"
+
+
+@pytest.mark.parametrize("raw", ["", "   ", None, True, [], {"a": 1}])
+def test_blank_or_unusable_display_name_falls_back_to_the_default(raw):
+    assert Settings(display_name=raw).display_name == "Ти"
+
+
+def test_display_name_is_trimmed_and_limited():
+    assert Settings(display_name="  Иван  ").display_name == "Иван"
+    assert Settings(display_name="я" * 100).display_name == "я" * 40
+
+
+def test_old_settings_file_without_a_display_name_still_loads(mock_settings_file):
+    mock_settings_file.write_text(
+        json.dumps({"base_url": "http://example.com", "user_id": "u-1"}),
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+
+    assert settings.display_name == "Ти"
+    assert settings.user_id == "u-1"
+
+
+def test_unusable_display_name_in_the_file_does_not_cost_the_identity(
+    mock_settings_file,
+):
+    mock_settings_file.write_text(
+        json.dumps({"user_id": "u-1", "session_id": "s-1", "display_name": 42}),
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+
+    assert settings.user_id == "u-1"
+    assert settings.session_id == "s-1"
+    assert settings.display_name == "42"

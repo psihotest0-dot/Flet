@@ -96,12 +96,18 @@ def settings_dialog_spy(monkeypatch):
     captured: dict = {}
 
     class Spy:
-        def __init__(self, page, user_id, base_url, on_save):
-            captured.update(user_id=user_id, base_url=base_url, on_save=on_save)
+        def __init__(self, page, user_id, base_url, on_save, display_name="Ти"):
+            captured.update(
+                user_id=user_id,
+                base_url=base_url,
+                on_save=on_save,
+                display_name=display_name,
+                dialog=self,
+            )
             self.opened_with = []
 
-        def open(self, base_url):
-            self.opened_with.append(base_url)
+        def open(self, base_url, display_name="Ти"):
+            self.opened_with.append((base_url, display_name))
 
     monkeypatch.setattr(main_module, "SettingsDialog", Spy)
     return captured
@@ -124,7 +130,7 @@ def test_saving_settings_keeps_the_identity_and_swaps_the_client(
     assert settings_dialog_spy["user_id"] == USER_ID
     assert settings_dialog_spy["base_url"] == "http://localhost:8080"
 
-    settings_dialog_spy["on_save"]("http://127.0.0.1:9000")
+    settings_dialog_spy["on_save"]("http://127.0.0.1:9000", "Ти")
 
     saved = load_settings()
     assert saved.base_url == "http://127.0.0.1:9000"
@@ -135,6 +141,54 @@ def test_saving_settings_keeps_the_identity_and_swaps_the_client(
     assert chat_view.api_client is not previous_client
     assert chat_view.api_client.base_url == "http://127.0.0.1:9000"
     assert chat_view.api_client.user_id == USER_ID
+
+
+def test_dialog_is_built_with_the_saved_chat_name_and_reopens_with_it(
+    start_app, settings_dialog_spy, mock_page
+):
+    save_settings(Settings(user_id=USER_ID, display_name="Иван"))
+    start_app()
+    assert settings_dialog_spy["display_name"] == "Иван"
+
+    open_settings = mock_page.appbar.actions[0].on_click
+    open_settings(None)
+    settings_dialog_spy["on_save"]("http://localhost:8080", "Мария")
+    open_settings(None)
+
+    assert settings_dialog_spy["dialog"].opened_with == [
+        ("http://localhost:8080", "Иван"),
+        ("http://localhost:8080", "Мария"),
+    ]
+
+
+def test_saving_a_chat_name_persists_it_and_relabels_the_open_chat(
+    start_app, settings_dialog_spy
+):
+    save_settings(
+        Settings(
+            user_id=USER_ID,
+            session_id="session-1",
+            chat_sessions=[{"id": "session-1", "name": "Чат 1"}],
+        )
+    )
+    tabs = start_app()
+    chat_view = tabs.tabs[0].content
+    mine = chat_view.add_message("user", "здравей", notify=False)
+    answer = chat_view.add_message("assistant", "здрасти", notify=False)
+    assert mine.sender_label.value == "Ти"
+
+    settings_dialog_spy["on_save"]("http://localhost:8080", "Иван")
+
+    saved = load_settings()
+    assert saved.display_name == "Иван"
+    # The identity and the open chat are untouched by a rename.
+    assert saved.user_id == USER_ID
+    assert saved.session_id == "session-1"
+    # The messages already on screen and the next ones carry the new name; the
+    # assistant keeps its own.
+    assert mine.sender_label.value == "Иван"
+    assert chat_view.add_message("user", "пак", notify=False).sender_label.value == "Иван"
+    assert answer.sender_label.value == "Лили"
 
 
 @respx.mock

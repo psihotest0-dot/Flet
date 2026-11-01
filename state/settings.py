@@ -18,6 +18,11 @@ SETTINGS_FILE = Path(__file__).resolve().parent.parent / "settings.json"
 
 DEFAULT_BASE_URL = "http://localhost:8080"
 
+# How the user's own messages are labelled in the chat, and the longest name the
+# label is allowed to be (the settings dialog enforces the same limit).
+DEFAULT_DISPLAY_NAME = "Ти"
+MAX_DISPLAY_NAME_CHARS = 40
+
 # Matches the identifying fields even when the surrounding document is broken.
 _SCALAR_FIELD_PATTERN = re.compile(
     r'"(?P<key>base_url|user_id|session_id)"\s*:\s*"(?P<value>[^"\\]*)"'
@@ -94,11 +99,18 @@ class Settings(BaseModel):
     user_id: str | None = None
     session_id: str | None = None
     chat_sessions: list[dict] = []
+    display_name: str = DEFAULT_DISPLAY_NAME
 
     @field_validator("base_url", mode="before")
     @classmethod
     def _validate_base_url(cls, value: Any) -> str:
         return _clean_str(value) or DEFAULT_BASE_URL
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def _validate_display_name(cls, value: Any) -> str:
+        name = _clean_str(value)
+        return name[:MAX_DISPLAY_NAME_CHARS].strip() if name else DEFAULT_DISPLAY_NAME
 
     @field_validator("user_id", "session_id", mode="before")
     @classmethod

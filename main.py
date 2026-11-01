@@ -8,7 +8,7 @@ from pathlib import Path
 import flet as ft
 
 from api.client import APIClient
-from state.settings import load_settings, save_settings
+from state.settings import DEFAULT_DISPLAY_NAME, load_settings, save_settings
 from views.chat import ChatView
 from views.files import FilesView
 from views.memory import MemoryView
@@ -131,8 +131,8 @@ def main(page: ft.Page):
     # index -> view; tabs are created on first activation (see ensure_view below).
     views: dict[int, ft.Control] = {}
 
-    def apply_settings(new_url: str):
-        """Persist the validated Base URL and point every view at a new client."""
+    def apply_settings(new_url: str, display_name: str = DEFAULT_DISPLAY_NAME):
+        """Persist the validated Base URL and chat name; point every view at a new client."""
         nonlocal api_client
 
         # Re-read the file before writing: the chat view stores its session_id
@@ -140,6 +140,7 @@ def main(page: ft.Page):
         # would silently revert them to an older session.
         current = load_settings()
         current.base_url = new_url
+        current.display_name = display_name
         if not current.user_id:
             current.user_id = settings.user_id
         success = save_settings(current)
@@ -152,6 +153,7 @@ def main(page: ft.Page):
         settings.user_id = current.user_id
         settings.session_id = current.session_id
         settings.chat_sessions = current.chat_sessions
+        settings.display_name = current.display_name
 
         # The old client keeps pointing at the previous URL - replace it and
         # hand the new one to every view that was already created.
@@ -159,6 +161,8 @@ def main(page: ft.Page):
         api_client = APIClient(base_url=settings.base_url, user_id=settings.user_id)
         for view in views.values():
             view.api_client = api_client
+            if isinstance(view, ChatView):
+                view.set_display_name(settings.display_name)
         if previous_client is not None:
             page.run_task(previous_client.aclose)
 
@@ -169,10 +173,11 @@ def main(page: ft.Page):
         user_id=settings.user_id,
         base_url=settings.base_url,
         on_save=apply_settings,
+        display_name=settings.display_name,
     )
 
     def open_settings(e):
-        settings_dialog.open(settings.base_url)
+        settings_dialog.open(settings.base_url, settings.display_name)
 
     status_icon = ft.Icon(name=ft.icons.CIRCLE, color=ft.colors.RED, size=14, tooltip="Връзката е прекъсната")
 
