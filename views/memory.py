@@ -10,10 +10,12 @@ import httpx
 
 from api.client import (
     DEFAULT_IMPORTANCE,
+    MAX_CONTENT_BYTES,
     MAX_IMPORTANCE,
     MIN_IMPORTANCE,
     APIClient,
     APIError,
+    content_size,
 )
 from views.proposals import ProposalCard
 from views.ui_utils import confirm_dialog, safe_update, show_snackbar
@@ -40,6 +42,21 @@ def importance_or_default(value: int | None) -> int:
     if value is not None and MIN_IMPORTANCE <= value <= MAX_IMPORTANCE:
         return value
     return DEFAULT_IMPORTANCE
+
+
+def too_long_message(text: str) -> str | None:
+    """Why ``text`` cannot be saved as a memory, or ``None`` when it fits.
+
+    The backend measures bytes, not letters, and answers with "at most 32000
+    characters" - which reads as if a Cyrillic text of 20000 letters were fine.
+    """
+    size = content_size(text)
+    if size <= MAX_CONTENT_BYTES:
+        return None
+    return (
+        f"Текстът е твърде дълъг: {size} от най-много {MAX_CONTENT_BYTES} байта "
+        "(една кирилска буква е 2 байта). Съкрати го."
+    )
 
 
 def fact_key_tooltip(memory) -> str | None:
@@ -196,6 +213,12 @@ class MemoryRow(ft.DataRow):
             # Nothing changed, or the user tried to save an empty memory.
             self._reset_fields()
             self._set_editing(False)
+            return
+
+        too_long = too_long_message(new_content)
+        if too_long:
+            # Stay in edit mode so the text can be shortened.
+            show_snackbar(self.view.page, too_long)
             return
 
         self._saving = True
@@ -573,6 +596,10 @@ class MemoryView(ft.Container):
         content = (self.new_content_field.value or "").strip()
         if not content:
             self._show_new_error("Въведи текст на спомена.")
+            return
+        too_long = too_long_message(content)
+        if too_long:
+            self._show_new_error(too_long)
             return
 
         self._creating = True

@@ -3,14 +3,17 @@ import json
 import httpx
 import pytest
 import respx
+from tenacity import wait_none
 
 from api.client import (
+    MAX_CONTENT_BYTES,
     SUPPORTED_EXTENSIONS,
     APIClient,
     APIError,
     IngestedFile,
     Memory,
     UploadResult,
+    content_size,
     is_supported_file,
 )
 
@@ -597,6 +600,78 @@ async def test_stream_error_status_carries_the_backend_text(client):
     assert exc_info.value.status == 400
     assert exc_info.value.message == "no user message found to regenerate from"
 
+
+
+@pytest.fixture
+def no_retry_delay(monkeypatch):
+    """Skip tenacity's back-off so a retried GET does not slow the tests down."""
+    monkeypatch.setattr(APIClient._get.retry, "wait", wait_none())
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_does_not_repeat_a_rejected_request(client, no_retry_delay):
+    route = respx.get("http://localhost:8080/memories").mock(
+        return_value=httpx.Response(
+            400, text="status must be one of: candidate, active, superseded\n"
+        )
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        await client.list_memories(status="nope")
+
+    # A 4xx is final: one request, and the backend's text instead of a RetryError.
+    assert route.call_count == 1
+    assert exc_info.value.status == 400
+    assert exc_info.value.message == "status must be one of: candidate, active, superseded"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_repeats_a_server_error_and_then_raises_it(client, no_retry_delay):
+    route = respx.get("http://localhost:8080/v1/files").mock(
+        return_value=httpx.Response(503, text="database unavailable\n")
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        await client.list_files()
+
+    assert route.call_count == 3
+    assert exc_info.value.status == 503
+    assert exc_info.value.message == "database unavailable"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_recovers_from_a_transient_server_error(client, no_retry_delay):
+    route = respx.get("http://localhost:8080/v1/files").mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, json=[])]
+    )
+
+    assert await client.list_files() == []
+    assert route.call_count == 2
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_reports_an_unreachable_backend_as_the_connection_error(
+    client, no_retry_delay
+):
+    route = respx.get("http://localhost:8080/v1/files").mock(
+        side_effect=httpx.ConnectError("refused")
+    )
+
+    with pytest.raises(httpx.ConnectError):
+        await client.list_files()
+
+    assert route.call_count == 3
+
+
+def test_content_size_counts_utf8_bytes_like_the_backend():
+    assert MAX_CONTENT_BYTES == 32000
+    assert content_size("abc") == 3
+    # A Cyrillic letter is two bytes, so 16000 of them already reach the limit.
+    assert content_size("я" * 16000) == MAX_CONTENT_BYTES
 
 
 @respx.mock

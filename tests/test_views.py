@@ -19,7 +19,12 @@ from api.client import (
     UploadResult,
 )
 from state.settings import Settings, load_settings, save_settings
-from views.chat import HISTORY_PAGE_SIZE, ChatView, _normalize_chat_sessions
+from views.chat import (
+    HISTORY_PAGE_SIZE,
+    HISTORY_REQUEST_LIMIT,
+    ChatView,
+    _normalize_chat_sessions,
+)
 from views.files import FilesView, embedding_state
 from views.memory import MemoryView
 
@@ -135,14 +140,59 @@ async def test_load_history_ignores_stale_session(chat_view, mock_api_client):
 
 
 @pytest.mark.asyncio
-async def test_load_history_requests_a_full_page(chat_view, mock_api_client):
+async def test_load_history_requests_one_message_more_than_it_shows(
+    chat_view, mock_api_client
+):
     with mounted(ChatView):
         await chat_view.load_history()
 
-    # The backend returns only 50 messages unless it is asked for more.
+    # The backend returns only 50 messages unless it is asked for more; the extra
+    # one is how the view finds out that older messages exist.
+    assert HISTORY_REQUEST_LIMIT == HISTORY_PAGE_SIZE + 1
     mock_api_client.get_messages.assert_awaited_once_with(
-        session_id=chat_view.session_id, limit=HISTORY_PAGE_SIZE
+        session_id=chat_view.session_id, limit=HISTORY_REQUEST_LIMIT
     )
+
+
+def history_page(count: int) -> list[Message]:
+    """``count`` messages, oldest first, like the backend answers."""
+    return [Message(role="user", content=f"m{i}") for i in range(1, count + 1)]
+
+
+@pytest.mark.asyncio
+async def test_load_history_says_when_older_messages_are_hidden(
+    chat_view, mock_api_client
+):
+    mock_api_client.get_messages = AsyncMock(
+        return_value=history_page(HISTORY_REQUEST_LIMIT)
+    )
+
+    with mounted(ChatView):
+        await chat_view.load_history()
+
+    hint, *rows = chat_view.chat_list.controls
+    assert isinstance(hint, ft.Text)
+    assert str(HISTORY_PAGE_SIZE) in hint.value
+    # The newest messages stay; the oldest one - the extra - is dropped.
+    shown = [row.controls[0].content.md.value for row in rows]
+    assert len(shown) == HISTORY_PAGE_SIZE
+    assert shown[0] == "m2"
+    assert shown[-1] == f"m{HISTORY_REQUEST_LIMIT}"
+
+
+@pytest.mark.asyncio
+async def test_load_history_has_no_hint_when_everything_fits(
+    chat_view, mock_api_client
+):
+    mock_api_client.get_messages = AsyncMock(
+        return_value=history_page(HISTORY_PAGE_SIZE)
+    )
+
+    with mounted(ChatView):
+        await chat_view.load_history()
+
+    assert len(chat_view.chat_list.controls) == HISTORY_PAGE_SIZE
+    assert not any(isinstance(c, ft.Text) for c in chat_view.chat_list.controls)
 
 
 STORED_SOURCES = [
@@ -383,6 +433,42 @@ async def test_failed_regeneration_puts_the_previous_answer_back(
     assert old_answer.regenerate_btn.visible is True
     snackbar.assert_called_once()
     assert expected in snackbar.call_args.args[1]
+    assert chat_view._is_streaming is False
+    assert chat_view.send_btn.visible is True
+
+
+@pytest.mark.asyncio
+async def test_stopped_regeneration_puts_the_previous_answer_back(
+    chat_view, mock_api_client
+):
+    await load_answered_chat(chat_view, mock_api_client)
+    question_row, old_row = chat_view.chat_list.controls
+    old_answer = chat_view._last_assistant_msg
+
+    async def stream(**_kwargs):
+        yield {"content": "half of a new answ"}
+        # The user presses "Стоп" while the new answer is being written.
+        await chat_view.stop_generation_click(None)
+        yield {"content": "er that was never finished"}
+
+    mock_api_client.regenerate_chat = MagicMock(side_effect=lambda **kw: stream(**kw))
+
+    with patch("views.chat.show_snackbar") as snackbar:
+        await chat_view.regenerate_last()
+
+    # The backend swaps the stored answer only after a complete new one, so the
+    # interrupted attempt leaves the old answer in the history - and on screen.
+    assert len(chat_view.chat_list.controls) == 2
+    assert chat_view.chat_list.controls[0] is question_row
+    assert chat_view.chat_list.controls[1] is old_row
+    assert chat_view._last_assistant_msg is old_answer
+    assert old_answer.md.value == "old answer"
+    assert old_answer.regenerate_btn.visible is True
+    # Not an error: the user asked for it, the message only explains the swap.
+    snackbar.assert_called_once()
+    assert "спряна" in snackbar.call_args.args[1]
+    assert snackbar.call_args.kwargs == {"success": True}
+    assert chat_view._stop_generation is False
     assert chat_view._is_streaming is False
     assert chat_view.send_btn.visible is True
 
@@ -1023,6 +1109,32 @@ async def test_memory_row_save_error_shows_the_backend_text(mock_page, mock_api_
 
 
 @pytest.mark.asyncio
+async def test_memory_row_save_over_the_byte_limit_is_not_sent(
+    mock_page, mock_api_client
+):
+    _view, row = _memory_row(
+        mock_page, mock_api_client, Memory(id="m1", content="old", status="active")
+    )
+    mock_api_client.update_memory = AsyncMock()
+
+    with patch("views.memory.safe_update"), patch(
+        "views.memory.show_snackbar"
+    ) as snackbar:
+        row._edit(None)
+        # 20000 letters is under "32000 characters", but 40000 bytes in UTF-8.
+        row.content_field.value = "я" * 20000
+        await row._save(None)
+
+    mock_api_client.update_memory.assert_not_called()
+    snackbar.assert_called_once()
+    assert "40000" in snackbar.call_args.args[1]
+    # Still editing, so the text can be shortened and saved again.
+    assert row.content_field_container.visible is True
+    assert row._saving is False
+    assert row.save_btn.disabled is False
+
+
+@pytest.mark.asyncio
 async def test_memory_row_activate_updates_status_in_place(mock_page, mock_api_client):
     view, row = _memory_row(
         mock_page, mock_api_client, Memory(id="m1", content="a", status="candidate", importance=3)
@@ -1321,6 +1433,43 @@ async def test_new_memory_needs_some_text(mock_page, mock_api_client):
     mock_api_client.create_memory.assert_not_called()
     assert view.new_content_field.error_text
     mock_page.close.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("text", "is_sent"),
+    [
+        ("я" * 16000, True),  # 32000 bytes: exactly the limit
+        ("a" * 32000, True),
+        ("я" * 16000 + "a", False),  # one byte over
+        ("я" * 20000, False),  # 20000 letters, but 40000 bytes
+        ("a" * 32001, False),
+    ],
+    ids=["cyrillic-at-limit", "latin-at-limit", "one-byte-over", "cyrillic-over", "latin-over"],
+)
+@pytest.mark.asyncio
+async def test_new_memory_is_checked_against_the_backend_byte_limit(
+    mock_page, mock_api_client, text, is_sent
+):
+    view = _memory_view_with_dialog(mock_page, mock_api_client)
+    mock_api_client.create_memory = AsyncMock(
+        return_value=Memory(id="m9", content="x", status="active", importance=5)
+    )
+    view.new_content_field.value = text
+
+    with patch("views.memory.show_snackbar"):
+        await view.on_new_save(None)
+
+    if is_sent:
+        mock_api_client.create_memory.assert_awaited_once()
+        mock_page.close.assert_called_once_with(view.new_dialog)
+    else:
+        # The dialog says what is wrong instead of sending a doomed request.
+        mock_api_client.create_memory.assert_not_called()
+        mock_page.close.assert_not_called()
+        assert "байта" in view.new_content_field.error_text
+        assert str(len(text.encode("utf-8"))) in view.new_content_field.error_text
+    assert view._creating is False
+    assert view.new_save_btn.disabled is False
 
 
 @pytest.mark.parametrize(

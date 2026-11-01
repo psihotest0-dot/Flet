@@ -205,11 +205,15 @@ def main(page: ft.Page):
     task_handle = page.run_task(run_health_checks, probe_backend, set_status)
 
     def on_disconnect(e):
+        # ``api_client`` is read when the session ends: after a saved Base URL it
+        # is the replacement client, the old one is already closed.
         task_handle.cancel()
         try:
             page.run_task(api_client.aclose)
         except Exception:  # noqa: BLE001
             logger.debug("Could not close the HTTP client cleanly.")
+
+    page.on_disconnect = on_disconnect
 
     # Views are mounted lazily: creating all three up front issued three API
     # calls and started the files poller before the user opened a single tab.

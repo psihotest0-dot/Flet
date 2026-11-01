@@ -23,6 +23,9 @@ DEBUG_MOCK_SOURCES = False
 # Flet 0.24 ListView is not virtualised, so rendering a very long history means
 # building hundreds of markdown widgets. Only the tail is rendered.
 HISTORY_PAGE_SIZE = 100
+# One message more than is shown: its presence is how load_history knows that
+# older messages exist (the backend returns the newest N, oldest first).
+HISTORY_REQUEST_LIMIT = HISTORY_PAGE_SIZE + 1
 # Upper bound of control updates per second while a response is streaming.
 # Each flush is a tree walk plus a synchronous round trip to the Flutter client.
 STREAM_FLUSH_INTERVAL = 0.12
@@ -688,7 +691,7 @@ class ChatView(ft.Container):
         session_id = self.session_id
         try:
             messages = await self.api_client.get_messages(
-                session_id=session_id, limit=HISTORY_PAGE_SIZE
+                session_id=session_id, limit=HISTORY_REQUEST_LIMIT
             )
         except asyncio.CancelledError:
             raise
@@ -955,16 +958,26 @@ class ChatView(ft.Container):
         except asyncio.CancelledError:
             pass
         finally:
+            # "Стоп" ends the stream without an error, but the backend replaces
+            # the stored answer only after a complete new one - an interrupted
+            # regeneration leaves the old one in the history.
+            stopped = self._stop_generation
             self._is_streaming = False
             self._stop_generation = False
             self._set_streaming_ui(False)
             if session_id == self.session_id:
-                if error is not None or chat_message is None:
+                if error is not None or stopped or chat_message is None:
                     self._restore_previous_answer(
                         chat_message, previous_msg, previous_row, position
                     )
                     if error is not None:
                         show_snackbar(self.page, error)
+                    elif stopped:
+                        show_snackbar(
+                            self.page,
+                            "Регенерацията е спряна — предишният отговор е запазен.",
+                            success=True,
+                        )
                 else:
                     self._last_assistant_msg = chat_message
                     self._last_assistant_row = chat_message._row

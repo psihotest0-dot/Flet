@@ -191,6 +191,35 @@ def test_saving_a_chat_name_persists_it_and_relabels_the_open_chat(
     assert answer.sender_label.value == "Лили"
 
 
+def test_closing_the_session_stops_the_health_poll_and_closes_the_client(
+    start_app, mock_page
+):
+    tabs = start_app()
+    client = tabs.tabs[0].content.api_client
+    health_task = mock_page.run_task.return_value
+    mock_page.run_task.reset_mock()
+
+    # Flet calls this when the window or the browser tab goes away.
+    mock_page.on_disconnect(None)
+
+    health_task.cancel.assert_called_once()
+    mock_page.run_task.assert_called_once_with(client.aclose)
+
+
+def test_closing_the_session_after_a_save_closes_the_new_client(
+    start_app, settings_dialog_spy, mock_page
+):
+    tabs = start_app()
+    settings_dialog_spy["on_save"]("http://127.0.0.1:9000", "Ти")
+    current = tabs.tabs[0].content.api_client
+    mock_page.run_task.reset_mock()
+
+    mock_page.on_disconnect(None)
+
+    # The previous client was closed by the save; only the current one remains.
+    mock_page.run_task.assert_called_once_with(current.aclose)
+
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_connection_indicator_follows_the_saved_base_url(

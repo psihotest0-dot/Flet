@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 from httpx_sse import aconnect_sse
 from pydantic import BaseModel
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,16 @@ logger = logging.getLogger(__name__)
 MIN_IMPORTANCE = 1
 MAX_IMPORTANCE = 10
 DEFAULT_IMPORTANCE = 5
+
+# A memory (or message) body may be at most 32000 *bytes*: the backend checks
+# Go's len(string) although its error text says "characters". UTF-8 spends two
+# bytes on a Cyrillic letter, so Bulgarian text gets about 16000 letters.
+MAX_CONTENT_BYTES = 32000
+
+
+def content_size(text: str) -> int:
+    """Size of ``text`` as the backend measures it (UTF-8 bytes)."""
+    return len(text.encode("utf-8"))
 
 # File types the backend can turn into text (internal/ingest in C:\GO): text
 # formats, documents and images (OCR). The upload endpoint accepts anything, but
@@ -137,6 +147,17 @@ def _raise_for_status(response: httpx.Response) -> None:
         raise APIError.from_response(response) from e
 
 
+def _is_transient(error: BaseException) -> bool:
+    """Whether repeating the request may help.
+
+    A refused or dropped connection and a 5xx can pass by themselves; a 4xx is
+    the backend's final answer to this very request and would only repeat.
+    """
+    if isinstance(error, APIError):
+        return error.status >= 500
+    return isinstance(error, httpx.TransportError)
+
+
 class IngestedFile(BaseModel):
     """Represents a file uploaded to the system."""
     id: str | None = None
@@ -230,11 +251,18 @@ class APIClient:
         response = await self.client.delete(f"/v1/files/{file_id}", headers=headers)
         _raise_for_status(response)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=0.5, min=0.5, max=4))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+        retry=retry_if_exception(_is_transient),
+        # The caller gets the real error (APIError / httpx.TransportError), not
+        # tenacity's RetryError wrapper.
+        reraise=True,
+    )
     async def _get(self, endpoint: str, **kwargs) -> httpx.Response:
-        """Helper GET method wrapped with retry logic."""
+        """GET that repeats a transient failure and raises :class:`APIError` otherwise."""
         response = await self.client.get(endpoint, **kwargs)
-        response.raise_for_status()
+        _raise_for_status(response)
         return response
 
     async def list_files(self) -> list[IngestedFile]:
