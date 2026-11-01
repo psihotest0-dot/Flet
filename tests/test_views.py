@@ -566,9 +566,9 @@ def test_chat_view_reconnects_to_a_hand_edited_settings_file(
         "{\n"
         '    "base_url": "http://localhost:8080",\n'
         '    "user_id": "123e4567-e89b-12d3-a456-426614174000",\n'
-        '    "session_id": "7d127e53-3d2e-42db-816a-c3b9a3678372",\n'
+        '    "session_id": "763ebf47-618b-4410-bb08-7cce59fdff02",\n'
         '    "chat_sessions": [\n'
-        '        {"id": "7d127e53-3d2e-42db-816a-c3b9a3678372", "name": "Чат 1"},\n'
+        '        {"id": "763ebf47-618b-4410-bb08-7cce59fdff02", "name": "Чат 1"},\n'
         "    ]\n"
         "}\n",
         encoding="utf-8",
@@ -576,11 +576,11 @@ def test_chat_view_reconnects_to_a_hand_edited_settings_file(
 
     view = make_chat_view(mock_page, mock_api_client)
 
-    assert view.session_id == "7d127e53-3d2e-42db-816a-c3b9a3678372"
-    assert dropdown_keys(view) == ["7d127e53-3d2e-42db-816a-c3b9a3678372"]
+    assert view.session_id == "763ebf47-618b-4410-bb08-7cce59fdff02"
+    assert dropdown_keys(view) == ["763ebf47-618b-4410-bb08-7cce59fdff02"]
     saved = load_settings()
     assert saved.user_id == "123e4567-e89b-12d3-a456-426614174000"
-    assert saved.session_id == "7d127e53-3d2e-42db-816a-c3b9a3678372"
+    assert saved.session_id == "763ebf47-618b-4410-bb08-7cce59fdff02"
     # No backup: the file was repaired, not thrown away.
     assert list(isolated_settings.parent.glob("settings.json.broken.*")) == []
 

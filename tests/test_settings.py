@@ -55,7 +55,7 @@ def test_load_settings_invalid_json(mock_settings_file):
 
 # ------------------------------------------------- hand edited / legacy files
 ORIGINAL_USER_ID = "123e4567-e89b-12d3-a456-426614174000"
-ORIGINAL_SESSION_ID = "7d127e53-3d2e-42db-816a-c3b9a3678372"
+ORIGINAL_SESSION_ID = "763ebf47-618b-4410-bb08-7cce59fdff02"
 
 
 def test_hand_edited_trailing_comma_keeps_the_stored_ids(mock_settings_file):
