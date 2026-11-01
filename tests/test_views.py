@@ -52,7 +52,8 @@ async def test_chat_view_did_mount(mock_page, mock_api_client):
 async def test_memory_view_did_mount(mock_page, mock_api_client):
     view = MemoryView(mock_page, mock_api_client)
     view.did_mount()
-    mock_page.run_task.assert_called_with(view.load_memories)
+    mock_page.run_task.assert_any_call(view.load_memories)
+    mock_page.run_task.assert_any_call(view.load_proposals_and_rules)
 
 
 @pytest.mark.asyncio

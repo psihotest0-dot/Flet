@@ -11,8 +11,9 @@ from typing import Callable
 import flet as ft
 import httpx
 
-from api.client import APIClient, APIError, StreamError
+from api.client import APIClient, APIError, Proposal, StreamError
 from state.settings import Settings, load_settings, save_settings
+from views.proposals import ProposalCard
 from views.ui_utils import describe_error, safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
@@ -42,9 +43,10 @@ def _get_mock_sources():
 class ChatMessage(ft.Column):
     """A component representing a single chat message in the UI."""
 
-    def __init__(self, role: str, text: str, sources: list | None = None, page: ft.Page | None = None, on_regenerate: callable | None = None):
+    def __init__(self, role: str, text: str, sources: list | None = None, page: ft.Page | None = None, on_regenerate: callable | None = None, api_client: APIClient | None = None):
         super().__init__()
         self.role = role
+        self.api_client = api_client
         self.text_value = text
         self.sources = sources or []
         self.page_ref = page
@@ -98,6 +100,9 @@ class ChatMessage(ft.Column):
         )
 
         self.sources_row = ft.Row(wrap=True, visible=False)
+        # Writes the assistant proposed in this turn; they wait for the user.
+        self.proposals_column = ft.Column(spacing=4, visible=False)
+        self._proposal_ids: set[int] = set()
         self.bottom_sheet = None
         self.activity_indicator = ft.Text("...", size=20, color=ft.colors.GREY_500, visible=False)
         self.error_text = ft.Text("", color=ft.colors.RED, selectable=True, visible=False)
@@ -107,7 +112,8 @@ class ChatMessage(ft.Column):
             self.msg_container,
             self.error_text,
             self.activity_indicator,
-            self.sources_row
+            self.sources_row,
+            self.proposals_column,
         ]
 
     def did_mount(self):
@@ -153,6 +159,34 @@ class ChatMessage(ft.Column):
         self.error_text.visible = True
         self.hide_activity_indicator()
         safe_update(self, self.error_text)
+
+    def add_proposals(self, proposals: list):
+        """Show a card for each write the assistant proposed in this turn.
+
+        Entries the backend sent in an unexpected shape are skipped, and so is a
+        proposal that already has its card (a regenerated answer repeats it).
+        """
+        if not proposals or self.api_client is None:
+            return
+
+        added = False
+        for item in proposals:
+            try:
+                proposal = Proposal(**item) if isinstance(item, dict) else None
+            except ValueError as ex:
+                logger.warning("Ignoring a malformed proposal: %s", ex)
+                continue
+            if proposal is None or proposal.id in self._proposal_ids:
+                continue
+            self._proposal_ids.add(proposal.id)
+            self.proposals_column.controls.append(
+                ProposalCard(proposal, self.api_client, page=self.page_ref)
+            )
+            added = True
+
+        if added:
+            self.proposals_column.visible = True
+            safe_update(self, self.proposals_column)
 
     async def copy_to_clipboard(self, e):
         if self.page_ref:
@@ -661,7 +695,7 @@ class ChatView(ft.Container):
     def add_message(self, role: str, text: str, sources: list | None = None, notify: bool = True) -> ChatMessage:
         is_user = role == "user"
         on_regenerate = self.regenerate_last if not is_user else None
-        chat_message = ChatMessage(role=role, text=text, sources=sources, page=self.page, on_regenerate=on_regenerate)
+        chat_message = ChatMessage(role=role, text=text, sources=sources, page=self.page, on_regenerate=on_regenerate, api_client=self.api_client)
 
         container_wrapper = ft.Container(
             content=chat_message,
@@ -737,6 +771,10 @@ class ChatView(ft.Container):
                             for key in ("facts", "chunks", "sources"):
                                 if isinstance(data.get(key), list):
                                     chat_message.add_sources(data[key])
+                        continue
+
+                    if chunk.get("type") == "proposals":
+                        chat_message.add_proposals(chunk.get("data") or [])
                         continue
 
                     for key in ("text", "content"):

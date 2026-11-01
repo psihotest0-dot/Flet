@@ -15,12 +15,15 @@ from api.client import (
     APIClient,
     APIError,
 )
+from views.proposals import ProposalCard
 from views.ui_utils import confirm_dialog, safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
 
 FILTER_ALL = "Всички"
 FILTER_DEBOUNCE = 0.2
+# Width of the proposal cards and the rule list above the table.
+SECTION_WIDTH = 680
 
 # Status of a memory the user types in by hand. It states a fact on purpose, so
 # it takes effect right away instead of waiting as a "candidate" for activation.
@@ -316,6 +319,25 @@ class MemoryView(ft.Container):
             "Няма намерени спомени.", color=ft.colors.GREY_500, visible=False
         )
 
+        # What the assistant proposed to remember and waits for the user's answer.
+        self.proposals_column = ft.Column(spacing=4)
+        self.proposals_section = ft.Column(
+            [
+                ft.Text("Чакат потвърждение", weight=ft.FontWeight.BOLD),
+                self.proposals_column,
+            ],
+            width=SECTION_WIDTH,
+            visible=False,
+        )
+
+        # Global rules: always in the prompt, so the user can see and delete them.
+        self.rules_column = ft.Column(spacing=0)
+        self.rules_tile = ft.ExpansionTile(
+            title=ft.Text("Глобални правила"),
+            controls=[self.rules_column],
+            visible=False,
+        )
+
         self.content = ft.Column(
             controls=[
                 ft.Row(
@@ -323,6 +345,8 @@ class MemoryView(ft.Container):
                     alignment=ft.MainAxisAlignment.CENTER,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
+                self.proposals_section,
+                ft.Container(content=self.rules_tile, width=SECTION_WIDTH),
                 self.empty_hint,
                 ft.Column(
                     [ft.Row([self.data_table], scroll=ft.ScrollMode.ADAPTIVE)],
@@ -364,17 +388,22 @@ class MemoryView(ft.Container):
 
         self._filter_task = None
         self._load_task = None
+        self._extras_task = None
         # Monotonic token: a response is applied only if it is still the newest
         # request, so a slow "all" request cannot overwrite a newer "active" one.
         self._load_seq = 0
 
     def did_mount(self):
         self._load_task = self.page.run_task(self.load_memories)
+        self._extras_task = self.page.run_task(self.load_proposals_and_rules)
 
     def will_unmount(self):
         if self._load_task is not None:
             self._load_task.cancel()
             self._load_task = None
+        if self._extras_task is not None:
+            self._extras_task.cancel()
+            self._extras_task = None
         if self._filter_task is not None:
             self._filter_task.cancel()
             self._filter_task = None
@@ -423,6 +452,99 @@ class MemoryView(ft.Container):
 
     async def on_refresh_click(self, e):
         await self.load_memories()
+        await self.load_proposals_and_rules()
+
+    # ------------------------------------------- proposals and global rules
+    async def load_proposals_and_rules(self, *_args):
+        """Fill the two sections above the table.
+
+        They are an addition to the table: a failure (an older backend without
+        these endpoints, or no connection) is logged and leaves them as they
+        were, instead of an error on top of the memories.
+        """
+        await self.load_proposals()
+        await self.load_rules()
+
+    async def load_proposals(self):
+        try:
+            proposals = await self.api_client.list_proposals()
+        except asyncio.CancelledError:
+            raise
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("Failed to load proposals: %s", ex)
+            return
+
+        self.proposals_column.controls = [
+            ProposalCard(
+                proposal,
+                self.api_client,
+                page=self.page,
+                on_decided=self._on_proposal_decided,
+            )
+            for proposal in proposals
+        ]
+        self.proposals_section.visible = bool(proposals)
+        safe_update(self, self.proposals_section)
+
+    def _on_proposal_decided(self, proposal, approved: bool):
+        """A saved proposal changes the table or the rules; the card keeps its result."""
+        if approved and self.page is not None:
+            self.page.run_task(self._reload_after_approval)
+
+    async def _reload_after_approval(self):
+        await self.load_memories()
+        await self.load_rules()
+
+    async def load_rules(self):
+        try:
+            rules = await self.api_client.list_rules()
+        except asyncio.CancelledError:
+            raise
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("Failed to load global rules: %s", ex)
+            return
+
+        self.rules_column.controls = [self._rule_tile(rule) for rule in rules]
+        self.rules_tile.title = ft.Text(f"Глобални правила ({len(rules)})")
+        self.rules_tile.visible = bool(rules)
+        safe_update(self, self.rules_tile)
+
+    def _rule_tile(self, rule) -> ft.ListTile:
+        return ft.ListTile(
+            title=ft.Text(rule.key),
+            subtitle=ft.Text(rule.value, selectable=True),
+            trailing=ft.IconButton(
+                icon=ft.icons.DELETE_OUTLINE,
+                tooltip="Изтрий правилото",
+                on_click=lambda e, rule=rule: self.page.run_task(self.delete_rule, rule),
+            ),
+        )
+
+    async def delete_rule(self, rule):
+        confirmed = await confirm_dialog(
+            self.page,
+            "Изтриване на правило",
+            f"Да изтрия ли правилото „{rule.key}“? Лили вече няма да го спазва.",
+        )
+        if not confirmed:
+            return
+
+        try:
+            await self.api_client.delete_rule(rule.id)
+        except asyncio.CancelledError:
+            raise
+        except APIError as ex:
+            if ex.status != 404:  # 404: already gone, the reload below shows it
+                logger.error("Failed to delete rule: %s", ex)
+                show_snackbar(self.page, f"Грешка при изтриване на правилото: {ex}")
+                return
+        except Exception as ex:  # noqa: BLE001
+            logger.error("Failed to delete rule: %s", ex)
+            show_snackbar(self.page, "Неуспешно изтриване на правилото.")
+            return
+
+        show_snackbar(self.page, "Правилото е изтрито.", success=True)
+        await self.load_rules()
 
     # ------------------------------------------------------------ new memory
     def on_new_click(self, e):

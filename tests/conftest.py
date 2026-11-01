@@ -32,4 +32,6 @@ def mock_api_client():
     client.get_messages = AsyncMock(return_value=[])
     client.list_memories = AsyncMock(return_value=[])
     client.list_files = AsyncMock(return_value=[])
+    client.list_proposals = AsyncMock(return_value=[])
+    client.list_rules = AsyncMock(return_value=[])
     return client

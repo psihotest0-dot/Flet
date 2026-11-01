@@ -68,6 +68,35 @@ class Memory(BaseModel):
     last_used_at: datetime | None = None
 
 
+class Proposal(BaseModel):
+    """A write the assistant asked for (a global rule or a memory) that waits for the user.
+
+    ``external_sources`` names where untrusted text came from in the turn that
+    made it (``web_search``, ``web_fetch``, ``search_documents``,
+    ``retrieved_documents``); empty means the turn read only the conversation.
+    """
+    id: int
+    kind: str | None = None
+    status: str | None = None
+    session_id: str | None = None
+    summary: str = ""
+    key: str | None = None
+    value: str | None = None
+    content: str | None = None
+    importance: int | None = None
+    external_sources: list[str] = []
+    created_at: datetime | None = None
+
+
+class Rule(BaseModel):
+    """A global rule: the first thing in the system prompt of every session."""
+    id: int
+    key: str
+    value: str
+    enabled: bool = True
+    updated_at: datetime | None = None
+
+
 class StreamError(Exception):
     """Exception raised for errors in the stream."""
 
@@ -278,6 +307,40 @@ class APIClient:
         response = await self.client.delete(f"/memories/{memory_id}", headers=headers)
         _raise_for_status(response)
 
+    async def list_proposals(self) -> list[Proposal]:
+        """The writes the assistant proposed that still wait for an answer, oldest first."""
+        headers = {"X-User-ID": self.user_id}
+        response = await self.client.get("/proposals", headers=headers)
+        _raise_for_status(response)
+        return [Proposal(**item) for item in response.json()]
+
+    async def approve_proposal(self, proposal_id: int) -> Proposal:
+        """Confirm a proposal: the backend saves the rule or the memory."""
+        return await self._decide_proposal(proposal_id, "approve")
+
+    async def reject_proposal(self, proposal_id: int) -> Proposal:
+        """Reject a proposal: nothing is saved."""
+        return await self._decide_proposal(proposal_id, "reject")
+
+    async def _decide_proposal(self, proposal_id: int, verb: str) -> Proposal:
+        headers = {"X-User-ID": self.user_id}
+        response = await self.client.post(f"/proposals/{proposal_id}/{verb}", headers=headers)
+        _raise_for_status(response)
+        return Proposal(**response.json())
+
+    async def list_rules(self) -> list[Rule]:
+        """The global rules of the user, newest first."""
+        headers = {"X-User-ID": self.user_id}
+        response = await self.client.get("/rules", headers=headers)
+        _raise_for_status(response)
+        return [Rule(**item) for item in response.json()]
+
+    async def delete_rule(self, rule_id: int) -> None:
+        """Delete a global rule."""
+        headers = {"X-User-ID": self.user_id}
+        response = await self.client.delete(f"/rules/{rule_id}", headers=headers)
+        _raise_for_status(response)
+
 
     async def regenerate_chat(self, session_id: str):
         """Stream a regenerated chat response from the backend using Server-Sent Events (SSE)."""
@@ -306,6 +369,14 @@ class APIClient:
                         except json.JSONDecodeError as e:
                             logger.error(f"JSONDecodeError parsing sources data: {e}, data: {sse.data}")
                             yield {"type": "sources", "data": sse.data}
+                    elif sse.event == "proposals":
+                        try:
+                            proposals = json.loads(sse.data)
+                        except json.JSONDecodeError as e:
+                            logger.error(f"JSONDecodeError parsing proposals data: {e}, data: {sse.data}")
+                            continue
+                        if isinstance(proposals, list):
+                            yield {"type": "proposals", "data": proposals}
                     else:
                         try:
                             chunk = json.loads(sse.data)
@@ -345,6 +416,14 @@ class APIClient:
                         except json.JSONDecodeError as e:
                             logger.error(f"JSONDecodeError parsing sources data: {e}, data: {sse.data}")
                             yield {"type": "sources", "data": sse.data}
+                    elif sse.event == "proposals":
+                        try:
+                            proposals = json.loads(sse.data)
+                        except json.JSONDecodeError as e:
+                            logger.error(f"JSONDecodeError parsing proposals data: {e}, data: {sse.data}")
+                            continue
+                        if isinstance(proposals, list):
+                            yield {"type": "proposals", "data": proposals}
                     else:
                         try:
                             chunk = json.loads(sse.data)
