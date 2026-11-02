@@ -780,6 +780,46 @@ async def test_poll_skips_unchanged_cells(mock_page, mock_api_client):
     safe_update_mock.assert_not_called()
 
 
+def _category_event(value):
+    return SimpleNamespace(control=SimpleNamespace(value=value))
+
+
+@pytest.mark.asyncio
+async def test_category_change_is_sent_to_the_backend_and_kept(mock_page, mock_api_client):
+    file = IngestedFile(id="f1", file_name="a.txt", status="completed", category="general")
+    view = _files_view(mock_page, mock_api_client, [file])
+    mock_api_client.update_file_category = AsyncMock(
+        return_value=file.model_copy(update={"category": "philosophy", "manual_override": True})
+    )
+    event = _category_event("philosophy")
+
+    with patch("views.files.show_snackbar") as snackbar:
+        await view.create_category_change_handler("f1")(event)
+
+    mock_api_client.update_file_category.assert_awaited_once_with("f1", "philosophy")
+    assert view.files[0].category == "philosophy"
+    assert view.files[0].manual_override is True
+    assert event.control.value == "philosophy"
+    assert snackbar.call_args.kwargs.get("success") is True
+
+
+@pytest.mark.asyncio
+async def test_refused_category_change_puts_the_saved_category_back(mock_page, mock_api_client):
+    file = IngestedFile(id="f1", file_name="a.txt", status="completed", category="general")
+    view = _files_view(mock_page, mock_api_client, [file])
+    mock_api_client.update_file_category = AsyncMock(side_effect=APIError(400, "category must be one of: general"))
+    event = _category_event("philosophy")
+
+    with patch("views.files.show_snackbar") as snackbar, patch("views.files.safe_update") as safe_update_mock:
+        await view.create_category_change_handler("f1")(event)
+
+    # The database was not changed, so the dropdown must not claim it was.
+    assert event.control.value == "general"
+    assert view.files[0].category == "general"
+    safe_update_mock.assert_called_once_with(view, event.control)
+    assert "Грешка при обновяване на категорията" in snackbar.call_args.args[1]
+
+
 def test_update_table_renders_embedding_column(mock_page, mock_api_client):
     view = _files_view(
         mock_page,

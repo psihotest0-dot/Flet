@@ -388,12 +388,18 @@ class FilesView(ft.Container):
             if not file_id:
                 return
             new_category = e.control.value
+            saved_category = next((f.category for f in self.files if f.id == file_id), None)
             try:
                 updated_file = await self.api_client.update_file_category(file_id, new_category)
             except asyncio.CancelledError:
                 raise
             except Exception as ex:  # noqa: BLE001
                 logger.error("Failed to update category: %s", ex)
+                # The dropdown already shows the value that was just refused. Put the
+                # saved one back, so the screen never shows a category the database
+                # does not have.
+                e.control.value = saved_category
+                safe_update(self, e.control)
                 show_snackbar(self.page, f"Грешка при обновяване на категорията: {ex}")
                 return
 
