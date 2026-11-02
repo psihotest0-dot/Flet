@@ -1,6 +1,8 @@
 import asyncio
 import concurrent.futures
 import logging
+import sys
+import threading
 import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -69,6 +71,23 @@ def setup_logging():
     # 10 seconds, which drowned the real messages in app.log.
     for name in NOISY_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)
+    install_exception_hooks()
+
+
+def install_exception_hooks():
+    """Write exceptions nobody caught to app.log.
+
+    The window has no console, so an exception that ends a thread (or the whole
+    start-up) used to leave no trace at all.
+    """
+    def log_unhandled(exc_type, exc, tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        logger.critical("Unhandled exception", exc_info=(exc_type, exc, tb))
+
+    sys.excepthook = log_unhandled
+    threading.excepthook = lambda args: log_unhandled(args.exc_type, args.exc_value, args.exc_traceback)
 
 
 async def run_health_checks(probe, on_change, interval: float = HEALTH_CHECK_INTERVAL):

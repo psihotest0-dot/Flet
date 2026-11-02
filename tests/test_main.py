@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import logging
+import sys
+import threading
+import traceback
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -268,3 +271,50 @@ def test_memory_tab_reloads_each_time_it_is_opened_again(start_app, mock_page):
     select_tab(tabs, 1)
     mock_page.run_task.assert_called_once_with(memory_view.load_memories)
     assert tabs.tabs[1].content is memory_view
+
+
+@pytest.fixture
+def restore_exception_hooks():
+    saved = (sys.excepthook, threading.excepthook)
+    yield
+    sys.excepthook, threading.excepthook = saved
+
+
+def test_unhandled_exceptions_of_the_main_thread_reach_the_log(caplog, restore_exception_hooks):
+    main_module.install_exception_hooks()
+
+    try:
+        raise RuntimeError("start-up broke")
+    except RuntimeError:
+        with caplog.at_level(logging.CRITICAL):
+            sys.excepthook(*sys.exc_info())
+
+    record = next(r for r in caplog.records if r.getMessage() == "Unhandled exception")
+    assert record.levelno == logging.CRITICAL
+    assert "start-up broke" in "".join(traceback.format_exception(*record.exc_info))
+
+
+def test_unhandled_exceptions_of_other_threads_reach_the_log(caplog, restore_exception_hooks):
+    main_module.install_exception_hooks()
+
+    def boom():
+        raise ValueError("worker thread broke")
+
+    with caplog.at_level(logging.CRITICAL):
+        worker = threading.Thread(target=boom)
+        worker.start()
+        worker.join()
+
+    assert any(r.getMessage() == "Unhandled exception" and "worker thread broke" in str(r.exc_info[1]) for r in caplog.records)
+
+
+def test_ctrl_c_is_left_to_the_default_hook(caplog, restore_exception_hooks, monkeypatch):
+    called = []
+    monkeypatch.setattr(sys, "__excepthook__", lambda *a: called.append(a[0]))
+    main_module.install_exception_hooks()
+
+    with caplog.at_level(logging.CRITICAL):
+        sys.excepthook(KeyboardInterrupt, KeyboardInterrupt(), None)
+
+    assert called == [KeyboardInterrupt]
+    assert not caplog.records
