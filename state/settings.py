@@ -99,6 +99,10 @@ class Settings(BaseModel):
     user_id: str | None = None
     session_id: str | None = None
     chat_sessions: list[dict] = []
+    # Chats the user removed from the list. Only the screen forgets them: their
+    # history stays on the backend, and keeping the ids here means the key to it
+    # is not lost for good (a removed entry can be copied back into chat_sessions).
+    archived_chats: list[dict] = []
     display_name: str = DEFAULT_DISPLAY_NAME
 
     @field_validator("base_url", mode="before")
@@ -117,7 +121,7 @@ class Settings(BaseModel):
     def _validate_optional_id(cls, value: Any) -> str | None:
         return _clean_str(value)
 
-    @field_validator("chat_sessions", mode="before")
+    @field_validator("chat_sessions", "archived_chats", mode="before")
     @classmethod
     def _validate_chat_sessions(cls, value: Any) -> list[dict]:
         return _coerce_chat_sessions(value)

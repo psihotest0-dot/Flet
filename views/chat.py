@@ -13,8 +13,9 @@ import httpx
 
 from api.client import APIClient, APIError, Proposal, StreamError
 from state.settings import DEFAULT_DISPLAY_NAME, Settings, load_settings, save_settings
+from views.emoji_picker import EmojiPicker
 from views.proposals import ProposalCard
-from views.ui_utils import describe_error, safe_update, show_snackbar
+from views.ui_utils import confirm_dialog, describe_error, safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,16 @@ HISTORY_REQUEST_LIMIT = HISTORY_PAGE_SIZE + 1
 STREAM_FLUSH_INTERVAL = 0.12
 # How long the stream may stay silent before the "..." indicator is shown again.
 ACTIVITY_INDICATOR_DELAY = 1.0
+# While an answer streams the chat keeps its end in view, but only as long as the
+# reader is at the bottom (within BOTTOM_FOLLOW_THRESHOLD px of it): scrolling up
+# to re-read something must not be undone by the next chunk. The ListView reports
+# its position at most every SCROLL_EVENT_INTERVAL ms.
+BOTTOM_FOLLOW_THRESHOLD = 40
+SCROLL_EVENT_INTERVAL = 50
+# The client lays a text update out on its next frame, after a scroll_to sent
+# together with it was already handled - so the scroll goes out this long
+# (seconds) after the text, which also caps it at a few scrolls per second.
+SCROLL_SETTLE_DELAY = 0.15
 
 
 def _get_mock_sources():
@@ -448,6 +459,44 @@ def _resolve_session_id(chat_sessions: list[dict], selected: str | None) -> str 
     return None
 
 
+def _remove_chat_session(settings: Settings, session_id: str) -> tuple[str, bool] | None:
+    """Take ``session_id`` out of the chat list and pick the chat to open next.
+
+    Local bookkeeping only: the backend has no call that deletes a chat, and its
+    history and the user's long-term memory (which belongs to ``user_id``, not to
+    a chat) stay untouched. The entry moves to ``settings.archived_chats`` so the
+    session id - the only key to that history - is not lost. When no chat is left
+    a new one is started, as on the very first run.
+
+    Returns ``(next_session_id, is_new)``, or ``None`` when ``session_id`` is not
+    in the list (nothing is changed then).
+    """
+    chat_sessions = _normalize_chat_sessions(settings)
+    index = next(
+        (i for i, session in enumerate(chat_sessions) if session["id"] == session_id),
+        None,
+    )
+    if index is None:
+        return None
+
+    removed = chat_sessions.pop(index)
+    settings.archived_chats = [
+        entry for entry in settings.archived_chats if entry.get("id") != removed["id"]
+    ] + [removed]
+
+    is_new = not chat_sessions
+    if is_new:
+        next_id = str(uuid.uuid4())
+        chat_sessions.append({"id": next_id, "name": _next_chat_name(chat_sessions)})
+    else:
+        # The chat that took the removed one's place, else the one before it.
+        next_id = chat_sessions[min(index, len(chat_sessions) - 1)]["id"]
+
+    settings.chat_sessions = chat_sessions
+    settings.session_id = next_id
+    return next_id, is_new
+
+
 def _ensure_chat_session(settings: Settings) -> tuple[str, list[dict]]:
     """Resolve the session the chat view must open and repair stale settings.
 
@@ -502,20 +551,32 @@ class ChatView(ft.Container):
         self._last_assistant_msg = None
         self._last_assistant_row = None
         self._load_task = None
+        # False once the reader scrolled up; see _on_chat_scroll.
+        self._follow_bottom = True
+        # True while a _scroll_after_layout task is waiting to scroll.
+        self._scroll_pending = False
 
         self.expand = True
 
         self.chat_list = ft.ListView(
             expand=True,
             spacing=10,
-            auto_scroll=True,
+            auto_scroll=False,
             padding=ft.padding.only(left=20, right=20),
+            on_scroll=self._on_chat_scroll,
+            on_scroll_interval=SCROLL_EVENT_INTERVAL,
         )
 
         self.new_chat_btn = ft.IconButton(
             icon=ft.icons.ADD_COMMENT,
             tooltip="Нов чат",
             on_click=self.on_new_chat_click,
+        )
+
+        self.delete_chat_btn = ft.IconButton(
+            icon=ft.icons.DELETE_OUTLINE,
+            tooltip="Изтрий чата от екрана",
+            on_click=self.on_delete_chat_click,
         )
 
         self.session_dropdown = ft.Dropdown(
@@ -529,7 +590,10 @@ class ChatView(ft.Container):
         )
 
         self.top_row = ft.Row(
-            controls=[self.session_dropdown, self.new_chat_btn],
+            controls=[
+                self.session_dropdown,
+                ft.Row([self.delete_chat_btn, self.new_chat_btn], spacing=0),
+            ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         )
 
@@ -557,8 +621,15 @@ class ChatView(ft.Container):
             on_click=self.stop_generation_click,
         )
 
+        self.emoji_picker = EmojiPicker(on_pick=self.insert_emoji)
+        self.emoji_btn = ft.IconButton(
+            icon=ft.icons.EMOJI_EMOTIONS_OUTLINED,
+            tooltip="Емоджита",
+            on_click=self.toggle_emoji_picker,
+        )
+
         input_row = ft.Row(
-            controls=[self.input_field, self.stop_btn, self.send_btn],
+            controls=[self.input_field, self.emoji_btn, self.stop_btn, self.send_btn],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             vertical_alignment=ft.CrossAxisAlignment.END,
         )
@@ -567,6 +638,7 @@ class ChatView(ft.Container):
             controls=[
                 self.top_row,
                 self.chat_list,
+                self.emoji_picker,
                 input_row,
             ],
             expand=True,
@@ -578,6 +650,7 @@ class ChatView(ft.Container):
         self._stop_generation = True
         self._last_assistant_msg = None
         self._last_assistant_row = None
+        self._follow_bottom = True
         self.chat_list.controls.clear()
         safe_update(self)
 
@@ -591,7 +664,9 @@ class ChatView(ft.Container):
         self.send_btn.visible = not streaming
         self.stop_btn.visible = streaming
         self.stop_btn.disabled = False
-        safe_update(self, self.send_btn, self.stop_btn)
+        # Removing a chat would cut the answer that is being written into it.
+        self.delete_chat_btn.disabled = streaming
+        safe_update(self, self.send_btn, self.stop_btn, self.delete_chat_btn)
 
     def _apply_session_options(self, chat_sessions: list[dict], selected_id: str | None) -> None:
         """Re-key the dropdown so every option points at a real session id."""
@@ -673,9 +748,120 @@ class ChatView(ft.Container):
         # A brand new chat has no history to fetch, so only the UI is cleared.
         self._activate_session(new_session, reload_history=False)
 
+    async def on_delete_chat_click(self, e):
+        """Remove the open chat from this screen - and only from this screen.
+
+        Nothing is sent to the backend: the history stays there and so does the
+        long-term memory, which belongs to the user. The chat just stops being
+        listed here (see ``_remove_chat_session``).
+        """
+        if self._is_streaming:
+            show_snackbar(self.page, "Изчакай края на отговора или го спри, преди да изтриеш чата.")
+            return
+
+        name = next(
+            (opt.text for opt in self.session_dropdown.options if opt.key == self.session_id),
+            "Този чат",
+        )
+        confirmed = await confirm_dialog(
+            self.page,
+            "Изтриване на чата",
+            f"„{name}“ ще изчезне от списъка с чатове на този екран. "
+            "Историята му и дългосрочната памет остават запазени в бекенда - "
+            "нищо не се изтрива оттам.",
+            confirm_text="Изтрий",
+        )
+        if not confirmed:
+            return
+
+        # Read after the dialog: the settings may have been saved in the meantime.
+        settings = load_settings()
+        removal = _remove_chat_session(settings, self.session_id)
+        if removal is None:
+            return
+        next_id, is_new = removal
+
+        if not save_settings(settings):
+            show_snackbar(self.page, "Неуспешно запазване на настройките.")
+            return
+        logger.info("Chat %s removed from the list; its history stays on the backend.", self.session_id[:8])
+
+        self._apply_session_options(settings.chat_sessions, next_id)
+        # A brand new chat has no history to fetch, so only the UI is cleared.
+        self._activate_session(next_id, reload_history=not is_new)
+        show_snackbar(
+            self.page,
+            "Чатът е изтрит от екрана. Историята и паметта остават в бекенда.",
+            success=True,
+        )
+
     def scroll_to_bottom(self):
+        """Jump to the newest message and follow what is appended after it."""
+        self._follow_bottom = True
         if self.chat_list.uid is not None:
             self.chat_list.scroll_to(offset=-1, duration=100)
+        # New rows are laid out on the client's next frame, after this scroll.
+        self._follow_stream()
+
+    def _follow_stream(self):
+        """Keep the end of a growing answer in view, unless the reader left it.
+
+        ``ListView.auto_scroll`` is off on purpose: it only reacts when the list
+        itself is rebuilt (streamed text updates just the Markdown control, so an
+        answer grew past the bottom edge unseen), and once our own scroll_to
+        rebuilt the list it animated slowly against it, leaving the end 1-2 lines
+        out of view. The scroll is deferred (see SCROLL_SETTLE_DELAY) and at most
+        one is waiting at any time.
+        """
+        if self._scroll_pending or not self._follow_bottom or self.page is None:
+            return
+        self._scroll_pending = True
+        self.page.run_task(self._scroll_after_layout)
+
+    async def _scroll_after_layout(self):
+        try:
+            await asyncio.sleep(SCROLL_SETTLE_DELAY)
+        finally:
+            self._scroll_pending = False
+        if self._follow_bottom and self.chat_list.uid is not None:
+            self.chat_list.scroll_to(offset=-1)
+
+    def _on_chat_scroll(self, e: ft.OnScrollEvent):
+        """Track whether the reader is at the bottom of the conversation.
+
+        Our own scrolling only ever moves down, so a user event pointing back
+        (mouse wheel, touch) or a negative delta (dragging the scrollbar) means
+        the reader went up to older text and the stream must stop pulling the
+        view down. Arriving at the bottom again resumes following.
+        """
+        scrolled_up = (e.event_type == "user" and e.direction == "forward") or (
+            e.event_type == "update" and (e.scroll_delta or 0) < 0
+        )
+        if scrolled_up:
+            self._follow_bottom = False
+        elif (e.max_scroll_extent or 0) - (e.pixels or 0) <= BOTTOM_FOLLOW_THRESHOLD:
+            self._follow_bottom = True
+
+    def toggle_emoji_picker(self, e=None):
+        picker = self.emoji_picker
+        picker.visible = not picker.visible
+        self.emoji_btn.icon = (
+            ft.icons.EMOJI_EMOTIONS if picker.visible else ft.icons.EMOJI_EMOTIONS_OUTLINED
+        )
+        safe_update(self, picker, self.emoji_btn)
+        # The list got shorter or taller; keep its end in view.
+        self._follow_stream()
+
+    def insert_emoji(self, emoji: str):
+        """Add ``emoji`` to the message being typed.
+
+        The caret position of a TextField is not known to Python, so the emoji
+        goes at the end of the text.
+        """
+        self.input_field.value = (self.input_field.value or "") + emoji
+        if self.input_field.uid is not None:
+            # focus() also sends the new value, and keeps the keyboard in the field.
+            self.input_field.focus()
 
     def did_mount(self):
         if DEBUG_MOCK_SOURCES:
@@ -809,6 +995,7 @@ class ChatView(ft.Container):
             if pending_text:
                 chat_message.append_text(pending_text)
                 pending_text = ""
+                self._follow_stream()
 
         try:
             last_flush_time = time.time()
@@ -878,6 +1065,8 @@ class ChatView(ft.Container):
                 activity_task.cancel()
             # Exactly one full-view update for the finished message.
             safe_update(self)
+            if self.page is not None:
+                self.page.run_task(self._scroll_after_layout)
         return error_text
 
     async def send_message_click(self, e):
