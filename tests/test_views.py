@@ -140,6 +140,48 @@ async def test_load_history_ignores_stale_session(chat_view, mock_api_client):
 
 
 @pytest.mark.asyncio
+async def test_load_history_failure_is_logged_and_shown(
+    chat_view, mock_api_client, caplog
+):
+    mock_api_client.get_messages = AsyncMock(side_effect=httpx.ConnectError("refused"))
+
+    with patch("views.chat.show_snackbar") as snackbar, caplog.at_level("ERROR"):
+        await chat_view.load_history()
+
+    assert "Failed to load the history of chat" in caplog.text
+    snackbar.assert_called_once()
+    assert "Историята на чата не се зареди" in snackbar.call_args.args[1]
+    assert "Бекендът не е достъпен" in snackbar.call_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_load_history_failure_of_a_left_chat_is_not_shown(
+    chat_view, mock_api_client
+):
+    async def get_messages(session_id, limit=None):
+        chat_view.session_id = "another-session"
+        raise httpx.ConnectError("refused")
+
+    mock_api_client.get_messages = get_messages
+
+    with patch("views.chat.show_snackbar") as snackbar:
+        await chat_view.load_history()
+
+    snackbar.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_new_chat_warns_when_the_settings_cannot_be_saved(chat_view):
+    with patch("views.chat.save_settings", return_value=False), patch(
+        "views.chat.show_snackbar"
+    ) as snackbar:
+        await chat_view.on_new_chat_click(None)
+
+    snackbar.assert_called_once()
+    assert "Неуспешно запазване" in snackbar.call_args.args[1]
+
+
+@pytest.mark.asyncio
 async def test_load_history_requests_one_message_more_than_it_shows(
     chat_view, mock_api_client
 ):

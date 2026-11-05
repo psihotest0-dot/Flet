@@ -12,7 +12,13 @@ from typing import Any
 import httpx
 from httpx_sse import aconnect_sse
 from pydantic import BaseModel
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -139,12 +145,27 @@ class APIError(Exception):
         return cls(response.status_code, text)
 
 
+def _log_http_error(response: httpx.Response, error: APIError) -> None:
+    """Write a refused request to the log: one line with what was asked and what came back.
+
+    The views only log the backend's text; without the method and path the log
+    cannot say which call failed. Only the path is written - the query string
+    carries the ``session_id``. A 5xx is the backend's fault (error), a 4xx is
+    the answer to this very request (warning).
+    """
+    request = response.request
+    level = logging.ERROR if error.status >= 500 else logging.WARNING
+    logger.log(level, "%s %s -> HTTP %s: %s", request.method, request.url.path, error.status, error.message)
+
+
 def _raise_for_status(response: httpx.Response) -> None:
     """``raise_for_status`` that raises :class:`APIError` with the backend text."""
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
-        raise APIError.from_response(response) from e
+        error = APIError.from_response(response)
+        _log_http_error(response, error)
+        raise error from e
 
 
 def _is_transient(error: BaseException) -> bool:
@@ -241,15 +262,21 @@ class APIClient:
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 409:
                 await e.response.aread()
+                logger.info("File %s is already uploaded, the existing one is used.", filename)
                 return UploadResult(IngestedFile(**e.response.json()), duplicate=True)
-            raise APIError.from_response(response) from e
-        return UploadResult(IngestedFile(**response.json()))
+            error = APIError.from_response(response)
+            _log_http_error(response, error)
+            raise error from e
+        uploaded = IngestedFile(**response.json())
+        logger.info("File %s uploaded (%d bytes, id %s).", filename, len(file_content), uploaded.id)
+        return UploadResult(uploaded)
 
     async def delete_file(self, file_id: str) -> None:
         """Delete a file by its ID."""
         headers = {"X-User-ID": self.user_id}
         response = await self.client.delete(f"/v1/files/{file_id}", headers=headers)
         _raise_for_status(response)
+        logger.info("File %s deleted.", file_id)
 
     @retry(
         stop=stop_after_attempt(3),
@@ -258,6 +285,8 @@ class APIClient:
         # The caller gets the real error (APIError / httpx.TransportError), not
         # tenacity's RetryError wrapper.
         reraise=True,
+        # Without this a repeated request leaves no trace in app.log at all.
+        before_sleep=before_sleep_log(logger, logging.WARNING),
     )
     async def _get(self, endpoint: str, **kwargs) -> httpx.Response:
         """GET that repeats a transient failure and raises :class:`APIError` otherwise."""
@@ -283,6 +312,7 @@ class APIClient:
         payload = {"category": category, "manual_override": True}
         response = await self.client.patch(f"/v1/files/{file_id}/category", headers=headers, json=payload)
         _raise_for_status(response)
+        logger.info("File %s moved to category %s.", file_id, category)
         return IngestedFile(**response.json())
 
     async def create_memory(self, content: str, status: str = "candidate", source_message_id: str | None = None, importance: int | None = None, metadata: dict[str, Any] | None = None) -> Memory:
@@ -296,7 +326,10 @@ class APIClient:
             payload["metadata"] = metadata
         response = await self.client.post("/memories", headers=headers, json=payload)
         _raise_for_status(response)
-        return Memory(**response.json())
+        memory = Memory(**response.json())
+        # The text of a memory is personal - only its id, status and importance are logged.
+        logger.info("Memory %s created (status %s, importance %s).", memory.id, status, payload["importance"])
+        return memory
 
     async def get_messages(self, session_id: str, limit: int | None = None) -> list[Message]:
         """Get chat messages for a session (oldest first).
@@ -327,6 +360,7 @@ class APIClient:
             payload["metadata"] = metadata
         response = await self.client.put(f"/memories/{memory_id}", headers=headers, json=payload)
         _raise_for_status(response)
+        logger.info("Memory %s updated (status %s, importance %s).", memory_id, status, importance)
         return Memory(**response.json())
 
     async def delete_memory(self, memory_id: str) -> None:
@@ -334,6 +368,7 @@ class APIClient:
         headers = {"X-User-ID": self.user_id}
         response = await self.client.delete(f"/memories/{memory_id}", headers=headers)
         _raise_for_status(response)
+        logger.info("Memory %s deleted.", memory_id)
 
     async def list_proposals(self) -> list[Proposal]:
         """The writes the assistant proposed that still wait for an answer, oldest first."""
@@ -354,6 +389,7 @@ class APIClient:
         headers = {"X-User-ID": self.user_id}
         response = await self.client.post(f"/proposals/{proposal_id}/{verb}", headers=headers)
         _raise_for_status(response)
+        logger.info("Proposal %s: %s.", proposal_id, verb)
         return Proposal(**response.json())
 
     async def list_rules(self) -> list[Rule]:
@@ -368,6 +404,7 @@ class APIClient:
         headers = {"X-User-ID": self.user_id}
         response = await self.client.delete(f"/rules/{rule_id}", headers=headers)
         _raise_for_status(response)
+        logger.info("Rule %s deleted.", rule_id)
 
 
     async def regenerate_chat(self, session_id: str):

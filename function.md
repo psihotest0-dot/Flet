@@ -1,0 +1,307 @@
+# Справочник на функциите
+
+Кратко описание на всяка функция и клас в проекта, по файлове. Започва с картата на модулите и пътя на една заявка и една грешка, за да се вижда как частите си говорят. Общото описание на приложението е в [README.md](README.md), а правилата за разработка — в [AGENTS.md](AGENTS.md).
+
+Имена с долна черта в началото (`_име`) са вътрешни за файла си. Функциите с `async` се изпълняват в event loop-а на Flet.
+
+## Карта на модулите
+
+| Файл | Роля |
+|---|---|
+| [main.py](main.py) | Входна точка: логове, настройки, клиент, табове, проверка на връзката |
+| [api/client.py](api/client.py) | Единственото място за HTTP заявки към бекенда, моделите на данните, `APIError` |
+| [state/settings.py](state/settings.py) | `settings.json`: четене, поправка при повреда, атомарен запис |
+| [views/ui_utils.py](views/ui_utils.py) | Общи помощници на изгледите: `safe_update`, снекбар, диалог, текстове за грешки |
+| [views/chat.py](views/chat.py) | Чатът: съобщения, SSE стрийм, източници, няколко сесии |
+| [views/emoji_picker.py](views/emoji_picker.py) | Менюто с емоджита |
+| [views/memory.py](views/memory.py) | Таб „Памет“: спомени, предложения, глобални правила |
+| [views/files.py](views/files.py) | Таб „Файлове“: качване, статус, категория, изтриване |
+| [views/proposals.py](views/proposals.py) | Картата за предложение на асистента |
+| [views/settings_dialog.py](views/settings_dialog.py) | Диалогът за настройките |
+
+## Как минава една грешка
+
+1. **`api/client.py`** превръща отговор с грешка в `APIError(status, message)` и записва един ред в лога (`GET /v1/files -> HTTP 503: ...`, само пътят, без query string). Пропаднала връзка остава `httpx.TransportError`. Грешка, дошла по SSE, е `StreamError`. `GET` заявките се повтарят до 3 пъти при връзка или 5xx, като всеки повтор се записва в лога.
+2. **Изгледът** хваща изключението, записва го в лога с контекста на действието („Failed to delete memory: ...“) и казва на потребителя какво е станало. `asyncio.CancelledError` винаги се пуска нагоре.
+3. **Текстът към потребителя** идва от `describe_error` (за чата и предложенията) или от `error_detail` (края на „Грешка при ...: …“). И двете превеждат пропаднала връзка на „Бекендът не е достъпен“.
+4. **Необработено изключение** (в нишка или при старт) стига до `app.log` през куките на `install_exception_hooks`. Грешка в задача, пусната с `page.run_task`, се записва от `concurrent.futures`.
+
+Какво се записва в лога: id-та на спомени и файлове, статуси, размери, първите 8 знака на `user_id` и `session_id`. Текстът на съобщенията и спомените, както и цели `user_id`/`session_id`, **не** се записват.
+
+---
+
+## main.py
+
+| Функция / клас | Какво прави |
+|---|---|
+| `SafeTaskWrapper` | Обвивка около future-а от `page.run_task`. Нужна е, защото Flet 0.24 вика `exception()` на future-а, когато той приключи, а при отменена задача това хвърля `CancelledError`. |
+| `SafeTaskWrapper.__getattr__` | Препраща всичко останало към истинския future. |
+| `SafeTaskWrapper.cancel` | Отменя задачата, като `exception()` връща `None` вместо да хвърля. |
+| `wrap_run_task(page)` | Подменя `page.run_task` така, че да връща `SafeTaskWrapper`. Прави го веднъж за страница. |
+| `short_id(value)` | Първите 8 знака на идентификатор — достатъчно за лога, не е ключ. |
+| `setup_logging()` | Включва `RotatingFileHandler` към `app.log` (1 MB, 3 архива), формат `време - ниво - модул - съобщение`, заглушава `httpx` и `httpcore`, пуска `install_exception_hooks`. |
+| `install_exception_hooks()` | Слага `sys.excepthook` и `threading.excepthook`, които записват необработените изключения в лога (ниво `CRITICAL`). `Ctrl+C` не се пипа. |
+| `run_health_checks(probe, on_change, interval)` | Безкраен цикъл: вика `probe()` на всеки `interval` секунди и вика `on_change(healthy)` само когато състоянието се смени. |
+| `main(page)` | Подрежда прозореца, зарежда настройките, пази или създава `user_id`, прави `APIClient`, лентата, табовете и проверката на връзката. |
+| `main.apply_settings(new_url, display_name)` | Чете `settings.json` наново, записва `base_url` и `display_name`, сменя клиента във всички вече създадени изгледи и затваря стария. |
+| `main.open_settings(e)` | Отваря диалога за настройките с текущите стойности. |
+| `main.set_status(healthy)` | Оцветява точката до заглавието (зелено/червено) и сменя подсказката. |
+| `main.probe_backend()` | Вика `check_health` на **текущия** клиент (търси се при всяко извикване, защото клиентът се подменя при нов Base URL). |
+| `main.on_disconnect(e)` | При затваряне на прозореца спира проверката и затваря HTTP клиента. |
+| `main.on_chat_session_changed(session_id)` | Записва в лога смяната на чат. Паметта не се презарежда, защото е на потребителя, не на чата. |
+| `main.create_chat` / `create_memory` / `create_files` | Фабрики на изгледите. Табовете „Памет“ и „Файлове“ се създават при първото отваряне. |
+| `main.ensure_view(index)` | Връща изгледа на таба, като го създава при нужда. |
+| `main.on_tab_change(e)` | При смяна на таб създава изгледа, презарежда паметта при връщане и пуска/спира проверката на статусите на файловете. |
+
+## api/client.py
+
+### Помощни функции
+
+| Функция | Какво прави |
+|---|---|
+| `content_size(text)` | Размерът на текста в UTF-8 **байтове** — както го мери бекендът (кирилицата е 2 байта на буква). |
+| `is_supported_file(filename)` | Дали бекендът може да прочете файла според разширението му (`SUPPORTED_EXTENSIONS`). |
+| `_log_http_error(response, error)` | Записва ред `МЕТОД /път -> HTTP код: текст`. 5xx е `ERROR`, 4xx е `WARNING`. Без query string, защото в него е `session_id`. |
+| `_raise_for_status(response)` | Като `raise_for_status`, но хвърля `APIError` с текста на бекенда и записва грешката в лога. |
+| `_is_transient(error)` | Дали повторението може да помогне: 5xx и `httpx.TransportError` — да; 4xx — не. |
+
+### Модели и изключения
+
+| Клас | Какво е |
+|---|---|
+| `Message` | Съобщение от чата (с `sources` на асистентските отговори). |
+| `Memory` | Спомен: съдържание, статус, важност 1–10, метаданни. |
+| `Proposal` | Предложение на асистента (правило или спомен), което чака потребителя. `external_sources` казва дали идва от интернет или документи. |
+| `Rule` | Глобално правило. |
+| `IngestedFile` | Качен файл: статус, категория, брой части, `embedding_status`. |
+| `UploadResult` | Резултат от качване: файлът и дали вече е бил качен (`duplicate`). |
+| `StreamError` | Грешка, дошла по SSE (`event: error`). |
+| `APIError(status, message)` | Бекендът е отговорил с грешка. `message` е текстът му, по-къс от 200 знака. |
+| `APIError.from_response(response)` | Прави `APIError` от HTTP отговор; празно тяло става `HTTP 404 Not Found`. |
+
+### APIClient
+
+| Метод | Адрес | Какво прави |
+|---|---|---|
+| `__init__(base_url, user_id)` | — | Създава `httpx.AsyncClient`. |
+| `aclose()`, `__aenter__`, `__aexit__` | — | Затваря клиента; може да се ползва с `async with`. |
+| `cancel_stream()` | — | Отменя стрийма, който тече в момента („Спри“). |
+| `check_health()` | `GET /healthz` | `True` само при отговор 200; при проблем връща `False` без изключение. |
+| `_get(endpoint, **kwargs)` | — | `GET` с до 3 опита при връзка/5xx и запис на всеки повтор в лога. |
+| `upload_file(content, filename, mime_type)` | `POST /v1/files` | Качва файл до 100 MB. При `409` връща съществуващия файл с `duplicate=True`. |
+| `delete_file(file_id)` | `DELETE /v1/files/{id}` | Изтрива файл. |
+| `list_files()` | `GET /v1/files` | Списък на файловете. |
+| `get_file_status(file_id)` | `GET /v1/files/{id}` | Текущ статус на един файл. |
+| `update_file_category(file_id, category)` | `PATCH /v1/files/{id}/category` | Сменя категорията (с `manual_override`). |
+| `get_messages(session_id, limit)` | `GET /messages` | Съобщенията на сесия, най-старите първо. |
+| `create_memory(content, status, source_message_id, importance, metadata)` | `POST /memories` | Нов спомен; без зададена важност праща 5. |
+| `list_memories(status)` | `GET /memories` | Спомените, по избор по статус. |
+| `update_memory(memory_id, content, status, importance, metadata)` | `PUT /memories/{id}` | Променя спомен. |
+| `delete_memory(memory_id)` | `DELETE /memories/{id}` | Изтрива спомен. |
+| `list_proposals()` | `GET /proposals` | Предложенията, които чакат отговор. |
+| `approve_proposal(id)` / `reject_proposal(id)` | `POST /proposals/{id}/approve` и `/reject` | Потвърждава или отхвърля предложение. |
+| `_decide_proposal(id, verb)` | — | Общата част на двете горни. |
+| `list_rules()` | `GET /rules` | Глобалните правила. |
+| `delete_rule(rule_id)` | `DELETE /rules/{id}` | Изтрива правило. |
+| `stream_chat(session_id, content)` | `POST /chat/stream` | Асинхронен генератор над SSE: дава `{"type": "sources"\|"proposals", "data": ...}` и парчета текст. Край на `[DONE]`. |
+| `regenerate_chat(session_id)` | `POST /chat/regenerate` | Същото за наново генериран отговор. |
+
+Успешните промени (качване, изтриване, създаване и промяна на спомен, решение за предложение) се записват в лога с id-та, без текст.
+
+## state/settings.py
+
+| Функция / клас | Какво прави |
+|---|---|
+| `Settings` | Pydantic модел: `base_url`, `user_id`, `session_id`, `chat_sessions`, `archived_chats`, `display_name`. Непознатите полета се игнорират. |
+| `Settings._validate_*` | Валидатори: празен `base_url` става подразбиращ се; името се реже до 40 знака; празно id става `None`; списъците с чатове се нормализират. |
+| `_clean_str(value)` | Подрязан низ или `None` за празно. |
+| `_coerce_chat_sessions(value)` | Превръща всякакъв запис на чатовете (имена, един обект, JSON низ) в списък от `{"id", "name"}`. Не губи `user_id` при странна стойност. |
+| `_sanitize_json(text)` | Маха коментари и запетаи накрая извън низове, без да чупи адреси като `http://...`. |
+| `_decode_settings_text(text)` | Разчита файла; връща `(данни, поправен)`. |
+| `_salvage_fields(text)` | Изважда `base_url`, `user_id`, `session_id` от счупен JSON. |
+| `_backup_broken_settings()` | Преименува нечетим файл на `settings.json.broken.<време>` вместо да го трие. |
+| `load_settings()` | Чете настройките. Поправя ги на място, при безнадеждно повреда запазва `user_id`/`session_id`, ако се виждат. |
+| `save_settings(settings)` | Атомарен запис през `settings.tmp.<време>`; връща `False` и записва грешката при неуспех. |
+
+## views/ui_utils.py
+
+| Функция | Какво прави |
+|---|---|
+| `is_attached(owner)` | Дали контролът е още част от жива страница. |
+| `safe_update(owner, *controls)` | Обновява само тези контроли (или собственика), и то само ако са закачени. Предпазва от грешка след затваряне на изгледа. |
+| `error_detail(error)` | Краят на „Грешка при ...: …“. Пропаднала връзка става „бекендът не е достъпен“, празен текст — името на изключението. |
+| `describe_error(error)` | Пълно съобщение за потребителя: връзка, грешка в бекенда (5xx), отхвърлена заявка (4xx, с текста на бекенда), `StreamError`, друго. |
+| `show_snackbar(page, message, success)` | Червен (грешка) или зелен (успех) снекбар. |
+| `confirm_dialog(page, title, message, confirm_text, cancel_text)` | Модален диалог за потвърждение; връща `True` само при потвърждение. |
+
+## views/chat.py
+
+### Функции за източниците
+
+| Функция | Какво прави |
+|---|---|
+| `source_type_label(source_type)` | Име на типа източник (`Памет`, `Концепция`, `Текст`, `OCR`); непознат тип се показва както е дошъл. |
+| `format_source_score(score, score_type)` | Сходство като `82.0% (косинусово)`; нечислова стойност се показва като текст. |
+| `source_details(src)` | Сивият ред под името на източника: тип, страница, сходство. |
+| `_get_mock_sources()` | Примерни източници за отстраняване на грешки (`DEBUG_MOCK_SOURCES`). |
+
+### ChatMessage — едно съобщение
+
+| Метод | Какво прави |
+|---|---|
+| `__init__(role, text, sources, page, on_regenerate, api_client, user_name)` | Строи съобщението: подпис, Markdown, бутони, редове за източници и предложения. |
+| `did_mount()` | Рисува източниците, ако ги има (отговор от историята). |
+| `_open_link(e)` | Отваря само `http`, `https` и `mailto`; другото се блокира и записва в лога. |
+| `_handle_regenerate(e)` | Пуска презареждането на отговора. |
+| `set_regenerate_visible(visible)` | Показва или скрива „Опитай отново“. |
+| `show_activity_indicator()` / `hide_activity_indicator()` | Показват и скриват „...“, когато стриймът мълчи. |
+| `finalize_with_error(error_msg)` | Червен ред с грешката под съобщението. |
+| `add_proposals(proposals)` | Карта за всяко предложение; пропуска неразбираемите и вече показаните. |
+| `copy_to_clipboard(e)` | Копира текста. |
+| `append_text(text)` | Добавя част от стрийма и праща само Markdown контрола. |
+| `_source_key(source)` | Ключ (заглавие, откъс) за откриване на повтарящи се източници. |
+| `add_sources(sources)` | Групира източниците по файл и ги показва като чипове. |
+| `open_sources_panel(sources_to_display)` | Отваря панела „Източници (RAG)“. |
+
+### Помощни функции за списъка с чатове
+
+| Функция | Какво прави |
+|---|---|
+| `_next_chat_name(chat_sessions)` | Първото свободно „Чат N“. |
+| `_unique_chat_name(name, chat_sessions)` | Име, което никой друг чат не ползва (добавя „(2)“ и т.н.). |
+| `_normalize_chat_sessions(settings)` | Чист списък `{"id", "name"}`. Записи без id се свързват с активната сесия. |
+| `_resolve_session_id(chat_sessions, selected)` | От стойността на падащото меню (id или име) намира запазеното id. |
+| `_remove_chat_session(settings, session_id)` | Маха чата от списъка и го праща в `archived_chats`; избира съседния чат или започва нов. Нищо не се праща към бекенда. |
+| `_ensure_chat_session(settings)` | Решава коя сесия да се отвори. Нов UUID се прави само ако няма никакъв запазен чат. |
+
+### ChatView — екранът на чата
+
+| Метод | Какво прави |
+|---|---|
+| `__init__(page, api_client, on_session_changed)` | Строи екрана, избира сесията от `settings.json`. |
+| `_reset_conversation()` | Чисти екрана за нова сесия. |
+| `_cancel_running_tasks()` | Спира стрийма и зареждането на историята. |
+| `_set_streaming_ui(streaming)` | Сменя „Изпрати“ с „Спри“; докато тече отговор, кошчето е изключено. |
+| `_apply_session_options(chat_sessions, selected_id)` | Подрежда падащото меню по запазените id-та. |
+| `_notify_session_changed(session_id)` | Известява `main.py` за смяната; грешка в слушателя се записва, не прекъсва. |
+| `_activate_session(session_id, reload_history)` | Превключва към сесията и зарежда историята ѝ. |
+| `on_session_change(e)` | Отваря избрания чат; при неуспешен запис на настройките показва предупреждение. |
+| `on_new_chat_click(e)` | Нов чат; при неуспешен запис на настройките показва предупреждение. |
+| `on_delete_chat_click(e)` | „Изтриване“ от екрана след потвърждение. Историята и паметта остават в бекенда. |
+| `scroll_to_bottom()` | Скролира до най-новото съобщение и започва да го следва. |
+| `_follow_stream()` | Държи края на растящия отговор в изглед, освен ако читателят е скролирал нагоре. |
+| `_scroll_after_layout()` | Скролът, отложен с `SCROLL_SETTLE_DELAY`, за да се подреди текстът. |
+| `_on_chat_scroll(e)` | Следи дали читателят е на дъното. |
+| `toggle_emoji_picker(e)` | Показва/скрива менюто с емоджита. |
+| `insert_emoji(emoji)` | Добавя емоджи в края на написаното. |
+| `did_mount()` / `will_unmount()` | Започва зареждане на историята / спира задачите. |
+| `load_history()` | Показва последните 100 съобщения с едно обновяване. При грешка записва в лога и показва снекбар (освен ако междувременно е отворен друг чат). |
+| `set_display_name(name)` | Сменя подписа на твоите съобщения, и на вече показаните. |
+| `add_message(role, text, sources, notify)` | Добавя съобщение в списъка. |
+| `_stream_response(chat_message, stream_coro, fallback_user_text)` | Чете SSE стрийма и го рисува най-много на 0,12 s. Връща текста на грешката или `None`. |
+| `send_message_click(e)` | Изпраща съобщение. Игнорира празен текст и двойно натискане. |
+| `regenerate_last()` | Генерира последния отговор наново. При грешка или „Спри“ връща стария отговор. |
+| `_restore_previous_answer(...)` | Връща заменения отговор на мястото му. |
+| `stop_generation_click(e)` | Спира генерирането. |
+
+## views/emoji_picker.py
+
+| Метод | Какво прави |
+|---|---|
+| `EmojiPicker.__init__(on_pick)` | Строи категориите и мрежата; започва скрито. |
+| `_cells_for(category)` | Клетките на категория, направени при първото отваряне. |
+| `select_category(name)` | Сменя категорията; непозната или текуща се игнорира. |
+| `_handle_category_click(e)` / `_handle_emoji_click(e)` | Реакция на клик; вторият вика `on_pick(emoji)`. |
+
+## views/memory.py
+
+### Помощни функции
+
+| Функция | Какво прави |
+|---|---|
+| `importance_or_default(value)` | Важността за пращане: от 1 до 10, иначе 5. |
+| `too_long_message(text)` | Защо текстът не може да се запази (над 32 000 байта) или `None`. |
+| `fact_key_tooltip(memory)` | Подсказка с `fact_key` на спомена. |
+| `importance_dropdown(value, **kwargs)` | Падащо меню за важност 1–10. |
+
+### MemoryRow — ред от таблицата
+
+| Метод | Какво прави |
+|---|---|
+| `__init__(memory, view)` | Строи клетките и бутоните на реда. |
+| `_set_editing(editing)` | Превключва между преглед и редакция. |
+| `_reset_fields()` | Връща полетата към последното от сървъра. |
+| `_edit(e)` / `_cancel(e)` | Започва / отказва редакция. |
+| `apply(memory)` | Обновява реда от отговор на сървъра, без да прави таблицата наново. |
+| `_save(e)` | Записва промяна; проверява размера и неизменени данни. |
+| `_activate(e)` | Прави кандидат за `active`. |
+| `_delete(e)` | Изтрива след потвърждение; `404` значи „вече го няма“ и редът се маха. |
+
+### MemoryView — табът „Памет“
+
+| Метод | Какво прави |
+|---|---|
+| `__init__(page, api_client)` | Строи филтъра, таблицата, секциите и диалога „Нов спомен“. |
+| `did_mount()` / `will_unmount()` | Започва зареждане / спира задачите. |
+| `load_memories()` | Зарежда спомените по филтъра; прилага се само най-новият отговор. |
+| `on_filter_change(e)` | Презарежда със забавяне 0,2 s. |
+| `on_refresh_click(e)` | Презарежда спомени, предложения и правила. |
+| `load_proposals_and_rules()` | Пълни двете секции над таблицата. |
+| `load_proposals()` / `load_rules()` | Зареждат всяка секция; при неуспех пишат в лога и оставят секцията както е. |
+| `_on_proposal_decided(proposal, approved)` | След запазено предложение презарежда таблицата и правилата. |
+| `_reload_after_approval()` | Самото презареждане. |
+| `_rule_tile(rule)` | Ред за правило с бутон за изтриване. |
+| `delete_rule(rule)` | Изтрива правило след потвърждение; `404` не е грешка. |
+| `on_new_click(e)` / `on_new_cancel(e)` | Отварят / затварят диалога „Нов спомен“. |
+| `_show_new_error(message)` | Показва грешка под полето на диалога. |
+| `on_new_save(e)` | Създава спомен със статус `active`; `409` значи „вече съществува“. |
+| `update_table()` | Строи редовете наново. |
+| `replace_memory(memory)` | Обновява списъка в паметта. |
+| `remove_memory_row(row)` | Маха реда. |
+
+## views/files.py
+
+| Функция / метод | Какво прави |
+|---|---|
+| `chunk_label(count)` | „няма части“, „1 част“, „N части“. |
+| `embedding_state(file)` | Тройка (текст, цвят, подсказка) за колоната „Вектори“. |
+| `FilesView.__init__(page, api_client)` | Строи бутоните и таблицата. |
+| `did_mount()` / `will_unmount()` | Закача/маха избирача на файлове; започва/спира задачите. |
+| `set_active(active)` | Включва проверката на статусите само докато табът се вижда. |
+| `on_refresh_click(e)` / `initial_load()` | Зареждат списъка; при грешка — запис в лога и снекбар. |
+| `_apply_status(file_id, updated)` | Обновява клетките на един ред. |
+| `poll_statuses()` | На всеки 3 s пита за статуса на необработените файлове. |
+| `on_file_picker_result(e)` | Качва избраните файлове (до 3 едновременно): проверява формата и размера, събира грешките в един снекбар. |
+| `update_table()` | Строи таблицата наново. |
+| `remove_file_row(file_id)` | Маха реда. |
+| `create_category_change_handler(file_id)` | Обработчик за смяна на категория; при отказ връща старата. |
+| `create_delete_handler(file_id)` | Обработчик за изтриване след потвърждение. |
+
+## views/proposals.py
+
+| Функция / метод | Какво прави |
+|---|---|
+| `origin_warning(external_sources)` | Предупреждение, ако предложението е след четене на интернет или документи. |
+| `kind_label(proposal)` | „Правило“ или „Спомен“. |
+| `ProposalCard.__init__(proposal, api_client, page, on_decided)` | Строи картата с „Запази“ и „Откажи“. |
+| `_approve(e)` / `_reject(e)` | Бутоните; и двата вървят през `_decide`. |
+| `_set_busy(busy)` | Заключва бутоните по време на заявката. |
+| `_show_result(text)` | Заменя бутоните с резултата. |
+| `_decide(approve)` | Праща решението. `404`/`409` значи „вече е решено“; `422` — твърде много правила. |
+| `_notify(approve)` | Вика `on_decided`. |
+| `_api_error_text(error)` | Текст за отказ `422`, иначе `describe_error`. |
+
+## views/settings_dialog.py
+
+| Функция / метод | Какво прави |
+|---|---|
+| `validate_base_url(value)` | Чист адрес или `ValueError` с причината (без интервали, с `http(s)://`, валиден порт, без `?` и `#`; маха крайния `/`). |
+| `clean_display_name(value)` | Подрязано име до 40 знака; празното става „Ти“. |
+| `SettingsDialog.__init__(page, user_id, base_url, on_save, display_name)` | Строи диалога. |
+| `open(base_url, display_name)` | Отваря го с текущите стойности. |
+| `_cancel(e)` / `_save(e)` | Затваря / проверява и предава чистите стойности на `on_save`. Записът става в `main.py`. |
+| `_validated_url()` | Чист адрес или `None`, като полето се отбелязва като грешно. |
+| `_copy_user_id(e)` | Копира `user_id`. |
+| `_check_connection(e)` | Проверява `/healthz` на въведения адрес, още преди запазване. |
+| `_set_checking(checking)` | Показва/скрива въртележката. |
+| `_show_result(text, color)` | Показва резултата от проверката. |

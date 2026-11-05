@@ -35,6 +35,17 @@ def safe_update(owner: ft.Control, *controls: ft.Control) -> None:
             control.update()
 
 
+def error_detail(error: BaseException) -> str:
+    """Short text for the tail of "Грешка при ...: <detail>" messages.
+
+    ``str()`` of a connection error is English jargon, and of a timeout it is
+    empty - which left the snackbar ending in a bare colon.
+    """
+    if isinstance(error, httpx.TransportError):
+        return "бекендът не е достъпен"
+    return str(error) or type(error).__name__
+
+
 def describe_error(error: BaseException) -> str:
     """User-facing text that tells apart the ways a chat request can fail."""
     if isinstance(error, httpx.TransportError):

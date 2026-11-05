@@ -223,3 +223,21 @@ def test_unusable_display_name_in_the_file_does_not_cost_the_identity(
     assert settings.user_id == "u-1"
     assert settings.session_id == "s-1"
     assert settings.display_name == "42"
+
+
+def test_recovering_broken_settings_logs_only_the_start_of_the_ids(isolated_settings, caplog):
+    user_id = "123e4567-e89b-12d3-a456-426614174000"
+    session_id = "abcdef12-3456-7890-abcd-ef1234567890"
+    # Unreadable as JSON, but the ids can still be read out of it.
+    isolated_settings.write_text(
+        f'{{"user_id": "{user_id}", "session_id": "{session_id}", broken', encoding="utf-8"
+    )
+
+    with caplog.at_level("WARNING", logger="state.settings"):
+        settings = load_settings()
+
+    assert settings.user_id == user_id
+    assert settings.session_id == session_id
+    assert user_id[:8] in caplog.text
+    assert user_id not in caplog.text
+    assert session_id not in caplog.text

@@ -722,7 +722,9 @@ class ChatView(ft.Container):
 
         settings.chat_sessions = chat_sessions
         settings.session_id = session_id
-        save_settings(settings)
+        if not save_settings(settings):
+            # The chat still opens, but after a restart the app would forget it.
+            show_snackbar(self.page, "Неуспешно запазване на настройките.")
 
         # Re-sync the widget as well: it may have carried a chat name instead
         # of an id, and the options must stay keyed by the saved ids.
@@ -742,7 +744,10 @@ class ChatView(ft.Container):
 
         settings.chat_sessions = chat_sessions
         settings.session_id = new_session
-        save_settings(settings)
+        if not save_settings(settings):
+            # The chat still opens, but after a restart the app would forget it.
+            show_snackbar(self.page, "Неуспешно запазване на настройките.")
+        logger.info("New chat %s started.", new_session[:8])
 
         self._apply_session_options(chat_sessions, new_session)
         # A brand new chat has no history to fetch, so only the UI is cleared.
@@ -882,7 +887,10 @@ class ChatView(ft.Container):
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001
-            logger.error("Failed to load chat history: %s", e)
+            logger.error("Failed to load the history of chat %s: %s", session_id[:8], e)
+            # Not when the user already moved to another chat: the failure is not theirs to see.
+            if session_id == self.session_id:
+                show_snackbar(self.page, f"Историята на чата не се зареди. {describe_error(e)}")
             return
 
         # The user switched sessions while the request was in flight.
@@ -1081,6 +1089,8 @@ class ChatView(ft.Container):
         self._is_streaming = True
         self._stop_generation = False
         session_id = self.session_id
+        # Only the length: what the user writes does not belong in the log.
+        logger.info("Chat %s: message sent (%d characters).", session_id[:8], len(text))
 
         self.input_field.value = ""
         if self.input_field.uid is not None:
@@ -1124,6 +1134,7 @@ class ChatView(ft.Container):
         self._is_streaming = True
         self._stop_generation = False
         session_id = self.session_id
+        logger.info("Chat %s: the last answer is regenerated.", session_id[:8])
 
         previous_msg = self._last_assistant_msg
         previous_row = self._last_assistant_row
@@ -1190,6 +1201,7 @@ class ChatView(ft.Container):
         safe_update(self)
 
     async def stop_generation_click(self, e):
+        logger.info("Chat %s: generation stopped by the user.", self.session_id[:8])
         self._stop_generation = True
         self.api_client.cancel_stream()
         self.stop_btn.disabled = True
