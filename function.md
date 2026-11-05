@@ -63,6 +63,7 @@
 | `is_supported_file(filename)` | Дали бекендът може да прочете файла според разширението му (`SUPPORTED_EXTENSIONS`). |
 | `_log_http_error(response, error)` | Записва ред `МЕТОД /път -> HTTP код: текст`. 5xx е `ERROR`, 4xx е `WARNING`. Без query string, защото в него е `session_id`. |
 | `_raise_for_status(response)` | Като `raise_for_status`, но хвърля `APIError` с текста на бекенда и записва грешката в лога. |
+| `_stream_error_text(data)` | Текстът на `event: error`: бекендът праща `{"error": "..."}` (с `request_id` за търсене в неговия лог); обикновен текст се взема както е. |
 | `_is_transient(error)` | Дали повторението може да помогне: 5xx и `httpx.TransportError` — да; 4xx — не. |
 
 ### Модели и изключения
@@ -103,8 +104,9 @@
 | `_decide_proposal(id, verb)` | — | Общата част на двете горни. |
 | `list_rules()` | `GET /rules` | Глобалните правила. |
 | `delete_rule(rule_id)` | `DELETE /rules/{id}` | Изтрива правило. |
-| `stream_chat(session_id, content)` | `POST /chat/stream` | Асинхронен генератор над SSE: дава `{"type": "sources"\|"proposals", "data": ...}` и парчета текст. Край на `[DONE]`. |
+| `stream_chat(session_id, content)` | `POST /chat/stream` | Връща асинхронен генератор над SSE (през `_stream_sse`): дава `{"type": "sources"\|"proposals", "data": ...}` и парчета текст. Край на `[DONE]`. |
 | `regenerate_chat(session_id)` | `POST /chat/regenerate` | Същото за наново генериран отговор. |
+| `_stream_sse(path, payload)` | — | Общият четец на двата стрийма (бекендът пише еднакви събития и в двата). Грешка в `event: error` става `StreamError`, отказана заявка — `APIError`. Frame, който не се чете, се записва в лога само с размера му. |
 
 Успешните промени (качване, изтриване, създаване и промяна на спомен, решение за предложение) се записват в лога с id-та, без текст.
 

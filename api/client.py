@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -115,6 +116,21 @@ class Rule(BaseModel):
 
 class StreamError(Exception):
     """Exception raised for errors in the stream."""
+
+
+def _stream_error_text(data: str) -> str:
+    """The text of an ``event: error`` frame.
+
+    The backend sends ``{"error": "..."}`` (with a ``request_id`` to find the
+    cause in its log); a plain-text frame is used as it is.
+    """
+    try:
+        payload = json.loads(data)
+    except json.JSONDecodeError:
+        return data
+    if isinstance(payload, dict) and payload.get("error"):
+        return str(payload["error"])
+    return data
 
 
 # Backend error bodies are short plain-text sentences; anything longer is a
@@ -406,97 +422,70 @@ class APIClient:
         _raise_for_status(response)
         logger.info("Rule %s deleted.", rule_id)
 
-
-    async def regenerate_chat(self, session_id: str):
+    def regenerate_chat(self, session_id: str) -> AsyncIterator[Any]:
         """Stream a regenerated chat response from the backend using Server-Sent Events (SSE)."""
-        headers = {"X-User-ID": self.user_id}
-        payload = {"session_id": session_id}
+        return self._stream_sse("/chat/regenerate", {"session_id": session_id})
 
-        try:
-            self._current_stream_task = asyncio.current_task()
-            async with aconnect_sse(self.client, "POST", "/chat/regenerate", headers=headers, json=payload, timeout=httpx.Timeout(5.0, read=None)) as event_source:
-                try:
-                    event_source.response.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    await e.response.aread()
-                    logger.error("Error streaming regenerated chat. Status: %s, URL: %s, Response: %s", e.response.status_code, e.request.url, e.response.text)
-                    raise APIError.from_response(e.response) from e
-
-                async for sse in event_source.aiter_sse():
-                    if sse.data == "[DONE]":
-                        break
-
-                    if sse.event == "error":
-                        raise StreamError(sse.data)
-                    elif sse.event == "sources":
-                        try:
-                            yield {"type": "sources", "data": json.loads(sse.data)}
-                        except json.JSONDecodeError as e:
-                            logger.error(f"JSONDecodeError parsing sources data: {e}, data: {sse.data}")
-                            yield {"type": "sources", "data": sse.data}
-                    elif sse.event == "proposals":
-                        try:
-                            proposals = json.loads(sse.data)
-                        except json.JSONDecodeError as e:
-                            logger.error(f"JSONDecodeError parsing proposals data: {e}, data: {sse.data}")
-                            continue
-                        if isinstance(proposals, list):
-                            yield {"type": "proposals", "data": proposals}
-                    else:
-                        try:
-                            chunk = json.loads(sse.data)
-                            if "error" in chunk:
-                                raise StreamError(chunk.get("error", "Unknown error"))
-                            yield chunk
-                        except json.JSONDecodeError as e:
-                            logger.error(f"JSONDecodeError parsing stream data: {e}, data: {sse.data}")
-                            yield sse.data
-        finally:
-            self._current_stream_task = None
-
-    async def stream_chat(self, session_id: str, content: str):
+    def stream_chat(self, session_id: str, content: str) -> AsyncIterator[Any]:
         """Stream a chat response from the backend using Server-Sent Events (SSE)."""
-        headers = {"X-User-ID": self.user_id}
-        payload = {"session_id": session_id, "content": content}
+        return self._stream_sse("/chat/stream", {"session_id": session_id, "content": content})
 
+    async def _stream_sse(self, path: str, payload: dict[str, Any]) -> AsyncIterator[Any]:
+        """POST ``payload`` to ``path`` and yield what the backend streams back.
+
+        Both chat endpoints write the same events (``sources``, text chunks,
+        ``proposals``, ``[DONE]``, ``error``), so one reader serves them. It yields
+        ``{"type": "sources" | "proposals", "data": ...}`` for those two events and
+        the decoded chunk for the rest. An ``error`` event raises
+        :class:`StreamError`, a refused request :class:`APIError`.
+
+        What the model wrote and what the documents say never reach the log: an
+        undecodable frame is reported by its size only.
+        """
+        headers = {"X-User-ID": self.user_id}
         try:
             self._current_stream_task = asyncio.current_task()
-            async with aconnect_sse(self.client, "POST", "/chat/stream", headers=headers, json=payload, timeout=httpx.Timeout(5.0, read=None)) as event_source:
+            async with aconnect_sse(
+                self.client, "POST", path, headers=headers, json=payload,
+                timeout=httpx.Timeout(5.0, read=None),
+            ) as event_source:
                 try:
                     event_source.response.raise_for_status()
                 except httpx.HTTPStatusError as e:
                     await e.response.aread()
-                    logger.error("Error streaming chat. Status: %s, URL: %s, Response: %s", e.response.status_code, e.request.url, e.response.text)
-                    raise APIError.from_response(e.response) from e
+                    error = APIError.from_response(e.response)
+                    _log_http_error(e.response, error)
+                    raise error from e
 
                 async for sse in event_source.aiter_sse():
                     if sse.data == "[DONE]":
                         break
 
                     if sse.event == "error":
-                        raise StreamError(sse.data)
+                        raise StreamError(_stream_error_text(sse.data))
                     elif sse.event == "sources":
                         try:
                             yield {"type": "sources", "data": json.loads(sse.data)}
                         except json.JSONDecodeError as e:
-                            logger.error(f"JSONDecodeError parsing sources data: {e}, data: {sse.data}")
+                            logger.error("Could not decode the sources frame (%d characters): %s", len(sse.data), e)
                             yield {"type": "sources", "data": sse.data}
                     elif sse.event == "proposals":
                         try:
                             proposals = json.loads(sse.data)
                         except json.JSONDecodeError as e:
-                            logger.error(f"JSONDecodeError parsing proposals data: {e}, data: {sse.data}")
+                            logger.error("Could not decode the proposals frame (%d characters): %s", len(sse.data), e)
                             continue
                         if isinstance(proposals, list):
                             yield {"type": "proposals", "data": proposals}
                     else:
                         try:
                             chunk = json.loads(sse.data)
-                            if "error" in chunk:
-                                raise StreamError(chunk.get("error", "Unknown error"))
-                            yield chunk
                         except json.JSONDecodeError as e:
-                            logger.error(f"JSONDecodeError parsing stream data: {e}, data: {sse.data}")
+                            logger.error("Could not decode a stream chunk (%d characters): %s", len(sse.data), e)
                             yield sse.data
+                            continue
+                        if isinstance(chunk, dict) and "error" in chunk:
+                            raise StreamError(str(chunk["error"] or "Unknown error"))
+                        yield chunk
         finally:
             self._current_stream_task = None

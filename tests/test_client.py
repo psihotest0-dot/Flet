@@ -13,6 +13,7 @@ from api.client import (
     APIError,
     IngestedFile,
     Memory,
+    StreamError,
     UploadResult,
     content_size,
     is_supported_file,
@@ -784,3 +785,120 @@ async def test_upload_is_logged(client, caplog):
         await client.upload_file(b"hello", "a.txt")
 
     assert "File a.txt uploaded (5 bytes, id f1)." in caplog.text
+
+
+# ------------------------------------------------------------------- SSE reader
+def _sse_response(*frames: bytes) -> httpx.Response:
+    async def body():
+        for frame in frames:
+            yield frame
+
+    return httpx.Response(200, content=body(), headers={"Content-Type": "text/event-stream"})
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "args", "sent"),
+    [
+        ("stream_chat", "/chat/stream", ("s1", "Hi"), {"session_id": "s1", "content": "Hi"}),
+        ("regenerate_chat", "/chat/regenerate", ("s1",), {"session_id": "s1"}),
+    ],
+)
+@respx.mock
+@pytest.mark.asyncio
+async def test_both_chat_endpoints_share_one_reader(client, method, path, args, sent):
+    route = respx.post(f"http://localhost:8080{path}").mock(
+        return_value=_sse_response(
+            b'event: sources\ndata: [{"title": "a.pdf"}]\n\n',
+            b'data: {"content": "Hello"}\n\n',
+            b'event: proposals\ndata: [{"id": 1}]\n\n',
+            b"data: [DONE]\n\n",
+        )
+    )
+
+    results = [item async for item in getattr(client, method)(*args)]
+
+    assert results == [
+        {"type": "sources", "data": [{"title": "a.pdf"}]},
+        {"content": "Hello"},
+        {"type": "proposals", "data": [{"id": 1}]},
+    ]
+    assert json.loads(route.calls[0].request.content) == sent
+    assert route.calls[0].request.headers["X-User-ID"] == client.user_id
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_error_frame_of_the_backend_is_unwrapped(client):
+    # What internal/agent/orchestrator_stream.go writes for a failed generation.
+    respx.post("http://localhost:8080/chat/stream").mock(
+        return_value=_sse_response(
+            b'event: error\ndata: {"error": "Failed to generate a response. (request_id: abc)"}\n\n'
+        )
+    )
+
+    with pytest.raises(StreamError) as exc_info:
+        [item async for item in client.stream_chat("s1", "Hi")]
+
+    assert str(exc_info.value) == "Failed to generate a response. (request_id: abc)"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_chunk_with_an_error_key_raises(client):
+    respx.post("http://localhost:8080/chat/regenerate").mock(
+        return_value=_sse_response(b'data: {"error": "model is down"}\n\n')
+    )
+
+    with pytest.raises(StreamError, match="model is down"):
+        [item async for item in client.regenerate_chat("s1")]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_chunk_that_is_not_an_object_does_not_crash(client):
+    respx.post("http://localhost:8080/chat/stream").mock(
+        return_value=_sse_response(b"data: 123\n\n", b'data: "text"\n\n', b"data: [DONE]\n\n")
+    )
+
+    assert [item async for item in client.stream_chat("s1", "Hi")] == [123, "text"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_undecodable_frame_is_logged_by_size_not_by_content(client, caplog):
+    respx.post("http://localhost:8080/chat/stream").mock(
+        return_value=_sse_response(b"data: private words of the answer\n\n", b"data: [DONE]\n\n")
+    )
+
+    with caplog.at_level(logging.ERROR, logger="api.client"):
+        results = [item async for item in client.stream_chat("s1", "Hi")]
+
+    assert results == ["private words of the answer"]
+    assert "Could not decode a stream chunk (27 characters)" in caplog.text
+    assert "private words" not in caplog.text
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_refused_stream_request_is_logged_and_raised(client, caplog):
+    respx.post("http://localhost:8080/chat/regenerate").mock(
+        return_value=httpx.Response(400, text="no user message found to regenerate from\n")
+    )
+
+    with caplog.at_level(logging.WARNING, logger="api.client"), pytest.raises(APIError) as exc_info:
+        [item async for item in client.regenerate_chat("s1")]
+
+    assert exc_info.value.status == 400
+    assert "POST /chat/regenerate -> HTTP 400: no user message found" in caplog.text
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_current_stream_task_is_cleared_when_the_stream_ends(client):
+    respx.post("http://localhost:8080/chat/stream").mock(
+        return_value=_sse_response(b'data: {"content": "x"}\n\n', b"data: [DONE]\n\n")
+    )
+
+    async for _ in client.stream_chat("s1", "Hi"):
+        assert client._current_stream_task is not None
+    assert client._current_stream_task is None
