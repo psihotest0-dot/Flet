@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 import threading
@@ -66,6 +67,63 @@ async def test_health_poll_leaves_no_httpx_info_records(
         if record.name.split(".")[0] in main_module.NOISY_LOGGERS
     ]
     assert noisy == []
+
+
+@contextlib.contextmanager
+def unconfigured_root_logger():
+    """The root logger as it is at app start: no handlers at all.
+
+    Entered inside the test body, because pytest puts its own capture handlers on
+    the root logger when the test starts - with those in place ``basicConfig`` is
+    a no-op and the log file would never be attached.
+    """
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    root.handlers = []
+    try:
+        yield root
+    finally:
+        for handler in root.handlers:
+            handler.close()
+        root.handlers = saved_handlers
+        root.setLevel(saved_level)
+
+
+@pytest.fixture
+def app_log_in_tmp(tmp_path, monkeypatch, restore_logger_levels, restore_exception_hooks):
+    monkeypatch.setattr(main_module, "LOG_FILE", tmp_path / "app.log")
+    return tmp_path / "app.log"
+
+
+def test_setup_logging_attaches_app_log_only_once(app_log_in_tmp, monkeypatch):
+    # ``main`` runs once per window session; every run used to open app.log again.
+    opened = []
+    real_handler = main_module.RotatingFileHandler
+
+    def spy(*args, **kwargs):
+        handler = real_handler(*args, **kwargs)
+        opened.append(handler)
+        return handler
+
+    monkeypatch.setattr(main_module, "RotatingFileHandler", spy)
+
+    with unconfigured_root_logger() as root:
+        main_module.setup_logging()
+        main_module.setup_logging()
+
+        assert len(opened) == 1
+        assert root.handlers == opened
+
+
+def test_app_log_lines_name_the_module_that_wrote_them(app_log_in_tmp):
+    with unconfigured_root_logger() as root:
+        main_module.setup_logging()
+
+        logging.getLogger("views.chat").info("hello")
+        for handler in root.handlers:
+            handler.flush()
+
+    assert " - INFO - views.chat - hello" in app_log_in_tmp.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("stored", [True, False], ids=["stored", "generated"])

@@ -1,6 +1,7 @@
 import asyncio
 import concurrent.futures
 import logging
+import os
 import sys
 import threading
 import uuid
@@ -61,18 +62,35 @@ def short_id(value: str) -> str:
     return value[:8]
 
 
+def log_file_is_attached() -> bool:
+    """Whether the root logger already writes to ``app.log``."""
+    target = os.path.abspath(LOG_FILE)
+    return any(
+        getattr(handler, "baseFilename", None) == target
+        for handler in logging.getLogger().handlers
+    )
+
+
 def setup_logging():
+    # ``main`` runs once per window session. A second call used to open ``app.log``
+    # again just to throw the new handler away (basicConfig ignores it when the
+    # root logger is configured), so the file is attached once.
+    if not log_file_is_attached():
+        _attach_log_file()
+    # httpx logs every request on INFO - the health poll alone is a line every
+    # 10 seconds, which drowned the real messages in app.log.
+    for name in NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+    install_exception_hooks()
+
+
+def _attach_log_file():
     logging.basicConfig(
         handlers=[RotatingFileHandler(LOG_FILE, maxBytes=1024 * 1024, backupCount=3, encoding="utf-8")],
         level=logging.INFO,
         # The logger name says which module wrote the line (api.client, views.chat, ...).
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     )
-    # httpx logs every request on INFO - the health poll alone is a line every
-    # 10 seconds, which drowned the real messages in app.log.
-    for name in NOISY_LOGGERS:
-        logging.getLogger(name).setLevel(logging.WARNING)
-    install_exception_hooks()
 
 
 def install_exception_hooks():

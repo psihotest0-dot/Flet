@@ -39,7 +39,9 @@
 | `SafeTaskWrapper.cancel` | Отменя задачата, като `exception()` връща `None` вместо да хвърля. |
 | `wrap_run_task(page)` | Подменя `page.run_task` така, че да връща `SafeTaskWrapper`. Прави го веднъж за страница. |
 | `short_id(value)` | Първите 8 знака на идентификатор — достатъчно за лога, не е ключ. |
-| `setup_logging()` | Включва `RotatingFileHandler` към `app.log` (1 MB, 3 архива), формат `време - ниво - модул - съобщение`, заглушава `httpx` и `httpcore`, пуска `install_exception_hooks`. |
+| `log_file_is_attached()` | Дали коренният logger вече пише в `app.log`. |
+| `setup_logging()` | Включва логовете: файлът се закача само веднъж (функцията се вика при всяка сесия на прозореца), заглушава `httpx` и `httpcore`, пуска `install_exception_hooks`. |
+| `_attach_log_file()` | Закача `RotatingFileHandler` към `app.log` (1 MB, 3 архива), формат `време - ниво - модул - съобщение`. |
 | `install_exception_hooks()` | Слага `sys.excepthook` и `threading.excepthook`, които записват необработените изключения в лога (ниво `CRITICAL`). `Ctrl+C` не се пипа. |
 | `run_health_checks(probe, on_change, interval)` | Безкраен цикъл: вика `probe()` на всеки `interval` секунди и вика `on_change(healthy)` само когато състоянието се смени. |
 | `main(page)` | Подрежда прозореца, зарежда настройките, пази или създава `user_id`, прави `APIClient`, лентата, табовете и проверката на връзката. |
