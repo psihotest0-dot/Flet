@@ -1,4 +1,5 @@
 import json
+import logging
 
 import httpx
 import pytest
@@ -707,3 +708,79 @@ def test_unsupported_files(name):
 def test_picker_extensions_are_lowercase_without_dots():
     # FilePicker wants bare extensions.
     assert all(ext == ext.lower() and "." not in ext for ext in SUPPORTED_EXTENSIONS)
+
+
+# --------------------------------------------------------------------- logging
+@respx.mock
+@pytest.mark.asyncio
+async def test_refused_request_is_logged_with_method_path_and_status(client, caplog):
+    respx.put("http://localhost:8080/memories/m1").mock(
+        return_value=httpx.Response(400, text="importance must be between 1 and 10\n")
+    )
+
+    with caplog.at_level(logging.WARNING, logger="api.client"), pytest.raises(APIError):
+        await client.update_memory("m1", "x", "active", 11)
+
+    record = next(r for r in caplog.records if r.name == "api.client")
+    assert record.levelno == logging.WARNING
+    assert record.getMessage() == (
+        "PUT /memories/m1 -> HTTP 400: importance must be between 1 and 10"
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_server_error_is_logged_as_an_error_and_without_the_query(client, caplog, no_retry_delay):
+    respx.get("http://localhost:8080/messages").mock(return_value=httpx.Response(503))
+
+    with caplog.at_level(logging.WARNING, logger="api.client"), pytest.raises(APIError):
+        await client.get_messages("secret-session-id")
+
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert errors
+    assert "GET /messages -> HTTP 503" in errors[0].getMessage()
+    # The query string carries the session id - it must stay out of the log.
+    assert "secret-session-id" not in caplog.text
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_repeated_request_is_logged(client, caplog, no_retry_delay):
+    respx.get("http://localhost:8080/v1/files").mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, json=[])]
+    )
+
+    with caplog.at_level(logging.WARNING, logger="api.client"):
+        await client.list_files()
+
+    assert any("Retrying" in r.getMessage() for r in caplog.records)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_changes_are_logged_without_the_text_of_the_memory(client, caplog):
+    respx.post("http://localhost:8080/memories").mock(
+        return_value=httpx.Response(201, json={"id": "m1", "content": "my private fact"})
+    )
+    respx.delete("http://localhost:8080/memories/m1").mock(return_value=httpx.Response(204))
+
+    with caplog.at_level(logging.INFO, logger="api.client"):
+        await client.create_memory("my private fact", importance=7)
+        await client.delete_memory("m1")
+
+    assert "Memory m1 created (status candidate, importance 7)." in caplog.text
+    assert "Memory m1 deleted." in caplog.text
+    assert "my private fact" not in caplog.text
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_upload_is_logged(client, caplog):
+    respx.post("http://localhost:8080/v1/files").mock(
+        return_value=httpx.Response(201, json={"id": "f1", "file_name": "a.txt"})
+    )
+
+    with caplog.at_level(logging.INFO, logger="api.client"):
+        await client.upload_file(b"hello", "a.txt")
+
+    assert "File a.txt uploaded (5 bytes, id f1)." in caplog.text

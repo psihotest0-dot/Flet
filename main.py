@@ -65,7 +65,8 @@ def setup_logging():
     logging.basicConfig(
         handlers=[RotatingFileHandler(LOG_FILE, maxBytes=1024 * 1024, backupCount=3, encoding="utf-8")],
         level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s"
+        # The logger name says which module wrote the line (api.client, views.chat, ...).
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     )
     # httpx logs every request on INFO - the health poll alone is a line every
     # 10 seconds, which drowned the real messages in app.log.
@@ -146,6 +147,7 @@ def main(page: ft.Page):
                 short_id(settings.user_id),
             )
 
+    logger.info("Starting the client for the backend at %s", settings.base_url)
     api_client = APIClient(base_url=settings.base_url, user_id=settings.user_id)
     # index -> view; tabs are created on first activation (see ensure_view below).
     views: dict[int, ft.Control] = {}
@@ -165,8 +167,11 @@ def main(page: ft.Page):
         success = save_settings(current)
 
         if not success:
+            # save_settings has logged the reason; this line says what was lost.
+            logger.error("The new settings (Base URL %s) were not saved.", new_url)
             show_snackbar(page, "Неуспешно запазване на настройките.")
             return
+        logger.info("Settings saved: Base URL %s.", new_url)
 
         settings.base_url = current.base_url
         settings.user_id = current.user_id
@@ -226,11 +231,12 @@ def main(page: ft.Page):
     def on_disconnect(e):
         # ``api_client`` is read when the session ends: after a saved Base URL it
         # is the replacement client, the old one is already closed.
+        logger.info("The window was closed, the HTTP client is shut down.")
         task_handle.cancel()
         try:
             page.run_task(api_client.aclose)
-        except Exception:  # noqa: BLE001
-            logger.debug("Could not close the HTTP client cleanly.")
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("Could not close the HTTP client cleanly: %s", ex)
 
     page.on_disconnect = on_disconnect
 

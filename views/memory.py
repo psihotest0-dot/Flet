@@ -18,7 +18,7 @@ from api.client import (
     content_size,
 )
 from views.proposals import ProposalCard
-from views.ui_utils import confirm_dialog, safe_update, show_snackbar
+from views.ui_utils import confirm_dialog, error_detail, safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +235,7 @@ class MemoryRow(ft.DataRow):
             raise
         except Exception as ex:  # noqa: BLE001
             logger.error("Failed to update memory: %s", ex)
-            show_snackbar(self.view.page, f"Грешка при запазване на спомена: {ex}")
+            show_snackbar(self.view.page, f"Грешка при запазване на спомена: {error_detail(ex)}")
             return
         finally:
             self._saving = False
@@ -260,7 +260,7 @@ class MemoryRow(ft.DataRow):
             raise
         except Exception as ex:  # noqa: BLE001
             logger.error("Failed to activate memory: %s", ex)
-            show_snackbar(self.view.page, f"Грешка при активиране на спомена: {ex}")
+            show_snackbar(self.view.page, f"Грешка при активиране на спомена: {error_detail(ex)}")
             return
 
         self.view.replace_memory(updated)
@@ -289,9 +289,10 @@ class MemoryRow(ft.DataRow):
                 logger.error("Failed to delete memory: %s", ex)
                 show_snackbar(self.view.page, f"Грешка при изтриване на спомена: {ex}")
                 return
+            logger.info("Memory %s was already deleted on the backend.", self.memory.id)
         except Exception as ex:  # noqa: BLE001
             logger.error("Failed to delete memory: %s", ex)
-            show_snackbar(self.view.page, f"Грешка при изтриване на спомена: {ex}")
+            show_snackbar(self.view.page, f"Грешка при изтриване на спомена: {error_detail(ex)}")
             return
 
         self.view.remove_memory_row(self)
@@ -568,9 +569,10 @@ class MemoryView(ft.Container):
                 logger.error("Failed to delete rule: %s", ex)
                 show_snackbar(self.page, f"Грешка при изтриване на правилото: {ex}")
                 return
+            logger.info("Rule %s was already deleted on the backend.", rule.id)
         except Exception as ex:  # noqa: BLE001
             logger.error("Failed to delete rule: %s", ex)
-            show_snackbar(self.page, "Неуспешно изтриване на правилото.")
+            show_snackbar(self.page, f"Неуспешно изтриване на правилото: {error_detail(ex)}")
             return
 
         show_snackbar(self.page, "Правилото е изтрито.", success=True)

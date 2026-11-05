@@ -202,6 +202,7 @@ class SettingsDialog:
         finally:
             self._set_checking(False)
 
+        logger.info("Connection check for %s: %s", url, "ok" if healthy else "no answer")
         if healthy:
             self._show_result("Връзката е успешна.", ft.colors.GREEN)
         else:

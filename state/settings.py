@@ -250,13 +250,18 @@ def load_settings() -> Settings:
         salvaged = _salvage_fields(text)
         _backup_broken_settings()
         if not salvaged:
+            # Nothing recoverable: the app starts with a fresh user_id, and the
+            # old history can only be reached again from the backup file.
+            logger.warning("Settings file was unreadable and held no ids; starting with defaults.")
             return Settings()
         # The ids outlived the document: keep them instead of minting new ones.
         settings = Settings(**salvaged)
+        # Only the first 8 characters, like everywhere else in the log: the full
+        # ids are the key to the history and stay in settings.json.
         logger.warning(
             "Settings file was unreadable; recovered user_id=%s session_id=%s",
-            settings.user_id,
-            settings.session_id,
+            (settings.user_id or "")[:8],
+            (settings.session_id or "")[:8],
         )
         save_settings(settings)
         return settings

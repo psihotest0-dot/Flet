@@ -9,7 +9,7 @@ from pathlib import Path
 import flet as ft
 
 from api.client import SUPPORTED_EXTENSIONS, APIClient, IngestedFile, is_supported_file
-from views.ui_utils import confirm_dialog, safe_update, show_snackbar
+from views.ui_utils import confirm_dialog, error_detail, safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
 
@@ -284,10 +284,12 @@ class FilesView(ft.Container):
                     if not is_supported_file(f.name):
                         # The picker is filtered, but a file can still arrive from
                         # elsewhere; the backend would accept it and fail later.
+                        logger.warning("Skipped %s: the format is not supported.", f.name)
                         errors.append(f"{f.name}: форматът не се поддържа")
                         return
                     size = await asyncio.to_thread(lambda: Path(f.path).stat().st_size)
                     if size > MAX_UPLOAD_SIZE:
+                        logger.warning("Skipped %s: %d bytes is over the 100 MB limit.", f.name, size)
                         errors.append(f"{f.name}: файлът е по-голям от 100 MB")
                         return
                     # Reading is blocking, the upload itself is not.
@@ -299,7 +301,7 @@ class FilesView(ft.Container):
                     raise
                 except Exception as ex:  # noqa: BLE001
                     logger.error("Failed to upload %s: %s", f.name, ex)
-                    errors.append(f"{f.name}: {ex}")
+                    errors.append(f"{f.name}: {error_detail(ex)}")
 
         try:
             await asyncio.gather(*(upload_single_file(f) for f in e.files))
@@ -400,7 +402,7 @@ class FilesView(ft.Container):
                 # does not have.
                 e.control.value = saved_category
                 safe_update(self, e.control)
-                show_snackbar(self.page, f"Грешка при обновяване на категорията: {ex}")
+                show_snackbar(self.page, f"Грешка при обновяване на категорията: {error_detail(ex)}")
                 return
 
             # The dropdown already shows the new value; no reload needed.
@@ -430,7 +432,7 @@ class FilesView(ft.Container):
                 raise
             except Exception as ex:  # noqa: BLE001
                 logger.error("Failed to delete file: %s", ex)
-                show_snackbar(self.page, f"Грешка при изтриване на файла: {ex}")
+                show_snackbar(self.page, f"Грешка при изтриване на файла: {error_detail(ex)}")
                 return
 
             self.remove_file_row(file_id)
