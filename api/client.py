@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 from httpx_sse import aconnect_sse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from tenacity import (
     before_sleep_log,
     retry,
@@ -112,6 +112,51 @@ class Rule(BaseModel):
     value: str
     enabled: bool = True
     updated_at: datetime | None = None
+
+
+class OracleDecision(BaseModel):
+    """One line of the Oracle journal: what the trading bot asked and what came back.
+
+    ``status`` is ``answered`` (``verdict`` is ``APPROVE``, ``VETO`` or ``HOLD``)
+    or ``failed`` (no verdict; ``error`` says why). In ``shadow`` mode the bot
+    ignores the verdict, so the journal is the whole result.
+    """
+    id: int
+    created_at: datetime | None = None
+    request_id: str | None = None
+    signal_id: str | None = None
+    symbol: str | None = None
+    mode: str | None = None
+    status: str | None = None
+    verdict: str | None = None
+    reason: str | None = None
+    model: str | None = None
+    attempts: int | None = None
+    finish_reason: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    latency_ms: int | None = None
+    error: str | None = None
+
+
+class OracleDecisionPage(BaseModel):
+    """A page of the journal, newest first.
+
+    ``next_before_id`` is the ``before_id`` of the next page; 0 when this was the
+    last one. An empty journal may arrive as ``"decisions": null``.
+    """
+    decisions: list[OracleDecision] = []
+    next_before_id: int = 0
+
+    @field_validator("decisions", mode="before")
+    @classmethod
+    def _no_decisions_is_an_empty_list(cls, value):
+        return [] if value is None else value
+
+    @field_validator("next_before_id", mode="before")
+    @classmethod
+    def _no_next_page_is_zero(cls, value):
+        return 0 if value is None else value
 
 
 class StreamError(Exception):
@@ -421,6 +466,27 @@ class APIClient:
         response = await self.client.delete(f"/rules/{rule_id}", headers=headers)
         _raise_for_status(response)
         logger.info("Rule %s deleted.", rule_id)
+
+    async def list_oracle_decisions(
+        self,
+        limit: int = 50,
+        before_id: int | None = None,
+        symbol: str | None = None,
+    ) -> OracleDecisionPage:
+        """A page of the Oracle journal, newest first.
+
+        ``before_id`` is the ``next_before_id`` of the previous page (absent or 0
+        starts at the newest); ``symbol`` limits the page to one stock. Reading
+        the journal is not logged: the tab asks for it every few seconds.
+        """
+        headers = {"X-User-ID": self.user_id}
+        params: dict[str, Any] = {"limit": limit}
+        if before_id:
+            params["before_id"] = before_id
+        if symbol:
+            params["symbol"] = symbol
+        response = await self._get("/oracle/decisions", headers=headers, params=params)
+        return OracleDecisionPage(**response.json())
 
     def regenerate_chat(self, session_id: str) -> AsyncIterator[Any]:
         """Stream a regenerated chat response from the backend using Server-Sent Events (SSE)."""

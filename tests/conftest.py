@@ -4,7 +4,7 @@ import flet as ft
 import pytest
 
 import state.settings as settings_module
-from api.client import APIClient
+from api.client import APIClient, OracleDecisionPage
 
 
 @pytest.fixture(autouse=True)
@@ -34,4 +34,5 @@ def mock_api_client():
     client.list_files = AsyncMock(return_value=[])
     client.list_proposals = AsyncMock(return_value=[])
     client.list_rules = AsyncMock(return_value=[])
+    client.list_oracle_decisions = AsyncMock(return_value=OracleDecisionPage())
     return client

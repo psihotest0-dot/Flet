@@ -15,6 +15,7 @@ from state.settings import DEFAULT_DISPLAY_NAME, load_settings, save_settings
 from views.chat import ChatView
 from views.files import FilesView
 from views.memory import MemoryView
+from views.oracle import OracleView
 from views.settings_dialog import SettingsDialog
 from views.ui_utils import show_snackbar
 
@@ -22,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 LOG_FILE = Path(__file__).with_name("app.log")
 HEALTH_CHECK_INTERVAL = 10
+# Tab index -> the view method that re-reads its data when the tab is opened again.
+RELOADED_ON_VISIT = {1: "load_memories", 3: "load"}
 # Libraries that log every single request on INFO.
 NOISY_LOGGERS = ("httpx", "httpcore")
 
@@ -258,8 +261,8 @@ def main(page: ft.Page):
 
     page.on_disconnect = on_disconnect
 
-    # Views are mounted lazily: creating all three up front issued three API
-    # calls and started the files poller before the user opened a single tab.
+    # Views are mounted lazily: creating all of them up front issued an API call
+    # per tab and started the pollers before the user opened a single tab.
     def on_chat_session_changed(session_id: str) -> None:
         """React to another chat being opened.
 
@@ -277,7 +280,10 @@ def main(page: ft.Page):
     def create_files() -> FilesView:
         return FilesView(page, api_client)
 
-    factories = {0: create_chat, 1: create_memory, 2: create_files}
+    def create_oracle() -> OracleView:
+        return OracleView(page, api_client)
+
+    factories = {0: create_chat, 1: create_memory, 2: create_files, 3: create_oracle}
 
     chat_view = ChatView(page, api_client, on_session_changed=on_chat_session_changed)
     views[0] = chat_view
@@ -289,6 +295,7 @@ def main(page: ft.Page):
             ft.Tab(text="Чат", content=chat_view),
             ft.Tab(text="Памет"),
             ft.Tab(text="Файлове"),
+            ft.Tab(text="Бот"),
         ],
         expand=1,
     )
@@ -308,15 +315,17 @@ def main(page: ft.Page):
             return
         existed = index in views
         view = ensure_view(index)
-        if index == 1 and existed:
+        if existed and index in RELOADED_ON_VISIT:
             # A new view loads itself when it is mounted. An existing one is
             # re-read on every visit: memories also appear in the background
-            # (the consolidation job proposes candidates after a chat).
-            page.run_task(view.load_memories)
-        files_view = views.get(2)
-        if isinstance(files_view, FilesView):
-            # Poll file statuses only while the "Файлове" tab is visible.
-            files_view.set_active(index == 2)
+            # (the consolidation job proposes candidates after a chat) and so
+            # do the bot's decisions.
+            page.run_task(getattr(view, RELOADED_ON_VISIT[index]))
+        for polled_index, polled_view in views.items():
+            if isinstance(polled_view, (FilesView, OracleView)):
+                # Poll file statuses and the bot's journal only while their tab
+                # is the visible one.
+                polled_view.set_active(polled_index == index)
 
     tabs.on_change = on_tab_change
 
