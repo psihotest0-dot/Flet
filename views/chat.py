@@ -61,11 +61,13 @@ SOURCE_TYPE_LABELS = {
     "text": "Текст",
     "ocr": "OCR",
 }
-# How the backend's ``score_type`` is called next to the score.
+# How the backend's ``score_type`` is called next to the score. ``distance`` is not
+# here: it is shown as a distance, not as a percentage (see ``source_details``).
 SCORE_TYPE_LABELS = {
     "cosine": "косинусово",
     "rrf": "RRF",
 }
+DISTANCE_SCORE_TYPE = "distance"
 DEFAULT_SOURCE_LABEL = "Документ"
 
 
@@ -80,17 +82,24 @@ def source_type_label(source_type) -> str:
 def format_source_score(score, score_type=None) -> str:
     """Format a source's score for the panel.
 
-    The backend sends the score on a 0-100 scale (it multiplies cosine scores by
-    100 and normalises RRF ones), so the number is shown as it is - this client
-    used to guess the scale and turned a real 0.8 % into 80 %. A value that is
-    not a number is shown as text.
+    A ``distance`` is the cosine distance between the question and the source: a
+    number of about 0.1-0.2 that is shown with three decimals, not as a percentage
+    (with the embedding model in use even unrelated texts are at 0.15-0.30, which
+    as ``(1 - distance) * 100`` looked like an 82-85 % match). The other types come
+    on a 0-100 scale (older backends multiplied cosine scores by 100, RRF ones are
+    normalised), so the number is shown as it is - this client used to guess the
+    scale and turned a real 0.8 % into 80 %. A value that is not a number is shown
+    as text.
     """
+    kind = str(score_type).strip() if score_type else ""
+    is_distance = kind.lower() == DISTANCE_SCORE_TYPE
     try:
-        text = f"{float(score):.1f}%"
+        text = f"{float(score):.3f}" if is_distance else f"{float(score):.1f}%"
     except (ValueError, TypeError) as e:
         logger.warning("Failed to convert score '%s' to float: %s", score, e)
         text = str(score)
-    kind = str(score_type).strip() if score_type else ""
+    if is_distance:
+        return text
     if not kind:
         return text
     return f"{text} ({SCORE_TYPE_LABELS.get(kind.lower(), kind)})"
@@ -102,7 +111,13 @@ def source_details(src: dict) -> str:
     page_number = src.get("page_number")
     if page_number not in (None, ""):
         parts.append(f"стр. {page_number}")
-    parts.append(f"Сходство: {format_source_score(src.get('score', 'N/A'), src.get('score_type'))}")
+    score = src.get("score", "N/A")
+    score_type = src.get("score_type")
+    if str(score_type or "").strip().lower() == DISTANCE_SCORE_TYPE:
+        parts.append(f"Разстояние: {format_source_score(score, score_type)} (по-малко = по-близо)")
+    elif score_type or score != 0:
+        parts.append(f"Сходство: {format_source_score(score, score_type)}")
+    # else: a source without a measure (a recalled memory) shows no score at all
     return "• " + " • ".join(parts)
 
 

@@ -79,6 +79,14 @@ def test_score_that_is_not_a_number_is_shown_as_text():
     assert format_source_score("95") == "95.0%"
 
 
+def test_distance_is_shown_as_a_distance_and_not_as_a_percentage():
+    # (1 - distance) * 100 showed 82-85 % for texts that have nothing to do with the
+    # question: with this embedding model even those are at 0.15-0.30.
+    assert format_source_score(0.1523, "distance") == "0.152"
+    assert format_source_score(0.1, "DISTANCE") == "0.100"
+    assert format_source_score("n/a", "distance") == "n/a"
+
+
 # --------------------------------------------------------------------- details
 def test_details_line_has_type_page_and_score():
     src = {
@@ -102,6 +110,19 @@ def test_details_line_leaves_out_a_page_that_is_not_known():
 
 def test_details_line_still_understands_the_old_type_key():
     assert source_details({"type": "OCR", "score": "82"}) == "• OCR • Сходство: 82.0%"
+
+
+def test_details_line_shows_the_distance_of_a_summary():
+    src = {"source_type": "concept", "score": 0.152, "score_type": "distance"}
+
+    assert source_details(src) == "• Концепция • Разстояние: 0.152 (по-малко = по-близо)"
+
+
+def test_details_line_shows_no_score_for_a_memory_that_has_no_measure():
+    # The backend sends a recalled memory with score 0 and no score_type.
+    assert source_details({"source_type": "memory", "score": 0}) == "• Памет"
+    # A source that came without any score still says so, as before.
+    assert source_details({"source_type": "memory"}) == "• Памет • Сходство: N/A"
 
 
 # ----------------------------------------------------------------------- panel
@@ -133,6 +154,22 @@ def test_panel_shows_label_page_and_score_type_for_every_source(mock_page):
     assert "Първият откъс" in shown
     # 0.5 stays 0.5 %: the scale is no longer guessed.
     assert "• Памет • Сходство: 0.5% (косинусово)" in shown
+
+
+def test_panel_shows_the_distance_of_a_summary_and_nothing_for_a_memory(mock_page):
+    message = ChatMessage("assistant", "отговор", page=mock_page)
+    sources = [
+        {"file_name": "Принципи.epub", "source_type": "concept", "content_snippet": "Резюме",
+         "score": 0.152, "score_type": "distance"},
+        {"file_name": "Памет (Memory)", "source_type": "memory", "content_snippet": "Обича кафе", "score": 0},
+    ]
+
+    message.open_sources_panel(sources)
+
+    shown = opened_panel_texts(mock_page)
+    assert "• Концепция • Разстояние: 0.152 (по-малко = по-близо)" in shown
+    assert "• Памет" in shown
+    assert "%" not in shown
 
 
 def test_panel_survives_a_source_that_is_not_a_dict(mock_page):
