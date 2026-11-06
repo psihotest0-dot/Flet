@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 LOG_FILE = Path(__file__).with_name("app.log")
 HEALTH_CHECK_INTERVAL = 10
 # Tab index -> the view method that re-reads its data when the tab is opened again.
-RELOADED_ON_VISIT = {1: "load_memories", 3: "load"}
+RELOADED_ON_VISIT = {1: "load_memories", 3: "refresh"}
 # Libraries that log every single request on INFO.
 NOISY_LOGGERS = ("httpx", "httpcore")
 

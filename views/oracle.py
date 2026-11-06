@@ -10,7 +10,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import flet as ft
 
@@ -28,6 +29,24 @@ SYMBOL_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9./-]{0,14}$")
 REASON_WIDTH = 340
 
 STATUS_FAILED = "failed"
+
+# The evaluation of the Oracle is pre-registered in the bot's repo
+# (docs/oracle-provider-task.md, section 5): only shadow-mode signals from the
+# day the Oracle was switched on count, probes do not, and there is no verdict
+# before 30 APPROVE and 30 VETO with a final answer and 80 % availability. A new
+# model or prompt starts a new period - change EVALUATION_START then, by hand.
+EVALUATION_START = datetime(2026, 11, 6, 16, 0, tzinfo=UTC)
+SHADOW_MODE = "shadow"
+PROBE_VERSION = "oracle-probe"
+FINAL_VERDICTS = ("APPROVE", "VETO")
+APPROVE_TARGET = 30
+VETO_TARGET = 30
+AVAILABILITY_TARGET = 0.8
+# The most the backend sends in one page; the progress block reads the journal
+# from the newest row back to EVALUATION_START.
+PROGRESS_PAGE_SIZE = 200
+PROGRESS_LABEL_WIDTH = 90
+PROGRESS_BAR_WIDTH = 260
 
 # Verdict -> (label, colour, what it means).
 VERDICTS = {
@@ -107,6 +126,8 @@ def decision_details(decision: OracleDecision) -> str:
         lines.append(f"Заявка: {decision.request_id}")
     if decision.model:
         lines.append(f"Модел: {decision.model}")
+    if decision.prompt_version:
+        lines.append(f"Промпт: {decision.prompt_version}")
     if decision.attempts:
         lines.append(f"Опити: {decision.attempts}")
     if decision.prompt_tokens is not None or decision.completion_tokens is not None:
@@ -122,21 +143,78 @@ def decision_details(decision: OracleDecision) -> str:
     return "\n".join(lines)
 
 
-def summary_line(decisions: list[OracleDecision]) -> str:
-    """How the listed decisions split by verdict - only what is loaded, not the whole journal."""
-    if not decisions:
-        return ""
-    failed = sum(1 for d in decisions if d.status == STATUS_FAILED)
-    counts = {
-        verdict: sum(
-            1 for d in decisions if d.status != STATUS_FAILED and d.verdict == verdict
+@dataclass(frozen=True)
+class Progress:
+    """Where the evaluation stands: counts only, never how a trade ended.
+
+    ``asked`` is the number of signals the model was asked about, ``answered``
+    those that got a final answer (``APPROVE`` or ``VETO``). ``probes_unmarked``
+    is true while no row says what version of signal it was, so the probes of the
+    first day cannot be told from real signals yet.
+    """
+    asked: int = 0
+    answered: int = 0
+    approve: int = 0
+    veto: int = 0
+    probes_unmarked: bool = False
+
+    @property
+    def availability(self) -> float | None:
+        """Share of the signals that got a final answer; ``None`` before any signal."""
+        return self.answered / self.asked if self.asked else None
+
+    @property
+    def reached(self) -> bool:
+        """Whether every bar of the pre-registered minimum is met."""
+        availability = self.availability
+        return (
+            self.approve >= APPROVE_TARGET
+            and self.veto >= VETO_TARGET
+            and availability is not None
+            and availability >= AVAILABILITY_TARGET
         )
-        for verdict in VERDICTS
-    }
-    parts = [f"В списъка: {len(decisions)}"]
-    parts += [f"{verdict} {count}" for verdict, count in counts.items()]
-    parts.append(f"неуспешни {failed}")
-    return " · ".join(parts)
+
+
+def count_progress(decisions) -> Progress:
+    """Count the journal the way the bot's judge does (``judge-oracle``).
+
+    The unit is the signal, not the question: the model is asked again about a
+    ``HOLD`` on every tick. A signal counts once, by its latest *final* answer
+    (so ``HOLD`` then ``APPROVE`` is an ``APPROVE``, and a later ``HOLD`` does not
+    take a final answer back). Only shadow-mode rows from ``EVALUATION_START``
+    count, and the probes (``signal_version`` ``oracle-probe``) do not. A signal
+    that never got a final answer still counts as asked.
+    """
+    asked: set[str] = set()
+    final: dict[str, OracleDecision] = {}
+    versions_known = False
+    for decision in decisions:
+        if (
+            decision.mode != SHADOW_MODE
+            or not decision.signal_id
+            or decision.created_at is None
+            or decision.created_at < EVALUATION_START
+        ):
+            continue
+        if decision.signal_version == PROBE_VERSION:
+            versions_known = True
+            continue
+        if decision.signal_version:
+            versions_known = True
+        asked.add(decision.signal_id)
+        if decision.status == STATUS_FAILED or decision.verdict not in FINAL_VERDICTS:
+            continue
+        latest = final.get(decision.signal_id)
+        if latest is None or decision.id > latest.id:
+            final[decision.signal_id] = decision
+    verdicts = [decision.verdict for decision in final.values()]
+    return Progress(
+        asked=len(asked),
+        answered=len(final),
+        approve=verdicts.count("APPROVE"),
+        veto=verdicts.count("VETO"),
+        probes_unmarked=bool(asked) and not versions_known,
+    )
 
 
 class OracleView(ft.Container):
@@ -160,8 +238,13 @@ class OracleView(ft.Container):
         self._polling = False
         self._active = False
         self._poll_failed = False
+        self._progress_failed = False
         self._load_task = None
         self._poll_task = None
+        # Every journal row since EVALUATION_START, by id: the evaluation counts
+        # signals, so it needs more than the 50 rows of the table.
+        self._progress_rows: dict[int, OracleDecision] = {}
+        self._progress_lock = asyncio.Lock()
 
         self.symbol_field = ft.TextField(
             label="Символ",
@@ -189,7 +272,47 @@ class OracleView(ft.Container):
             size=12,
             color=ft.colors.GREY_400,
         )
-        self.summary_text = ft.Text("", size=12)
+        self.approve_bar, self.approve_value, approve_row = self._progress_row("APPROVE")
+        self.veto_bar, self.veto_value, veto_row = self._progress_row("VETO")
+        self.availability_bar, self.availability_value, availability_row = (
+            self._progress_row("Наличност")
+        )
+        self.progress_status = ft.Text("", size=12)
+        self.probes_note = ft.Text(
+            "Пробните сигнали още не се изключват (бекендът не праща версията на "
+            "сигнала) — числата може да са завишени.",
+            size=12,
+            color=ft.colors.ORANGE_300,
+            visible=False,
+        )
+        self.progress_error = ft.Text("", size=12, color=ft.colors.RED_300, visible=False)
+        self.progress_block = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("Към минимума на оценката", weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        "От журнала на бекенда: сенчест режим от "
+                        f"{EVALUATION_START:%d.%m.%Y %H:%M} UTC, без проби. Присъдата е "
+                        "на judge-oracle на бота, не на този панел: тук числата могат да "
+                        "са по-високи, защото ботът записва „failed“ след своя таймаут, "
+                        "а бекендът го води като „answered“.",
+                        size=12,
+                        color=ft.colors.GREY_400,
+                    ),
+                    approve_row,
+                    veto_row,
+                    availability_row,
+                    self.progress_status,
+                    self.probes_note,
+                    self.progress_error,
+                ],
+                spacing=4,
+                tight=True,
+            ),
+            padding=10,
+            border_radius=8,
+            border=ft.border.all(1, ft.colors.OUTLINE_VARIANT),
+        )
         self.updated_text = ft.Text("", size=12, color=ft.colors.GREY_400)
         self.error_text = ft.Text("", size=12, color=ft.colors.RED_300, visible=False)
         self.empty_text = ft.Text("", color=ft.colors.GREY_400, visible=False)
@@ -220,7 +343,8 @@ class OracleView(ft.Container):
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
                 self.intro_text,
-                ft.Row([self.summary_text, self.updated_text], wrap=True, spacing=16),
+                self.progress_block,
+                self.updated_text,
                 self.error_text,
                 ft.Column(
                     [
@@ -240,7 +364,7 @@ class OracleView(ft.Container):
     # -------------------------------------------------------------- lifecycle
     def did_mount(self):
         if self._load_task is None:
-            self._load_task = self.page.run_task(self.load)
+            self._load_task = self.page.run_task(self.refresh)
         if self._active:
             self.set_active(True)
 
@@ -269,7 +393,7 @@ class OracleView(ft.Container):
 
     # ----------------------------------------------------------------- events
     async def on_refresh_click(self, e):
-        await self.load()
+        await self.refresh()
 
     async def on_filter_submit(self, e):
         symbol = (self.symbol_field.value or "").strip().upper()
@@ -287,6 +411,10 @@ class OracleView(ft.Container):
         await self.load_more()
 
     # ------------------------------------------------------------------- data
+    async def refresh(self, *_args):
+        """Read the whole tab again: the table and the progress block."""
+        await asyncio.gather(self.load(), self.refresh_progress(rebuild=True))
+
     async def load(self, *_args):
         """Read the newest page again for the current symbol and start the list over."""
         self._generation += 1
@@ -351,6 +479,7 @@ class OracleView(ft.Container):
                 break
             try:
                 await self.refresh_newest()
+                await self.refresh_progress()
             except asyncio.CancelledError:
                 raise
             except Exception as ex:  # noqa: BLE001
@@ -394,7 +523,106 @@ class OracleView(ft.Container):
         self.decisions = fresh + self.decisions
         self._show_loaded()
 
+    async def refresh_progress(self, rebuild: bool = False):
+        """Bring the evaluation counters up to date.
+
+        ``rebuild`` reads the journal back to ``EVALUATION_START``; otherwise only
+        the rows newer than the newest one already known are read. A failure is
+        shown in the block (the old numbers stay) and never raised: the table has
+        its own error line.
+        """
+        async with self._progress_lock:
+            newest = 0 if rebuild or not self._progress_rows else max(self._progress_rows)
+            try:
+                fresh = await self._read_journal_since(newest)
+            except asyncio.CancelledError:
+                raise
+            except Exception as ex:  # noqa: BLE001
+                if not self._progress_failed:
+                    logger.warning("Could not read the Oracle journal for the counters: %s", ex)
+                self._progress_failed = True
+                self.progress_error.value = f"Броячите не могат да се обновят: {error_detail(ex)}"
+                self.progress_error.visible = True
+                safe_update(self, self.progress_error)
+                return
+            self._progress_failed = False
+            if rebuild:
+                self._progress_rows = {}
+            self._progress_rows.update({decision.id: decision for decision in fresh})
+            self.progress_error.visible = False
+            self._show_progress(count_progress(self._progress_rows.values()))
+
+    async def _read_journal_since(self, newest_known_id: int) -> list[OracleDecision]:
+        """The journal rows after ``newest_known_id`` and not before ``EVALUATION_START``."""
+        rows: list[OracleDecision] = []
+        before_id: int | None = None
+        while True:
+            page = await self.api_client.list_oracle_decisions(
+                limit=PROGRESS_PAGE_SIZE, before_id=before_id
+            )
+            for decision in page.decisions:
+                if decision.id <= newest_known_id or (
+                    decision.created_at is not None
+                    and decision.created_at < EVALUATION_START
+                ):
+                    return rows
+                rows.append(decision)
+            next_id = page.next_before_id
+            # A page id that does not go back would read the same page forever.
+            if not next_id or (before_id is not None and next_id >= before_id):
+                return rows
+            before_id = next_id
+
     # ----------------------------------------------------------------- screen
+    @staticmethod
+    def _progress_row(label: str) -> tuple[ft.ProgressBar, ft.Text, ft.Row]:
+        bar = ft.ProgressBar(value=0, width=PROGRESS_BAR_WIDTH, color=ft.colors.BLUE)
+        value = ft.Text("", size=12)
+        row = ft.Row(
+            [ft.Text(label, width=PROGRESS_LABEL_WIDTH), bar, value],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+        return bar, value, row
+
+    def _show_progress(self, progress: Progress) -> None:
+        """Draw the counters. Only counts - never how a vetoed trade ended."""
+        for bar, value, count, target in (
+            (self.approve_bar, self.approve_value, progress.approve, APPROVE_TARGET),
+            (self.veto_bar, self.veto_value, progress.veto, VETO_TARGET),
+        ):
+            bar.value = min(count / target, 1)
+            bar.color = ft.colors.GREEN if count >= target else ft.colors.BLUE
+            value.value = f"{count} / {target}"
+
+        availability = progress.availability
+        if availability is None:
+            self.availability_bar.value = 0
+            self.availability_bar.color = ft.colors.BLUE
+            self.availability_value.value = "още няма сигнали"
+        else:
+            self.availability_bar.value = availability
+            self.availability_bar.color = (
+                ft.colors.GREEN if availability >= AVAILABILITY_TARGET else ft.colors.AMBER
+            )
+            self.availability_value.value = (
+                f"{availability * 100:.0f} % ({progress.answered} от {progress.asked} "
+                f"сигнала) · цел поне {AVAILABILITY_TARGET * 100:.0f} %"
+            )
+
+        self.progress_status.value = (
+            "Минимумът е достигнат; присъда дава judge-oracle на бота."
+            if progress.reached
+            else "Под минимума няма присъда: събирането продължава."
+        )
+        self.probes_note.visible = progress.probes_unmarked
+        safe_update(
+            self,
+            self.approve_bar, self.approve_value,
+            self.veto_bar, self.veto_value,
+            self.availability_bar, self.availability_value,
+            self.progress_status, self.probes_note, self.progress_error,
+        )
+
     def _show_first_page(self, page: OracleDecisionPage) -> None:
         self.decisions = list(page.decisions)
         self._next_before_id = page.next_before_id
@@ -406,7 +634,6 @@ class OracleView(ft.Container):
         self._set_error(None)
         self.update_table()
         self.more_btn.visible = bool(self._next_before_id)
-        self.summary_text.value = summary_line(self.decisions)
         if self.decisions:
             self.empty_text.visible = False
         else:
@@ -416,9 +643,7 @@ class OracleView(ft.Container):
                 else "Още няма решения. Журналът се пълни, когато ботът пита Oracle."
             )
             self.empty_text.visible = True
-        self._touch(
-            self.more_btn, self.summary_text, self.empty_text, self.data_table
-        )
+        self._touch(self.more_btn, self.empty_text, self.data_table)
 
     def _touch(self, *dirty: ft.Control) -> None:
         self.updated_text.value = f"Обновено в {datetime.now():%H:%M:%S}"

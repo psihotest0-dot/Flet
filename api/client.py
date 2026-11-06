@@ -137,6 +137,10 @@ class OracleDecision(BaseModel):
     completion_tokens: int | None = None
     latency_ms: int | None = None
     error: str | None = None
+    # Not in the contract yet (the backend is adding them): the kind of signal
+    # ("oracle-probe" for the bot's test questions) and the version of the prompt.
+    signal_version: str | None = None
+    prompt_version: str | None = None
 
 
 class OracleDecisionPage(BaseModel):

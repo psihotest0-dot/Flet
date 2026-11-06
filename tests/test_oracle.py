@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -16,14 +16,18 @@ import main as main_module
 from api.client import APIClient, APIError, OracleDecision, OracleDecisionPage
 from views import oracle as oracle_module
 from views.oracle import (
+    AVAILABILITY_TARGET,
+    EVALUATION_START,
     PAGE_SIZE,
+    PROGRESS_PAGE_SIZE,
     OracleView,
+    Progress,
+    count_progress,
     decision_details,
     format_latency,
     format_time,
     mode_cell,
     reason_text,
-    summary_line,
     verdict_cell,
 )
 
@@ -60,6 +64,39 @@ def failed(id: int, **fields) -> OracleDecision:
     }
     values.update(fields)
     return decision(id, **values)
+
+
+def signal(id: int, verdict: str | None = "VETO", **fields) -> OracleDecision:
+    """A shadow-mode question after the start of the evaluation, one signal per row."""
+    values = {
+        "created_at": EVALUATION_START + timedelta(minutes=id),
+        "mode": "shadow",
+        "verdict": verdict,
+        "signal_id": f"signal-{id}",
+    }
+    values.update(fields)
+    return decision(id, **values)
+
+
+class FakeJournal:
+    """The journal as the backend serves it: newest first, paged by ``before_id``."""
+
+    def __init__(self, *rows: OracleDecision):
+        self.rows = sorted(rows, key=lambda row: -row.id)
+        self.calls: list[dict] = []
+
+    async def __call__(self, limit=50, before_id=None, symbol=None):
+        self.calls.append({"limit": limit, "before_id": before_id, "symbol": symbol})
+        matching = [
+            row for row in self.rows
+            if (not before_id or row.id < before_id) and (not symbol or row.symbol == symbol)
+        ]
+        shown = matching[:limit]
+        next_id = shown[-1].id if len(shown) == limit else 0
+        return OracleDecisionPage(decisions=shown, next_before_id=next_id)
+
+    def progress_calls(self) -> list[dict]:
+        return [call for call in self.calls if call["limit"] == PROGRESS_PAGE_SIZE]
 
 
 def page(*decisions: OracleDecision, next_before_id: int = 0) -> OracleDecisionPage:
@@ -298,29 +335,138 @@ def test_details_of_a_failed_question_name_the_error_and_the_attempts():
     assert "Опити: 2" in text
 
 
-def test_the_summary_counts_the_verdicts_and_the_failures_separately():
+def test_details_name_the_version_of_the_prompt_when_the_backend_sends_it():
+    assert "Промпт: 3f9a1c0b2d4e" in decision_details(decision(5, prompt_version="3f9a1c0b2d4e"))
+    assert "Промпт" not in decision_details(decision(5))
+
+
+# -------------------------------------------------------------- the counters
+def test_an_empty_journal_has_no_progress_and_no_availability():
+    progress = count_progress([])
+
+    assert progress == Progress()
+    assert progress.availability is None
+    assert progress.reached is False
+
+
+def test_each_signal_counts_once_by_its_latest_final_answer():
     rows = [
-        decision(1, verdict="APPROVE"),
-        decision(2, verdict="VETO"),
-        decision(3, verdict="VETO"),
-        decision(4, verdict="HOLD"),
-        failed(5),
+        signal(1, "HOLD", signal_id="a"),
+        signal(2, "HOLD", signal_id="a"),
+        signal(3, "APPROVE", signal_id="a"),
+        signal(4, "VETO", signal_id="b"),
+        signal(5, "APPROVE", signal_id="c"),
+        signal(6, "VETO", signal_id="c"),
     ]
 
-    assert summary_line(rows) == (
-        "В списъка: 5 · APPROVE 1 · VETO 2 · HOLD 1 · неуспешни 1"
-    )
-    assert summary_line([]) == ""
+    progress = count_progress(rows)
+
+    # a: HOLD, HOLD, then APPROVE; b: VETO; c: APPROVE and then VETO - the later one.
+    assert (progress.approve, progress.veto) == (1, 2)
+    assert (progress.asked, progress.answered) == (3, 3)
 
 
-def test_a_failed_question_is_never_counted_as_a_verdict():
-    # The backend leaves the verdict out of a failed row; if one ever carried a
-    # word, the question still has no answer.
-    rows = [decision(1, verdict="VETO"), failed(2, verdict="VETO")]
+def test_a_hold_after_a_final_answer_does_not_take_it_back():
+    rows = [signal(1, "VETO", signal_id="a"), signal(2, "HOLD", signal_id="a")]
 
-    assert summary_line(rows) == (
-        "В списъка: 2 · APPROVE 0 · VETO 1 · HOLD 0 · неуспешни 1"
-    )
+    progress = count_progress(rows)
+
+    assert (progress.veto, progress.answered) == (1, 1)
+
+
+def test_the_order_of_the_rows_does_not_matter():
+    rows = [signal(1, "APPROVE", signal_id="a"), signal(2, "VETO", signal_id="a")]
+
+    assert count_progress(rows) == count_progress(list(reversed(rows)))
+    assert count_progress(rows).veto == 1
+
+
+def test_a_signal_that_never_got_a_final_answer_is_asked_but_not_answered():
+    rows = [
+        signal(1, "HOLD", signal_id="a"),
+        failed(2, mode="shadow", signal_id="b", created_at=EVALUATION_START + timedelta(hours=1)),
+        signal(3, "APPROVE", signal_id="c"),
+    ]
+
+    progress = count_progress(rows)
+
+    assert (progress.asked, progress.answered, progress.approve) == (3, 1, 1)
+    assert progress.availability == pytest.approx(1 / 3)
+
+
+def test_a_failed_row_is_never_a_final_answer_even_with_a_verdict_on_it():
+    rows = [failed(1, mode="shadow", verdict="VETO", created_at=EVALUATION_START)]
+
+    progress = count_progress(rows)
+
+    assert (progress.asked, progress.answered, progress.veto) == (1, 0, 0)
+
+
+def test_only_shadow_mode_counts():
+    rows = [signal(1, "VETO", mode="active"), signal(2, "VETO", mode="shadow")]
+
+    assert count_progress(rows).asked == 1
+
+
+def test_rows_before_the_start_of_the_evaluation_do_not_count():
+    before = EVALUATION_START - timedelta(seconds=1)
+    rows = [signal(1, "VETO", created_at=before), signal(2, "VETO", created_at=EVALUATION_START)]
+
+    progress = count_progress(rows)
+
+    assert (progress.asked, progress.veto) == (1, 1)
+
+
+def test_a_row_without_a_time_or_a_signal_cannot_be_counted():
+    rows = [signal(1, "VETO", created_at=None), signal(2, "VETO", signal_id=None)]
+
+    assert count_progress(rows) == Progress()
+
+
+def test_a_probe_is_left_out_once_the_backend_says_which_rows_are_probes():
+    rows = [
+        signal(1, "VETO", signal_version="oracle-probe"),
+        signal(2, "VETO", signal_version="1.0.0"),
+        signal(3, "APPROVE", signal_version="1.0.0"),
+    ]
+
+    progress = count_progress(rows)
+
+    assert (progress.asked, progress.veto, progress.approve) == (2, 1, 1)
+    assert progress.probes_unmarked is False
+
+
+def test_probes_are_not_guessed_while_the_backend_does_not_say():
+    # Two VETO rows of the same stock, one of them a probe in reality - nothing in
+    # the row tells which, so both count and the block says so.
+    rows = [signal(1, "VETO"), signal(2, "VETO")]
+
+    progress = count_progress(rows)
+
+    assert progress.veto == 2
+    assert progress.probes_unmarked is True
+
+
+def test_the_probes_note_is_not_needed_before_there_is_a_signal():
+    assert count_progress([]).probes_unmarked is False
+
+
+def test_the_minimum_needs_all_three_bars():
+    def many(approve, veto, silent):
+        rows = [signal(i, "APPROVE", signal_version="1.0.0") for i in range(1, approve + 1)]
+        rows += [signal(1000 + i, "VETO", signal_version="1.0.0") for i in range(veto)]
+        rows += [signal(2000 + i, "HOLD", signal_version="1.0.0") for i in range(silent)]
+        return count_progress(rows)
+
+    assert many(30, 30, 0).reached is True
+    assert many(29, 30, 0).reached is False
+    assert many(30, 29, 0).reached is False
+    # 60 answered and 14 never answered: 81 %.
+    assert many(30, 30, 14).availability == pytest.approx(60 / 74)
+    assert many(30, 30, 14).reached is True
+    # 60 answered and 16 never answered: 79 %.
+    assert many(30, 30, 16).availability < AVAILABILITY_TARGET
+    assert many(30, 30, 16).reached is False
 
 
 # --------------------------------------------------------------------- loading
@@ -333,7 +479,7 @@ async def test_opening_the_tab_loads_the_newest_page(mock_page, mock_api_client)
     )
 
     view.did_mount()
-    mock_page.run_task.assert_any_call(view.load)
+    mock_page.run_task.assert_any_call(view.refresh)
     await view.load()
 
     mock_api_client.list_oracle_decisions.assert_awaited_once_with(
@@ -341,7 +487,6 @@ async def test_opening_the_tab_loads_the_newest_page(mock_page, mock_api_client)
     )
     assert ids(view) == [3, 2, 1]
     assert verdict_labels(view) == ["APPROVE", "VETO", "Неуспех"]
-    assert view.summary_text.value.startswith("В списъка: 3")
     assert view.more_btn.visible is False
     assert view.empty_text.visible is False
     assert view.error_text.visible is False
@@ -356,7 +501,6 @@ async def test_a_journal_without_decisions_says_why_it_is_empty(mock_page, mock_
     assert view.data_table.rows == []
     assert view.empty_text.visible is True
     assert "Още няма решения" in view.empty_text.value
-    assert view.summary_text.value == ""
 
 
 @pytest.mark.asyncio
@@ -758,7 +902,9 @@ async def test_the_poll_sleeps_then_refreshes_while_the_tab_is_visible(
     await view.poll()
 
     assert sleeps == [oracle_module.POLL_INTERVAL] * 2
-    assert mock_api_client.list_oracle_decisions.await_count == 1
+    # One round: the newest rows of the table, then the counters.
+    limits = [call.kwargs["limit"] for call in mock_api_client.list_oracle_decisions.await_args_list]
+    assert limits == [PAGE_SIZE, PROGRESS_PAGE_SIZE]
 
 
 @pytest.mark.asyncio
@@ -767,9 +913,17 @@ async def test_a_failing_poll_is_logged_once_and_shown_until_it_works_again(
 ):
     view = make_view(mock_page, mock_api_client, decision(1))
     await view.load()
-    mock_api_client.list_oracle_decisions = AsyncMock(
-        side_effect=[httpx.ConnectError("down"), httpx.ConnectError("down"), page(decision(1))]
-    )
+    table_reads = 0
+
+    async def journal(limit=50, before_id=None, symbol=None):
+        nonlocal table_reads
+        if limit == PAGE_SIZE:
+            table_reads += 1
+            if table_reads <= 2:
+                raise httpx.ConnectError("down")
+        return page(decision(1))
+
+    mock_api_client.list_oracle_decisions = journal
     rounds = 0
 
     async def fake_sleep(_seconds):
@@ -794,6 +948,295 @@ async def test_a_failing_poll_is_logged_once_and_shown_until_it_works_again(
     assert shown[-1] is None
     assert view.error_text.visible is False
     assert ids(view) == [1]
+
+
+# ---------------------------------------------------- the counters on screen
+def bars(view: OracleView) -> dict[str, tuple[float, str]]:
+    return {
+        "approve": (view.approve_bar.value, view.approve_value.value),
+        "veto": (view.veto_bar.value, view.veto_value.value),
+        "availability": (view.availability_bar.value, view.availability_value.value),
+    }
+
+
+@pytest.mark.asyncio
+async def test_the_block_shows_the_counts_toward_the_minimum(mock_page, mock_api_client):
+    journal = FakeJournal(
+        signal(1, "APPROVE", signal_version="1.0.0"),
+        signal(2, "APPROVE", signal_version="1.0.0"),
+        signal(3, "VETO", signal_version="1.0.0"),
+        signal(4, "HOLD", signal_version="1.0.0"),
+        signal(5, "VETO", signal_version="oracle-probe"),
+    )
+    mock_api_client.list_oracle_decisions = journal
+    view = OracleView(mock_page, mock_api_client)
+
+    await view.refresh()
+
+    shown = bars(view)
+    assert shown["approve"] == (pytest.approx(2 / 30), "2 / 30")
+    assert shown["veto"] == (pytest.approx(1 / 30), "1 / 30")
+    assert shown["availability"][0] == pytest.approx(0.75)
+    assert "75 % (3 от 4 сигнала)" in shown["availability"][1]
+    assert "Под минимума няма присъда" in view.progress_status.value
+    assert view.probes_note.visible is False
+
+
+@pytest.mark.asyncio
+async def test_the_block_says_so_when_the_probes_cannot_be_told_apart(
+    mock_page, mock_api_client
+):
+    mock_api_client.list_oracle_decisions = FakeJournal(signal(1, "VETO"), signal(2, "APPROVE"))
+    view = OracleView(mock_page, mock_api_client)
+
+    await view.refresh_progress(rebuild=True)
+
+    assert view.probes_note.visible is True
+    assert view.veto_value.value == "1 / 30"
+
+
+@pytest.mark.asyncio
+async def test_before_any_signal_the_block_says_there_are_none(mock_page, mock_api_client):
+    mock_api_client.list_oracle_decisions = FakeJournal()
+    view = OracleView(mock_page, mock_api_client)
+
+    await view.refresh_progress(rebuild=True)
+
+    assert bars(view)["availability"] == (0, "още няма сигнали")
+    assert view.approve_value.value == "0 / 30"
+    assert view.probes_note.visible is False
+
+
+@pytest.mark.asyncio
+async def test_the_block_announces_the_minimum_but_leaves_the_verdict_to_the_judge(
+    mock_page, mock_api_client
+):
+    rows = [signal(i, "APPROVE", signal_version="1.0.0") for i in range(1, 31)]
+    rows += [signal(100 + i, "VETO", signal_version="1.0.0") for i in range(30)]
+    mock_api_client.list_oracle_decisions = FakeJournal(*rows)
+    view = OracleView(mock_page, mock_api_client)
+
+    await view.refresh_progress(rebuild=True)
+
+    assert view.approve_bar.value == 1 and view.veto_bar.value == 1
+    assert "достигнат" in view.progress_status.value
+    assert "judge-oracle" in view.progress_status.value
+
+
+def test_the_block_names_the_judge_as_the_authority_and_the_start_of_the_period(
+    mock_page, mock_api_client
+):
+    view = OracleView(mock_page, mock_api_client)
+
+    caption = view.progress_block.content.controls[1].value
+
+    assert "judge-oracle" in caption
+    assert "06.11.2026 16:00 UTC" in caption
+    assert "без проби" in caption
+
+
+@pytest.mark.asyncio
+async def test_the_journal_is_read_back_to_the_start_of_the_evaluation_in_big_pages(
+    mock_page, mock_api_client
+):
+    # 450 rows of the evaluation (ids 10-459), then 3 older ones (ids 1-3) that
+    # must not be read past.
+    old = [
+        decision(
+            i, signal_id=f"old-{i}", mode="shadow",
+            created_at=EVALUATION_START - timedelta(days=1),
+        )
+        for i in (1, 2, 3)
+    ]
+    rows = [signal(i + 10, "VETO", signal_id=f"s{i}", signal_version="1.0.0") for i in range(450)]
+    journal = FakeJournal(*old, *rows)
+    mock_api_client.list_oracle_decisions = journal
+    view = OracleView(mock_page, mock_api_client)
+
+    await view.refresh_progress(rebuild=True)
+
+    calls = journal.progress_calls()
+    assert [call["limit"] for call in calls] == [PROGRESS_PAGE_SIZE] * 3
+    assert [call["before_id"] for call in calls] == [None, 260, 60]
+    assert all(call["symbol"] is None for call in calls)
+    assert view.veto_value.value == "450 / 30"
+    assert view.veto_bar.value == 1
+
+
+@pytest.mark.asyncio
+async def test_the_counters_ignore_the_symbol_filter_of_the_table(mock_page, mock_api_client):
+    journal = FakeJournal(
+        signal(1, "VETO", symbol="AAPL", signal_version="1.0.0"),
+        signal(2, "APPROVE", symbol="NVDA", signal_version="1.0.0"),
+    )
+    mock_api_client.list_oracle_decisions = journal
+    view = OracleView(mock_page, mock_api_client)
+    view.symbol_field.value = "AAPL"
+    await view.on_filter_submit(None)
+
+    await view.refresh()
+
+    assert [row.cells[1].content.value for row in view.data_table.rows] == ["AAPL"]
+    assert view.veto_value.value == "1 / 30"
+    assert view.approve_value.value == "1 / 30"
+
+
+@pytest.mark.asyncio
+async def test_a_poll_reads_only_the_rows_it_has_not_seen(mock_page, mock_api_client):
+    rows = [signal(i, "VETO", signal_version="1.0.0") for i in range(1, 6)]
+    journal = FakeJournal(*rows)
+    mock_api_client.list_oracle_decisions = journal
+    view = OracleView(mock_page, mock_api_client)
+    await view.refresh_progress(rebuild=True)
+    assert view.veto_value.value == "5 / 30"
+    journal.calls.clear()
+    journal.rows.insert(0, signal(6, "APPROVE", signal_version="1.0.0"))
+
+    await view.refresh_progress()
+
+    assert len(journal.progress_calls()) == 1
+    assert view.veto_value.value == "5 / 30"
+    assert view.approve_value.value == "1 / 30"
+
+
+@pytest.mark.asyncio
+async def test_reading_stops_at_the_newest_row_that_is_already_known(mock_page, mock_api_client):
+    mock_api_client.list_oracle_decisions = FakeJournal(
+        *[signal(i, "VETO", signal_version="1.0.0") for i in range(1, 6)]
+    )
+    view = OracleView(mock_page, mock_api_client)
+
+    fresh = await view._read_journal_since(3)
+
+    # Row 3 is known; it is neither read again nor are the older ones.
+    assert [row.id for row in fresh] == [5, 4]
+
+
+@pytest.mark.asyncio
+async def test_a_signal_answered_later_changes_the_count_it_was_in(
+    mock_page, mock_api_client
+):
+    journal = FakeJournal(signal(1, "HOLD", signal_id="a", signal_version="1.0.0"))
+    mock_api_client.list_oracle_decisions = journal
+    view = OracleView(mock_page, mock_api_client)
+    await view.refresh_progress(rebuild=True)
+    assert (view.approve_value.value, view.veto_value.value) == ("0 / 30", "0 / 30")
+
+    # The same signal is asked again on the next tick and now gets an answer.
+    journal.rows.insert(0, signal(2, "VETO", signal_id="a", signal_version="1.0.0"))
+    await view.refresh_progress()
+
+    assert view.veto_value.value == "1 / 30"
+    assert "100 % (1 от 1 сигнала)" in view.availability_value.value
+
+
+@pytest.mark.asyncio
+async def test_a_full_refresh_forgets_rows_the_backend_no_longer_has(
+    mock_page, mock_api_client
+):
+    journal = FakeJournal(
+        signal(1, "VETO", signal_version="1.0.0"), signal(2, "VETO", signal_version="1.0.0")
+    )
+    mock_api_client.list_oracle_decisions = journal
+    view = OracleView(mock_page, mock_api_client)
+    await view.refresh_progress(rebuild=True)
+    journal.rows = [row for row in journal.rows if row.id != 2]
+
+    await view.refresh_progress(rebuild=True)
+
+    assert view.veto_value.value == "1 / 30"
+
+
+@pytest.mark.asyncio
+async def test_a_page_that_does_not_go_back_ends_the_reading(mock_page, mock_api_client):
+    rows = [signal(i, "VETO", signal_version="1.0.0") for i in (5, 4)]
+    calls = []
+
+    async def stuck(limit=50, before_id=None, symbol=None):
+        calls.append(before_id)
+        # Always the same page, always pointing at the same "next" page.
+        return page(*rows, next_before_id=4)
+
+    mock_api_client.list_oracle_decisions = stuck
+    view = OracleView(mock_page, mock_api_client)
+
+    await asyncio.wait_for(view.refresh_progress(rebuild=True), timeout=5)
+
+    assert calls == [None, 4]
+
+
+@pytest.mark.asyncio
+async def test_counters_that_cannot_be_read_keep_the_old_numbers_and_say_why(
+    mock_page, mock_api_client, caplog
+):
+    journal = FakeJournal(signal(1, "VETO", signal_version="1.0.0"))
+    mock_api_client.list_oracle_decisions = journal
+    view = OracleView(mock_page, mock_api_client)
+    await view.refresh_progress(rebuild=True)
+    mock_api_client.list_oracle_decisions = AsyncMock(side_effect=httpx.ConnectError("down"))
+    caplog.set_level(logging.WARNING)
+
+    await view.refresh_progress()
+    await view.refresh_progress()
+
+    assert view.progress_error.visible is True
+    assert "не могат да се обновят" in view.progress_error.value
+    assert view.veto_value.value == "1 / 30"
+    # Logged once when it starts, not once per poll.
+    assert len([r for r in caplog.records if "for the counters" in r.getMessage()]) == 1
+
+    mock_api_client.list_oracle_decisions = journal
+    await view.refresh_progress()
+
+    assert view.progress_error.visible is False
+
+
+@pytest.mark.asyncio
+async def test_a_failing_counter_read_does_not_break_the_table(mock_page, mock_api_client):
+    async def journal(limit=50, before_id=None, symbol=None):
+        if limit == PROGRESS_PAGE_SIZE:
+            raise APIError(500, "boom")
+        return page(decision(2), decision(1))
+
+    mock_api_client.list_oracle_decisions = journal
+    view = OracleView(mock_page, mock_api_client)
+
+    await view.refresh()
+
+    assert ids(view) == [2, 1]
+    assert view.error_text.visible is False
+    assert view.progress_error.visible is True
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_counter_read_is_not_swallowed(mock_page, mock_api_client):
+    mock_api_client.list_oracle_decisions = AsyncMock(side_effect=asyncio.CancelledError)
+    view = OracleView(mock_page, mock_api_client)
+
+    with pytest.raises(asyncio.CancelledError):
+        await view.refresh_progress(rebuild=True)
+
+
+@pytest.mark.asyncio
+async def test_the_block_shows_no_trade_outcome(mock_page, mock_api_client):
+    # "No peeking" (docs/oracle-provider-task.md, section 5): until the minimum is
+    # reached only counts and availability are shown. Everything the block says
+    # is a count, a target or an explanation.
+    rows = [signal(i, "VETO", signal_version="1.0.0") for i in range(1, 4)]
+    mock_api_client.list_oracle_decisions = FakeJournal(*rows)
+    view = OracleView(mock_page, mock_api_client)
+    await view.refresh_progress(rebuild=True)
+
+    texts = [
+        control.value
+        for control in view.progress_block.content.controls
+        if isinstance(control, ft.Text)
+    ]
+    texts += [view.approve_value.value, view.veto_value.value, view.availability_value.value]
+    joined = " ".join(texts).lower()
+
+    for word in ("доход", "печалб", "загуба", "p&l", "profit", "return", "резултат на сдел"):
+        assert word not in joined
 
 
 # ------------------------------------------------------------------- lifecycle
@@ -831,7 +1274,7 @@ def test_a_view_that_was_made_visible_before_it_was_mounted_starts_polling_on_mo
 
     view.did_mount()
 
-    mock_page.run_task.assert_any_call(view.load)
+    mock_page.run_task.assert_any_call(view.refresh)
     mock_page.run_task.assert_any_call(view.poll)
 
 
@@ -902,7 +1345,7 @@ def test_the_bot_tab_is_read_again_each_time_it_is_opened_again(start_app, mock_
 
     select_tab(tabs, 3)
 
-    assert mock_page.run_task.call_args_list[0].args == (view.load,)
+    assert mock_page.run_task.call_args_list[0].args == (view.refresh,)
     assert tabs.tabs[3].content is view
 
 
