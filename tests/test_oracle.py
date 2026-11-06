@@ -174,6 +174,32 @@ async def test_journal_is_read_for_the_user_and_parsed(client):
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_the_version_of_the_signal_and_of_the_prompt_are_read_when_present(client):
+    respx.get(f"{BASE_URL}/oracle/decisions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "decisions": [
+                    {"id": 10, "signal_version": "oracle-probe", "prompt_version": "8a4f4388a9c7"},
+                    {"id": 9, "signal_version": "1.0.0"},
+                    {"id": 8},
+                ],
+                "next_before_id": 0,
+            },
+        )
+    )
+
+    result = await client.list_oracle_decisions()
+
+    assert [(d.signal_version, d.prompt_version) for d in result.decisions] == [
+        ("oracle-probe", "8a4f4388a9c7"),
+        ("1.0.0", None),
+        (None, None),
+    ]
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_older_page_and_symbol_are_sent_as_query_parameters(client):
     route = respx.get(f"{BASE_URL}/oracle/decisions").mock(
         return_value=httpx.Response(200, json={"decisions": [], "next_before_id": 0})
