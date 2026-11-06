@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from state.settings import Settings, load_settings, save_settings
-from views.chat import ChatView, _remove_chat_session
+from views.chat import ChatView, _restart_chat_session
 
 CHAT_1 = "11111111-1111-1111-1111-111111111111"
 CHAT_2 = "22222222-2222-2222-2222-222222222222"
@@ -44,6 +44,10 @@ def dropdown_keys(view: ChatView) -> list[str]:
     return [option.key for option in view.session_dropdown.options]
 
 
+def dropdown_names(view: ChatView) -> list[str]:
+    return [option.text for option in view.session_dropdown.options]
+
+
 # ------------------------------------------------------------- the button
 def test_chat_has_a_delete_button_next_to_new_chat(mock_page, mock_api_client):
     seed(CHAT_1)
@@ -64,7 +68,9 @@ def test_delete_button_is_disabled_while_an_answer_streams(mock_page, mock_api_c
 
 # -------------------------------------------------------------- deleting
 @pytest.mark.asyncio
-async def test_delete_opens_the_neighbouring_chat(mock_page, mock_api_client):
+async def test_delete_keeps_the_chat_in_the_list_with_a_new_empty_session(
+    mock_page, mock_api_client
+):
     seed(CHAT_1)
     changes: list[str] = []
     view = make_view(mock_page, mock_api_client, on_session_changed=changes.append)
@@ -73,47 +79,75 @@ async def test_delete_opens_the_neighbouring_chat(mock_page, mock_api_client):
         await view.on_delete_chat_click(None)
 
     assert dialog.await_count == 1
-    assert view.session_id == CHAT_2
-    assert dropdown_keys(view) == [CHAT_2]
-    assert view.session_dropdown.value == CHAT_2
-    assert changes == [CHAT_2]
-    mock_page.run_task.assert_called_with(view.load_history)
+    # The reader stays in "Чат 1" - the list and the name did not change ...
+    new_id = view.session_id
+    assert new_id not in (CHAT_1, CHAT_2)
+    assert uuid.UUID(new_id)
+    assert dropdown_keys(view) == [new_id, CHAT_2]
+    assert dropdown_names(view) == ["Чат 1", "Чат 2"]
+    assert view.session_dropdown.value == new_id
+    assert changes == [new_id]
+    # ... and there is no history to fetch for the new session.
+    mock_page.run_task.assert_not_called()
 
     saved = load_settings()
-    assert saved.session_id == CHAT_2
-    assert saved.chat_sessions == [{"id": CHAT_2, "name": "Чат 2"}]
+    assert saved.session_id == new_id
+    assert saved.chat_sessions == [
+        {"id": new_id, "name": "Чат 1"},
+        {"id": CHAT_2, "name": "Чат 2"},
+    ]
 
 
 @pytest.mark.asyncio
-async def test_deleting_the_last_chat_of_the_list_opens_the_previous_one(
-    mock_page, mock_api_client
-):
-    seed(CHAT_3, chats=(CHAT_1, CHAT_2, CHAT_3))
+async def test_delete_clears_the_messages_on_the_screen(mock_page, mock_api_client):
+    seed(CHAT_1)
     view = make_view(mock_page, mock_api_client)
+    view.add_message("user", "здравей", notify=False)
+    view.add_message("assistant", "здрасти", notify=False)
+    assert len(view.chat_list.controls) == 2
 
     with confirming(True):
         await view.on_delete_chat_click(None)
 
-    assert view.session_id == CHAT_2
-    assert dropdown_keys(view) == [CHAT_1, CHAT_2]
+    assert view.chat_list.controls == []
 
 
 @pytest.mark.asyncio
-async def test_deleting_a_middle_chat_opens_the_one_that_took_its_place(
-    mock_page, mock_api_client
-):
+async def test_the_next_message_goes_to_the_new_session(mock_page, mock_api_client):
+    seed(CHAT_1)
+    view = make_view(mock_page, mock_api_client)
+    with confirming(True):
+        await view.on_delete_chat_click(None)
+    new_id = view.session_id
+
+    async def stream(**_kwargs):
+        yield {"content": "здрасти"}
+
+    mock_api_client.stream_chat = MagicMock(side_effect=lambda **kwargs: stream(**kwargs))
+    view.input_field.value = "здравей"
+    await view.send_message_click(None)
+
+    # The old session id would bring the old conversation back into the prompt.
+    assert mock_api_client.stream_chat.call_args.kwargs["session_id"] == new_id
+
+
+@pytest.mark.asyncio
+async def test_a_middle_chat_keeps_its_place(mock_page, mock_api_client):
     seed(CHAT_2, chats=(CHAT_1, CHAT_2, CHAT_3))
     view = make_view(mock_page, mock_api_client)
 
     with confirming(True):
         await view.on_delete_chat_click(None)
 
-    assert view.session_id == CHAT_3
-    assert dropdown_keys(view) == [CHAT_1, CHAT_3]
+    new_id = view.session_id
+    assert dropdown_keys(view) == [CHAT_1, new_id, CHAT_3]
+    assert dropdown_names(view) == ["Чат 1", "Чат 2", "Чат 3"]
 
 
 @pytest.mark.asyncio
-async def test_deleting_the_only_chat_starts_a_new_one(mock_page, mock_api_client):
+async def test_deleting_the_only_chat_leaves_one_empty_chat_with_its_name(
+    mock_page, mock_api_client
+):
     seed(CHAT_1, chats=(CHAT_1,))
     view = make_view(mock_page, mock_api_client)
 
@@ -121,17 +155,31 @@ async def test_deleting_the_only_chat_starts_a_new_one(mock_page, mock_api_clien
         await view.on_delete_chat_click(None)
 
     assert view.session_id != CHAT_1
-    assert uuid.UUID(view.session_id)
     saved = load_settings()
     assert saved.session_id == view.session_id
     assert saved.chat_sessions == [{"id": view.session_id, "name": "Чат 1"}]
     assert dropdown_keys(view) == [view.session_id]
-    # The new chat has no history to fetch.
-    mock_page.run_task.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_the_removed_chat_is_archived_so_its_id_is_not_lost(
+async def test_a_renamed_chat_keeps_its_name(mock_page, mock_api_client):
+    save_settings(
+        Settings(
+            user_id="user-1",
+            session_id=CHAT_1,
+            chat_sessions=[{"id": CHAT_1, "name": "Пътуване до Рим"}],
+        )
+    )
+    view = make_view(mock_page, mock_api_client)
+
+    with confirming(True):
+        await view.on_delete_chat_click(None)
+
+    assert dropdown_names(view) == ["Пътуване до Рим"]
+
+
+@pytest.mark.asyncio
+async def test_the_old_session_is_archived_so_its_id_is_not_lost(
     mock_page, mock_api_client
 ):
     seed(CHAT_1)
@@ -141,6 +189,24 @@ async def test_the_removed_chat_is_archived_so_its_id_is_not_lost(
         await view.on_delete_chat_click(None)
 
     assert load_settings().archived_chats == [{"id": CHAT_1, "name": "Чат 1"}]
+
+
+@pytest.mark.asyncio
+async def test_deleting_twice_archives_both_old_sessions(mock_page, mock_api_client):
+    seed(CHAT_1)
+    view = make_view(mock_page, mock_api_client)
+    with confirming(True):
+        await view.on_delete_chat_click(None)
+    second = view.session_id
+
+    with confirming(True):
+        await view.on_delete_chat_click(None)
+
+    assert load_settings().archived_chats == [
+        {"id": CHAT_1, "name": "Чат 1"},
+        {"id": second, "name": "Чат 1"},
+    ]
+    assert dropdown_names(view) == ["Чат 1", "Чат 2"]
 
 
 @pytest.mark.asyncio
@@ -157,9 +223,7 @@ async def test_the_backend_is_never_asked_to_delete_anything(mock_page, mock_api
 
 
 @pytest.mark.asyncio
-async def test_a_deleted_chat_does_not_come_back_on_the_next_start(
-    mock_page, mock_api_client
-):
+async def test_an_emptied_chat_stays_empty_on_the_next_start(mock_page, mock_api_client):
     seed(CHAT_1)
     view = make_view(mock_page, mock_api_client)
     with confirming(True):
@@ -167,8 +231,9 @@ async def test_a_deleted_chat_does_not_come_back_on_the_next_start(
 
     reopened = make_view(mock_page, mock_api_client)
 
-    assert reopened.session_id == CHAT_2
-    assert dropdown_keys(reopened) == [CHAT_2]
+    assert reopened.session_id == view.session_id
+    assert dropdown_keys(reopened) == [view.session_id, CHAT_2]
+    assert dropdown_names(reopened) == ["Чат 1", "Чат 2"]
     assert load_settings().archived_chats == [{"id": CHAT_1, "name": "Чат 1"}]
 
 
@@ -178,12 +243,14 @@ async def test_declining_the_dialog_changes_nothing(mock_page, mock_api_client):
     seed(CHAT_1)
     before = load_settings()
     view = make_view(mock_page, mock_api_client)
+    view.add_message("user", "здравей", notify=False)
 
     with confirming(False):
         await view.on_delete_chat_click(None)
 
     assert view.session_id == CHAT_1
     assert dropdown_keys(view) == [CHAT_1, CHAT_2]
+    assert len(view.chat_list.controls) == 1
     assert load_settings() == before
     mock_page.run_task.assert_not_called()
 
@@ -209,6 +276,7 @@ async def test_failed_save_leaves_the_screen_as_it_was(mock_page, mock_api_clien
     seed(CHAT_1)
     before = load_settings()
     view = make_view(mock_page, mock_api_client)
+    view.add_message("user", "здравей", notify=False)
 
     with (
         confirming(True),
@@ -220,28 +288,48 @@ async def test_failed_save_leaves_the_screen_as_it_was(mock_page, mock_api_clien
     snackbar.assert_called_once()
     assert view.session_id == CHAT_1
     assert dropdown_keys(view) == [CHAT_1, CHAT_2]
+    assert len(view.chat_list.controls) == 1
     assert load_settings() == before
 
 
 # ------------------------------------------------------- the settings side
-def test_removing_a_chat_that_is_not_listed_changes_nothing():
+def test_restarting_a_chat_that_is_not_listed_changes_nothing():
     settings = Settings(
         session_id=CHAT_1, chat_sessions=[{"id": CHAT_1, "name": "Чат 1"}]
     )
 
-    assert _remove_chat_session(settings, CHAT_2) is None
+    assert _restart_chat_session(settings, CHAT_2) is None
     assert settings.chat_sessions == [{"id": CHAT_1, "name": "Чат 1"}]
+    assert settings.session_id == CHAT_1
     assert settings.archived_chats == []
 
 
-def test_archiving_the_same_chat_twice_keeps_one_entry():
+def test_restarting_a_chat_gives_it_a_new_id_and_archives_the_old_one():
+    settings = Settings(
+        session_id=CHAT_1,
+        chat_sessions=[{"id": CHAT_1, "name": "Чат 1"}, {"id": CHAT_2, "name": "Чат 2"}],
+    )
+
+    new_id = _restart_chat_session(settings, CHAT_1)
+
+    assert new_id not in (CHAT_1, CHAT_2)
+    assert settings.session_id == new_id
+    assert settings.chat_sessions == [
+        {"id": new_id, "name": "Чат 1"},
+        {"id": CHAT_2, "name": "Чат 2"},
+    ]
+    assert settings.archived_chats == [{"id": CHAT_1, "name": "Чат 1"}]
+
+
+def test_archiving_the_same_session_twice_keeps_one_entry():
     settings = Settings(
         session_id=CHAT_1,
         chat_sessions=[{"id": CHAT_1, "name": "Чат 1"}, {"id": CHAT_2, "name": "Чат 2"}],
         archived_chats=[{"id": CHAT_1, "name": "Стар чат"}],
     )
 
-    assert _remove_chat_session(settings, CHAT_1) == (CHAT_2, False)
+    _restart_chat_session(settings, CHAT_1)
+
     assert settings.archived_chats == [{"id": CHAT_1, "name": "Чат 1"}]
 
 

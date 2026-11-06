@@ -474,17 +474,19 @@ def _resolve_session_id(chat_sessions: list[dict], selected: str | None) -> str 
     return None
 
 
-def _remove_chat_session(settings: Settings, session_id: str) -> tuple[str, bool] | None:
-    """Take ``session_id`` out of the chat list and pick the chat to open next.
+def _restart_chat_session(settings: Settings, session_id: str) -> str | None:
+    """Start ``session_id`` over: the same chat in the list, with a new empty session.
 
-    Local bookkeeping only: the backend has no call that deletes a chat, and its
-    history and the user's long-term memory (which belongs to ``user_id``, not to
-    a chat) stay untouched. The entry moves to ``settings.archived_chats`` so the
-    session id - the only key to that history - is not lost. When no chat is left
-    a new one is started, as on the very first run.
+    The chat keeps its name and its place in the list, but now points at a fresh
+    session id, so the conversation starts empty and the assistant no longer sees
+    the old messages. Local bookkeeping only: the backend has no call that deletes
+    a chat, so the old session and the user's long-term memory (which belongs to
+    ``user_id``, not to a chat) stay untouched. The old entry moves to
+    ``settings.archived_chats`` so its session id - the only key to that history -
+    is not lost.
 
-    Returns ``(next_session_id, is_new)``, or ``None`` when ``session_id`` is not
-    in the list (nothing is changed then).
+    Returns the new session id, or ``None`` when ``session_id`` is not in the
+    list (nothing is changed then).
     """
     chat_sessions = _normalize_chat_sessions(settings)
     index = next(
@@ -494,22 +496,16 @@ def _remove_chat_session(settings: Settings, session_id: str) -> tuple[str, bool
     if index is None:
         return None
 
-    removed = chat_sessions.pop(index)
+    old = chat_sessions[index]
     settings.archived_chats = [
-        entry for entry in settings.archived_chats if entry.get("id") != removed["id"]
-    ] + [removed]
+        entry for entry in settings.archived_chats if entry.get("id") != old["id"]
+    ] + [old]
 
-    is_new = not chat_sessions
-    if is_new:
-        next_id = str(uuid.uuid4())
-        chat_sessions.append({"id": next_id, "name": _next_chat_name(chat_sessions)})
-    else:
-        # The chat that took the removed one's place, else the one before it.
-        next_id = chat_sessions[min(index, len(chat_sessions) - 1)]["id"]
-
+    new_id = str(uuid.uuid4())
+    chat_sessions[index] = {"id": new_id, "name": old["name"]}
     settings.chat_sessions = chat_sessions
-    settings.session_id = next_id
-    return next_id, is_new
+    settings.session_id = new_id
+    return new_id
 
 
 def _ensure_chat_session(settings: Settings) -> tuple[str, list[dict]]:
@@ -590,7 +586,7 @@ class ChatView(ft.Container):
 
         self.delete_chat_btn = ft.IconButton(
             icon=ft.icons.DELETE_OUTLINE,
-            tooltip="Изтрий чата от екрана",
+            tooltip="Изтрий чата (остава празен и започва наново)",
             on_click=self.on_delete_chat_click,
         )
 
@@ -769,11 +765,12 @@ class ChatView(ft.Container):
         self._activate_session(new_session, reload_history=False)
 
     async def on_delete_chat_click(self, e):
-        """Remove the open chat from this screen - and only from this screen.
+        """Empty the open chat and stay in it, as a new empty session.
 
-        Nothing is sent to the backend: the history stays there and so does the
-        long-term memory, which belongs to the user. The chat just stops being
-        listed here (see ``_remove_chat_session``).
+        The chat keeps its name and its place in the list; only the session behind
+        it changes (see ``_restart_chat_session``). Nothing is sent to the
+        backend: the old conversation stays there and so does the long-term
+        memory, which belongs to the user.
         """
         if self._is_streaming:
             show_snackbar(self.page, "Изчакай края на отговора или го спри, преди да изтриеш чата.")
@@ -786,9 +783,9 @@ class ChatView(ft.Container):
         confirmed = await confirm_dialog(
             self.page,
             "Изтриване на чата",
-            f"„{name}“ ще изчезне от списъка с чатове на този екран. "
-            "Историята му и дългосрочната памет остават запазени в бекенда - "
-            "нищо не се изтрива оттам.",
+            f"„{name}“ ще остане в списъка, но празен: започва нов разговор и "
+            "Лили няма да вижда досегашните съобщения. Старият разговор остава "
+            "запазен в бекенда, а дългосрочната памет (спомените) не се пипа.",
             confirm_text="Изтрий",
         )
         if not confirmed:
@@ -796,22 +793,26 @@ class ChatView(ft.Container):
 
         # Read after the dialog: the settings may have been saved in the meantime.
         settings = load_settings()
-        removal = _remove_chat_session(settings, self.session_id)
-        if removal is None:
+        old_id = self.session_id
+        new_id = _restart_chat_session(settings, old_id)
+        if new_id is None:
             return
-        next_id, is_new = removal
 
         if not save_settings(settings):
             show_snackbar(self.page, "Неуспешно запазване на настройките.")
             return
-        logger.info("Chat %s removed from the list; its history stays on the backend.", self.session_id[:8])
+        logger.info(
+            "Chat %s was emptied, it continues as session %s; the old conversation stays on the backend.",
+            old_id[:8],
+            new_id[:8],
+        )
 
-        self._apply_session_options(settings.chat_sessions, next_id)
-        # A brand new chat has no history to fetch, so only the UI is cleared.
-        self._activate_session(next_id, reload_history=not is_new)
+        self._apply_session_options(settings.chat_sessions, new_id)
+        # The new session has no history to fetch, so only the screen is cleared.
+        self._activate_session(new_id, reload_history=False)
         show_snackbar(
             self.page,
-            "Чатът е изтрит от екрана. Историята и паметта остават в бекенда.",
+            "Чатът е изчистен. Старият разговор остава в бекенда.",
             success=True,
         )
 
