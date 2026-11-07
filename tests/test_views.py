@@ -278,6 +278,38 @@ async def test_load_history_keeps_the_sources_of_stored_answers(
 
 
 @pytest.mark.asyncio
+async def test_sources_of_a_second_frame_join_the_first_ones(chat_view, mock_api_client):
+    # The backend sends the sources of the prompt first, and the passages the model
+    # found with a tool while it answered in a second "sources" frame, with only the
+    # new ones (the same contract as docs/openapi.yaml, /chat/stream).
+    summary = {
+        "chunk_id": "s1", "file_name": "summary.pdf", "content_snippet": "Резюме на книгата.",
+        "score": 0.12, "score_type": "distance", "source_type": "concept",
+    }
+    passage = {
+        "chunk_id": "p1", "file_name": "book.pdf", "content_snippet": "Откъс от книгата.",
+        "score": 0, "source_type": "text",
+    }
+
+    async def fake_stream(**_kwargs):
+        yield {"type": "sources", "data": [summary]}
+        yield {"type": "sources", "data": [passage]}
+        yield {"type": "sources", "data": [passage]}  # a repeated frame adds nothing
+        yield {"content": "Отговор"}
+
+    mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: fake_stream(**kw))
+    chat_view.input_field.value = "какво пише в книгата"
+
+    with mounted(ChatView):
+        await chat_view.send_message_click(None)
+
+    answer = chat_view.chat_list.controls[-1].controls[0].content
+    assert answer.sources == [summary, passage]
+    chips = [c for c in answer.sources_row.controls if isinstance(c, ft.Chip)]
+    assert [chip.label.value for chip in chips] == ["summary.pdf", "book.pdf"]
+
+
+@pytest.mark.asyncio
 async def test_streaming_does_not_update_view_per_chunk(chat_view, mock_api_client):
     async def fake_stream(**_kwargs):
         for _ in range(100):
