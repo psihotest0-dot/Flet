@@ -253,6 +253,7 @@ class OracleView(ft.Container):
             dense=True,
             capitalization=ft.TextCapitalization.CHARACTERS,
             on_submit=self.on_filter_submit,
+            on_change=self.on_symbol_change,
         )
         self.filter_btn = ft.IconButton(
             icon=ft.icons.SEARCH,
@@ -393,19 +394,43 @@ class OracleView(ft.Container):
 
     # ----------------------------------------------------------------- events
     async def on_refresh_click(self, e):
+        # What stands in the field is what the table shows: a filter that was kept
+        # after its text was deleted would make "Обнови" look broken.
+        if not self._apply_symbol_field():
+            return
         await self.refresh()
 
     async def on_filter_submit(self, e):
+        if not self._apply_symbol_field():
+            return
+        await self.load()
+
+    async def on_symbol_change(self, e):
+        """Emptying the field is "every symbol": there is no need to press search for it.
+
+        Typing a symbol does not ask the backend on every key; that waits for Enter
+        or the search button.
+        """
+        if (self.symbol_field.value or "").strip():
+            return
+        self.symbol_field.error_text = None
+        safe_update(self, self.symbol_field)
+        if self._symbol is not None:
+            self._symbol = None
+            await self.load()
+
+    def _apply_symbol_field(self) -> bool:
+        """Make the field the filter. ``False`` (and a complaint) if it is not a symbol."""
         symbol = (self.symbol_field.value or "").strip().upper()
         if symbol and not SYMBOL_PATTERN.match(symbol):
             self.symbol_field.error_text = "Невалиден символ (напр. AAPL, BRK.B)"
             safe_update(self, self.symbol_field)
-            return
+            return False
         self.symbol_field.error_text = None
         self.symbol_field.value = symbol
         safe_update(self, self.symbol_field)
         self._symbol = symbol or None
-        await self.load()
+        return True
 
     async def on_more_click(self, e):
         await self.load_more()

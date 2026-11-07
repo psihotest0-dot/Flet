@@ -710,6 +710,147 @@ async def test_a_new_symbol_starts_the_list_over(mock_page, mock_api_client):
     assert view.more_btn.visible is False
 
 
+# ------------------------------------------- the filter, the field and "Обнови"
+def two_symbols(mock_page, mock_api_client):
+    """A journal with two symbols: ids 3 and 1 are AAPL, id 2 is MSFT."""
+    journal = FakeJournal(
+        signal(1, "APPROVE", symbol="AAPL"),
+        signal(2, "VETO", symbol="MSFT"),
+        signal(3, "VETO", symbol="AAPL"),
+    )
+    mock_api_client.list_oracle_decisions = journal
+    return OracleView(mock_page, mock_api_client), journal
+
+
+async def filtered_on_aapl(mock_page, mock_api_client):
+    view, journal = two_symbols(mock_page, mock_api_client)
+    await view.refresh()
+    view.symbol_field.value = "AAPL"
+    await view.on_filter_submit(None)
+    assert ids(view) == [3, 1]
+    return view, journal
+
+
+@pytest.mark.asyncio
+async def test_refresh_after_the_field_was_emptied_shows_every_symbol_again(
+    mock_page, mock_api_client
+):
+    # The reported bug: the filter lived on after the text was deleted, and "Обнови"
+    # kept asking for the old symbol while the field looked empty.
+    view, _journal = await filtered_on_aapl(mock_page, mock_api_client)
+    view.symbol_field.value = ""
+
+    await view.on_refresh_click(None)
+
+    assert view._symbol is None
+    assert ids(view) == [3, 2, 1]
+
+
+@pytest.mark.asyncio
+async def test_emptying_the_field_shows_every_symbol_without_pressing_anything(
+    mock_page, mock_api_client
+):
+    view, _journal = await filtered_on_aapl(mock_page, mock_api_client)
+    view.symbol_field.value = "  "
+
+    await view.on_symbol_change(None)
+
+    assert view._symbol is None
+    assert ids(view) == [3, 2, 1]
+
+
+@pytest.mark.asyncio
+async def test_typing_into_the_field_does_not_ask_the_backend(mock_page, mock_api_client):
+    view, journal = await filtered_on_aapl(mock_page, mock_api_client)
+    calls = len(journal.calls)
+
+    view.symbol_field.value = "AAP"
+    await view.on_symbol_change(None)
+    view.symbol_field.value = "MS"
+    await view.on_symbol_change(None)
+
+    assert len(journal.calls) == calls
+    assert view._symbol == "AAPL"
+
+
+@pytest.mark.asyncio
+async def test_emptying_a_field_that_filtered_nothing_asks_nothing(mock_page, mock_api_client):
+    view, journal = two_symbols(mock_page, mock_api_client)
+    await view.refresh()
+    calls = len(journal.calls)
+    view.symbol_field.value = ""
+
+    await view.on_symbol_change(None)
+
+    assert len(journal.calls) == calls
+
+
+@pytest.mark.asyncio
+async def test_emptying_the_field_takes_the_complaint_about_a_bad_symbol_away(
+    mock_page, mock_api_client
+):
+    view, _journal = two_symbols(mock_page, mock_api_client)
+    view.symbol_field.value = "AAPL; DROP"
+    await view.on_filter_submit(None)
+    assert view.symbol_field.error_text
+    view.symbol_field.value = ""
+
+    await view.on_symbol_change(None)
+
+    # Flet hands back "" for an error text that was set and then cleared.
+    assert not view.symbol_field.error_text
+
+
+@pytest.mark.asyncio
+async def test_refresh_uses_the_symbol_that_stands_in_the_field(mock_page, mock_api_client):
+    view, _journal = two_symbols(mock_page, mock_api_client)
+    await view.refresh()
+    view.symbol_field.value = " msft "
+
+    await view.on_refresh_click(None)
+
+    assert view._symbol == "MSFT"
+    assert view.symbol_field.value == "MSFT"
+    assert ids(view) == [2]
+
+
+@pytest.mark.asyncio
+async def test_refresh_with_a_symbol_the_backend_would_refuse_asks_nothing(
+    mock_page, mock_api_client
+):
+    view, journal = await filtered_on_aapl(mock_page, mock_api_client)
+    calls = len(journal.calls)
+    view.symbol_field.value = "AAPL; DROP"
+
+    await view.on_refresh_click(None)
+
+    assert len(journal.calls) == calls
+    assert view.symbol_field.error_text
+    assert view._symbol == "AAPL"
+    assert ids(view) == [3, 1]
+
+
+@pytest.mark.asyncio
+async def test_the_counters_do_not_follow_the_symbol_filter(mock_page, mock_api_client):
+    # The evaluation counts every signal of the bot, whatever the table shows.
+    view, journal = two_symbols(mock_page, mock_api_client)
+    await view.refresh()
+    whole = (view.approve_value.value, view.veto_value.value, view.availability_value.value)
+    assert whole[:2] == ("1 / 30", "2 / 30")
+
+    view.symbol_field.value = "MSFT"
+    await view.on_filter_submit(None)
+    await view.on_refresh_click(None)
+    during = (view.approve_value.value, view.veto_value.value, view.availability_value.value)
+    view.symbol_field.value = ""
+    await view.on_refresh_click(None)
+    after = (view.approve_value.value, view.veto_value.value, view.availability_value.value)
+
+    assert during == whole
+    assert after == whole
+    assert all(call["symbol"] is None for call in journal.progress_calls())
+
+
 # ----------------------------------------------------------------- older pages
 @pytest.mark.asyncio
 async def test_older_decisions_are_added_below_and_asked_for_by_the_last_id(
