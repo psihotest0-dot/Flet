@@ -269,6 +269,25 @@ class IngestedFile(BaseModel):
     updated_at: datetime | None = None
 
 
+class ChatAttachment(BaseModel):
+    """A text file attached to one conversation (code, a log, a long paste).
+
+    It is not the library: the model sees it only in this conversation. ``created``,
+    ``replaced`` and ``unchanged`` are set only in the answer to an upload.
+    """
+    id: str
+    name: str
+    bytes: int = 0
+    lines: int = 0
+    tokens: int = 0
+    version: int = 1
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    created: bool | None = None
+    replaced: bool | None = None
+    unchanged: bool | None = None
+
+
 @dataclass(frozen=True)
 class UploadResult:
     """The outcome of an upload: the stored file, and whether it was already there."""
@@ -345,6 +364,37 @@ class APIClient:
         response = await self.client.delete(f"/v1/files/{file_id}", headers=headers)
         _raise_for_status(response)
         logger.info("File %s deleted.", file_id)
+
+    async def list_attachments(self, session_id: str) -> list[ChatAttachment]:
+        """The files attached to a conversation, newest first (without their text)."""
+        headers = {"X-User-ID": self.user_id}
+        response = await self._get("/chat/attachments", headers=headers, params={"session_id": session_id})
+        return [ChatAttachment(**item) for item in response.json()]
+
+    async def upload_attachment(self, session_id: str, name: str, content: str) -> ChatAttachment:
+        """Attach a text file to a conversation.
+
+        The same name again is a new version of the file (``replaced``), the same
+        content again changes nothing (``unchanged``). The text is the user's own
+        material - only the id and the sizes are logged.
+        """
+        headers = {"X-User-ID": self.user_id}
+        payload = {"session_id": session_id, "name": name, "content": content}
+        response = await self.client.post("/chat/attachments", headers=headers, json=payload)
+        _raise_for_status(response)
+        attachment = ChatAttachment(**response.json())
+        logger.info(
+            "Attachment %s stored (%d bytes, %d lines, version %d).",
+            attachment.id, attachment.bytes, attachment.lines, attachment.version,
+        )
+        return attachment
+
+    async def delete_attachment(self, attachment_id: str) -> None:
+        """Remove a file attached to a conversation."""
+        headers = {"X-User-ID": self.user_id}
+        response = await self.client.delete(f"/chat/attachments/{attachment_id}", headers=headers)
+        _raise_for_status(response)
+        logger.info("Attachment %s deleted.", attachment_id)
 
     @retry(
         stop=stop_after_attempt(3),

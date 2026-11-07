@@ -78,8 +78,13 @@ async def confirm_dialog(
     message: str,
     confirm_text: str = "Изтрий",
     cancel_text: str = "Отказ",
+    destructive: bool = True,
 ) -> bool:
-    """Awaitable modal confirmation; returns True only when the user confirms."""
+    """Awaitable modal confirmation; returns True only when the user confirms.
+
+    The confirm button is red unless ``destructive`` is false (a question that is
+    not about losing something).
+    """
     if page is None:
         return False
 
@@ -99,7 +104,7 @@ async def confirm_dialog(
             ft.TextButton(
                 confirm_text,
                 on_click=lambda e: close(True),
-                style=ft.ButtonStyle(color=ft.colors.RED),
+                style=ft.ButtonStyle(color=ft.colors.RED) if destructive else None,
             ),
         ],
         actions_alignment=ft.MainAxisAlignment.END,

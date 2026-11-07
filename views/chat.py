@@ -7,12 +7,23 @@ import logging
 import time
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 
 import flet as ft
 import httpx
 
-from api.client import APIClient, APIError, Proposal, StreamError
+from api.client import APIClient, APIError, ChatAttachment, Proposal, StreamError
 from state.settings import DEFAULT_DISPLAY_NAME, Settings, load_settings, save_settings
+from views.attachments import (
+    MAX_FILE_BYTES,
+    MESSAGE_TOKEN_LIMIT,
+    PASTE_THRESHOLD_CHARS,
+    NotAttachable,
+    estimate_message_tokens,
+    inserted_text,
+    paste_file_name,
+    read_text_file,
+)
 from views.emoji_picker import EmojiPicker
 from views.proposals import ProposalCard
 from views.ui_utils import confirm_dialog, describe_error, safe_update, show_snackbar
@@ -562,6 +573,13 @@ class ChatView(ft.Container):
         self._last_assistant_msg = None
         self._last_assistant_row = None
         self._load_task = None
+        self._attachments_task = None
+        # The files attached to the open conversation, newest first.
+        self.attachments: list[ChatAttachment] = []
+        # What the input field held at the last change: a jump of thousands of
+        # characters in one change is a paste (see on_input_change).
+        self._input_text = ""
+        self._offering = False
         # False once the reader scrolled up; see _on_chat_scroll.
         self._follow_bottom = True
         # True while a _scroll_after_layout task is waiting to scroll.
@@ -616,7 +634,17 @@ class ChatView(ft.Container):
             max_lines=5,
             expand=True,
             on_submit=self.send_message_click,
+            on_change=self.on_input_change,
         )
+
+        self.file_picker = ft.FilePicker(on_result=self.on_attach_result)
+        self.attach_btn = ft.IconButton(
+            icon=ft.icons.ATTACH_FILE,
+            tooltip="Прикачи файл към този разговор (код, лог, текст)",
+            on_click=self.on_attach_click,
+        )
+        # The files of this conversation, with a cross to take one away.
+        self.attachments_row = ft.Row(wrap=True, spacing=6, run_spacing=4, visible=False)
 
         self.send_btn = ft.IconButton(
             icon=ft.icons.SEND,
@@ -640,7 +668,7 @@ class ChatView(ft.Container):
         )
 
         input_row = ft.Row(
-            controls=[self.input_field, self.emoji_btn, self.stop_btn, self.send_btn],
+            controls=[self.input_field, self.attach_btn, self.emoji_btn, self.stop_btn, self.send_btn],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             vertical_alignment=ft.CrossAxisAlignment.END,
         )
@@ -650,6 +678,7 @@ class ChatView(ft.Container):
                 self.top_row,
                 self.chat_list,
                 self.emoji_picker,
+                self.attachments_row,
                 input_row,
             ],
             expand=True,
@@ -663,6 +692,9 @@ class ChatView(ft.Container):
         self._last_assistant_row = None
         self._follow_bottom = True
         self.chat_list.controls.clear()
+        # The files of the other conversation are not this one's.
+        self.attachments = []
+        self._render_attachments()
         safe_update(self)
 
     def _cancel_running_tasks(self):
@@ -670,6 +702,9 @@ class ChatView(ft.Container):
         if self._load_task is not None:
             self._load_task.cancel()
             self._load_task = None
+        if self._attachments_task is not None:
+            self._attachments_task.cancel()
+            self._attachments_task = None
 
     def _set_streaming_ui(self, streaming: bool):
         self.send_btn.visible = not streaming
@@ -703,6 +738,8 @@ class ChatView(ft.Container):
         self._reset_conversation()
         self._cancel_running_tasks()
         if reload_history and self.page is not None:
+            # The files first, the history last: the history is what the view waits for.
+            self._attachments_task = self.page.run_task(self.load_attachments)
             self._load_task = self.page.run_task(self.load_history)
         self._notify_session_changed(session_id)
 
@@ -879,7 +916,7 @@ class ChatView(ft.Container):
         The caret position of a TextField is not known to Python, so the emoji
         goes at the end of the text.
         """
-        self.input_field.value = (self.input_field.value or "") + emoji
+        self._set_input((self.input_field.value or "") + emoji)
         if self.input_field.uid is not None:
             # focus() also sends the new value, and keeps the keyboard in the field.
             self.input_field.focus()
@@ -888,10 +925,212 @@ class ChatView(ft.Container):
         if DEBUG_MOCK_SOURCES:
             self.add_message("assistant", "Здравейте! Аз съм Лили. Как мога да ви помогна днес?", sources=_get_mock_sources())
         if self.page is not None:
+            if self.file_picker not in self.page.overlay:
+                self.page.overlay.append(self.file_picker)
+            # The files first, the history last: the history is what the view waits for.
+            self._attachments_task = self.page.run_task(self.load_attachments)
             self._load_task = self.page.run_task(self.load_history)
 
     def will_unmount(self):
         self._cancel_running_tasks()
+        if self.page is not None and self.file_picker in self.page.overlay:
+            self.page.overlay.remove(self.file_picker)
+
+    # ------------------------------------------------------------ attached files
+    def _set_input(self, text: str) -> None:
+        """Put text into the input field from the code, not from the user.
+
+        The change event only comes from the user's typing; the remembered text has
+        to follow the field, or the next paste would be measured against old text.
+        """
+        self.input_field.value = text
+        self._input_text = text
+
+    async def load_attachments(self, *_args) -> None:
+        """Read the files attached to the open conversation and show them."""
+        session_id = self.session_id
+        try:
+            found = await self.api_client.list_attachments(session_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            # Not worth a message on screen: the chat works without the row, and the
+            # next attach or reload reads the list again.
+            logger.warning("Failed to read the files of chat %s: %s", session_id[:8], e)
+            return
+        if session_id != self.session_id:
+            return
+        self.attachments = found
+        self._render_attachments()
+
+    def _render_attachments(self) -> None:
+        """Draw one chip for every attached file; the row is hidden when there are none."""
+        self.attachments_row.controls = [
+            ft.Chip(
+                label=ft.Text(f"{a.name} · {a.lines} реда", size=12),
+                leading=ft.Icon(ft.icons.ATTACH_FILE, size=16),
+                tooltip=(
+                    f"~{a.tokens} токена, версия {a.version}. Лили вижда файла само в този разговор; "
+                    "кръстчето го маха."
+                ),
+                delete_icon_tooltip="Махни файла от разговора",
+                on_delete=self.on_attachment_delete,
+                data=a.id,
+            )
+            for a in self.attachments
+        ]
+        self.attachments_row.visible = bool(self.attachments)
+        safe_update(self, self.attachments_row)
+
+    async def on_attachment_delete(self, e) -> None:
+        attachment_id = e.control.data
+        try:
+            await self.api_client.delete_attachment(attachment_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as ex:  # noqa: BLE001
+            if isinstance(ex, APIError) and ex.status == 404:
+                # Gone already (another window, or it expired): the list is just stale.
+                logger.info("Attachment %s was already gone.", attachment_id)
+            else:
+                logger.error("Failed to remove attachment %s: %s", attachment_id, ex)
+                show_snackbar(self.page, f"Файлът не беше махнат. {describe_error(ex)}")
+                return
+        await self.load_attachments()
+
+    def on_attach_click(self, e) -> None:
+        self.file_picker.pick_files(
+            dialog_title="Прикачи файл към този разговор",
+            allow_multiple=True,
+            file_type=ft.FilePickerFileType.ANY,
+        )
+
+    async def on_attach_result(self, e: ft.FilePickerResultEvent) -> None:
+        """Attach the chosen files; what cannot be attached is reported together at the end."""
+        if not e.files:
+            return
+        attached: list[str] = []
+        problems: list[str] = []
+        for picked in e.files:
+            if not picked.path:
+                continue
+            try:
+                size = await asyncio.to_thread(lambda p=picked.path: Path(p).stat().st_size)
+                if size > MAX_FILE_BYTES:
+                    raise NotAttachable(f"{picked.name}: файлът е по-голям от {MAX_FILE_BYTES // 1024} KB")
+                raw = await asyncio.to_thread(Path(picked.path).read_bytes)
+                text = read_text_file(raw, picked.name)
+                await self._store_attachment(picked.name, text)
+            except asyncio.CancelledError:
+                raise
+            except NotAttachable as ex:
+                logger.warning("Skipped %s: %s", picked.name, ex)
+                problems.append(str(ex))
+            except OSError as ex:
+                logger.warning("Could not read %s: %s", picked.name, ex)
+                problems.append(f"{picked.name}: файлът не може да се прочете")
+            except Exception as ex:  # noqa: BLE001
+                logger.error("Failed to attach %s: %s", picked.name, ex)
+                problems.append(f"{picked.name}: {self._attach_error_text(ex)}")
+            else:
+                attached.append(picked.name)
+        await self.load_attachments()
+        if attached:
+            show_snackbar(self.page, "Прикачено към разговора: " + ", ".join(attached), success=True)
+        if problems:
+            show_snackbar(self.page, "Не са прикачени — " + "; ".join(problems))
+
+    async def _store_attachment(self, name: str, text: str) -> ChatAttachment:
+        """Send one file to the backend for the open conversation."""
+        return await self.api_client.upload_attachment(self.session_id, name, text)
+
+    @staticmethod
+    def _attach_error_text(error: BaseException) -> str:
+        """Why the backend would not take a file, in words the user can act on."""
+        if isinstance(error, APIError):
+            if error.status == 413:
+                return f"файлът е по-голям от {MAX_FILE_BYTES // 1024} KB"
+            if error.status == 422:
+                return "в разговора вече има 20 файла или файловете му надхвърлят 1 MB"
+            if error.status < 500:
+                return f"бекендът отказа файла ({error.message})"
+        return describe_error(error)
+
+    # ----------------------------------------------------- a long text becomes a file
+    async def on_input_change(self, e) -> None:
+        """Offer to attach a very long text as soon as it is pasted into the field.
+
+        A message of that size would be refused by the backend, and the model reads a
+        file better than a wall of text in a message. Only the jump counts: typing
+        grows the field by a few characters at a time.
+        """
+        text = self.input_field.value or ""
+        previous, self._input_text = self._input_text, text
+        if self._offering or len(text) - len(previous) < PASTE_THRESHOLD_CHARS:
+            return
+        pasted = inserted_text(previous, text)
+        tokens = estimate_message_tokens(pasted)
+        self._offering = True
+        try:
+            accepted = await confirm_dialog(
+                self.page,
+                "Дълъг текст",
+                f"Поставеният текст е голям (около {tokens} токена). Да го прикача като файл към разговора? "
+                "Така Лили го чете по-добре и не се брои в дължината на съобщението.",
+                confirm_text="Прикачи като файл",
+                cancel_text="Остави в съобщението",
+                destructive=False,
+            )
+            if not accepted:
+                return
+            if await self._attach_text_as_file(pasted):
+                self._set_input(previous)
+                safe_update(self, self.input_field)
+        finally:
+            self._offering = False
+
+    async def _attach_text_as_file(self, text: str) -> str | None:
+        """Attach text as ``paste_N.ext``; the name, or None (and a message) if it failed."""
+        name = paste_file_name(text, {a.name for a in self.attachments})
+        try:
+            await self._store_attachment(name, text)
+        except asyncio.CancelledError:
+            raise
+        except Exception as ex:  # noqa: BLE001
+            logger.error("Failed to attach the pasted text: %s", ex)
+            show_snackbar(self.page, f"Текстът не беше прикачен — {self._attach_error_text(ex)}")
+            return None
+        await self.load_attachments()
+        show_snackbar(self.page, f"Прикачено като {name}", success=True)
+        return name
+
+    async def _offer_file_instead_of_message(self, text: str) -> None:
+        """A message over the limit: offer a file instead of the backend's refusal.
+
+        On yes the whole text becomes a file and the field gets a short note about it,
+        ready to be sent or changed; nothing is sent by itself.
+        """
+        if self._offering:
+            return
+        self._offering = True
+        try:
+            accepted = await confirm_dialog(
+                self.page,
+                "Съобщението е твърде дълго",
+                f"Съобщението е около {estimate_message_tokens(text)} токена, а най-много се пращат {MESSAGE_TOKEN_LIMIT}. "
+                "Да го прикача като файл към разговора и в полето да остане кратка бележка?",
+                confirm_text="Прикачи като файл",
+                cancel_text="Ще го скъся",
+                destructive=False,
+            )
+            if not accepted:
+                return
+            name = await self._attach_text_as_file(text)
+            if name:
+                self._set_input(f"Виж прикачения файл {name}.")
+                safe_update(self, self.input_field)
+        finally:
+            self._offering = False
 
     async def load_history(self, *_args):
         """Render the session history with a single UI update at the end."""
@@ -1081,7 +1320,7 @@ class ChatView(ft.Container):
             # After a StreamError the backend already has the user's turn, so
             # putting it back in the input would only invite a duplicate.
             if fallback_user_text and not isinstance(ex, StreamError):
-                self.input_field.value = fallback_user_text
+                self._set_input(fallback_user_text)
         finally:
             stream_open = False
             chat_message.hide_activity_indicator()
@@ -1101,6 +1340,10 @@ class ChatView(ft.Container):
         text = (self.input_field.value or "").strip()
         if not text:
             return
+        if estimate_message_tokens(text) > MESSAGE_TOKEN_LIMIT:
+            # The backend would refuse it; a file is what a text this long should be.
+            await self._offer_file_instead_of_message(text)
+            return
 
         self._is_streaming = True
         self._stop_generation = False
@@ -1108,7 +1351,7 @@ class ChatView(ft.Container):
         # Only the length: what the user writes does not belong in the log.
         logger.info("Chat %s: message sent (%d characters).", session_id[:8], len(text))
 
-        self.input_field.value = ""
+        self._set_input("")
         if self.input_field.uid is not None:
             # focus() calls update() internally, so skip it for a detached field.
             self.input_field.focus()
