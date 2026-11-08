@@ -266,9 +266,6 @@ def main(page: ft.Page):
         """
         logger.info("Active chat session changed to %s", short_id(session_id))
 
-    def create_chat() -> ChatView:
-        return ChatView(page, api_client, on_session_changed=on_chat_session_changed)
-
     def create_memory() -> MemoryView:
         return MemoryView(page, api_client)
 
@@ -278,7 +275,8 @@ def main(page: ft.Page):
     def create_oracle() -> OracleView:
         return OracleView(page, api_client)
 
-    factories = {0: create_chat, 1: create_memory, 2: create_files, 3: create_oracle}
+    # The chat tab is built at once (below); the others on their first visit.
+    factories = {1: create_memory, 2: create_files, 3: create_oracle}
 
     chat_view = ChatView(page, api_client, on_session_changed=on_chat_session_changed)
     views[0] = chat_view
@@ -306,7 +304,7 @@ def main(page: ft.Page):
 
     def on_tab_change(e):
         index = e.control.selected_index or 0
-        if index not in factories:
+        if index not in views and index not in factories:
             return
         existed = index in views
         view = ensure_view(index)

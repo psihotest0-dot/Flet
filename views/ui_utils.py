@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Small helpers shared by the views."""
+
+from __future__ import annotations
 
 import asyncio
 import logging

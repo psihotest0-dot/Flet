@@ -177,16 +177,6 @@ def _disarm_plain(text: str) -> str:
     return "".join(out)
 
 
-def _get_mock_sources():
-    return [
-        {"title": "guidelines.pdf", "type": "Документ", "score": "95", "text_snippet": "Това е първият пример за намерен текст от документа guidelines.pdf."},
-        {"title": "receipt_123.jpg", "type": "OCR", "score": "82", "text_snippet": "Извлечен текст от касова бележка. Сума: 12.50 BGN"},
-        {"title": "manual.docx", "type": "Документ", "score": "78", "text_snippet": "Важно упътване от файла manual.docx относно инсталацията."},
-        {"title": "notes.txt", "type": "Документ", "score": "60", "text_snippet": "Някакви случайни записки, които са намерени от RAG системата."},
-        {"title": "screenshot.png", "type": "OCR", "score": "45", "text_snippet": "Текст от екранна снимка на браузър."},
-    ]
-
-
 # What the backend's ``source_type`` is called in the sources panel.
 SOURCE_TYPE_LABELS = {
     "memory": "Памет",

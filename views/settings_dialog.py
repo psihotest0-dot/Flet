@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Settings dialog: backend address, connection check, chat name and the user_id."""
+
+from __future__ import annotations
 
 import asyncio
 import logging

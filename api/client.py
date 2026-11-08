@@ -75,12 +75,9 @@ class Memory(BaseModel):
     user_id: str | None = None
     content: str | None = None
     status: str | None = None
-    embedding: list[float] | None = None
-    embedding_model: str | None = None
     source_message_id: str | None = None
     importance: int | None = None
     metadata: dict[str, Any] | None = None
-    content_hash: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     last_used_at: datetime | None = None

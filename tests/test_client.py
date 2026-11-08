@@ -478,6 +478,23 @@ async def test_stream_chat_success(client):
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_stream_chat_sends_the_user_header(client):
+    async def sse_stream():
+        yield b'data: {"content": "Hello"}\n\n'
+        yield b'data: [DONE]\n\n'
+
+    route = respx.post("http://localhost:8080/chat/stream").mock(
+        return_value=httpx.Response(200, content=sse_stream(), headers={"Content-Type": "text/event-stream"})
+    )
+
+    _ = [item async for item in client.stream_chat(session_id="session-123", content="Hi")]
+
+    # The header is set once on the httpx client, so the SSE request must carry it too.
+    assert route.calls.last.request.headers["X-User-ID"] == "123e4567-e89b-12d3-a456-426614174000"
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_stream_chat_error(client):
     from api.client import StreamError
 
@@ -714,6 +731,24 @@ async def test_get_recovers_from_a_transient_server_error(client, no_retry_delay
 
     assert await client.list_files() == []
     assert route.call_count == 2
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method, path", [("list_proposals", "/proposals"), ("list_rules", "/rules")]
+)
+async def test_proposal_and_rule_lists_are_repeated_like_every_other_get(
+    client, no_retry_delay, method, path
+):
+    # The README promises that every GET is repeated up to 3 times.
+    route = respx.get(f"http://localhost:8080{path}").mock(
+        side_effect=[httpx.ConnectError("refused"), httpx.Response(200, json=[])]
+    )
+
+    assert await getattr(client, method)() == []
+    assert route.call_count == 2
+    assert route.calls.last.request.headers["X-User-ID"] == client.user_id
 
 
 @respx.mock

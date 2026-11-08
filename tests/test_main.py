@@ -17,6 +17,8 @@ import respx
 import main as main_module
 from api.client import APIClient
 from state.settings import Settings, load_settings, save_settings
+from views.files import FilesView
+from views.oracle import OracleView
 
 USER_ID = "123e4567-e89b-12d3-a456-426614174000"
 
@@ -403,6 +405,29 @@ def test_memory_tab_reloads_each_time_it_is_opened_again(start_app, mock_page):
     select_tab(tabs, 1)
     mock_page.run_task.assert_called_once_with(memory_view.load_memories)
     assert tabs.tabs[1].content is memory_view
+
+
+def test_returning_to_the_chat_tab_stops_the_pollers_of_the_other_tabs(
+    start_app, monkeypatch
+):
+    calls: list[tuple[str, bool]] = []
+    for view_class in (FilesView, OracleView):
+        monkeypatch.setattr(
+            view_class,
+            "set_active",
+            lambda self, active: calls.append((type(self).__name__, active)),
+        )
+    tabs = start_app()
+    select_tab(tabs, 2)
+    select_tab(tabs, 3)
+    assert calls[-2:] == [("FilesView", False), ("OracleView", True)]
+    calls.clear()
+
+    # The chat view is built at once and is not made by a factory; the pollers
+    # must stop all the same, or they would keep asking the backend in the background.
+    select_tab(tabs, 0)
+
+    assert sorted(calls) == [("FilesView", False), ("OracleView", False)]
 
 
 @pytest.fixture
