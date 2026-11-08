@@ -138,6 +138,37 @@ async def test_delete_file_success(client):
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_delete_session_sends_the_user_and_the_session(client):
+    route = respx.delete("http://localhost:8080/chat/sessions/11111111-1111-1111-1111-111111111111").mock(
+        return_value=httpx.Response(204)
+    )
+
+    await client.delete_session("11111111-1111-1111-1111-111111111111")
+
+    assert route.called
+    assert route.calls.last.request.headers["X-User-ID"] == "123e4567-e89b-12d3-a456-426614174000"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_delete_session_escapes_the_id_and_reports_a_refusal(client):
+    # An id with characters that mean something in a path stays one path segment.
+    route = respx.delete("http://localhost:8080/chat/sessions/a%2Fb%20c").mock(
+        return_value=httpx.Response(400, text="invalid session id")
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        await client.delete_session("a/b c")
+
+    assert route.called
+    # respx compares decoded paths, so look at what really went on the wire.
+    assert route.calls.last.request.url.raw_path == b"/chat/sessions/a%2Fb%20c"
+    assert exc_info.value.status == 400
+    assert exc_info.value.message == "invalid session id"
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_delete_file_not_found(client):
     respx.delete("http://localhost:8080/v1/files/123e4567-e89b-12d3-a456-426614174001").mock(return_value=httpx.Response(404))
 

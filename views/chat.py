@@ -489,12 +489,12 @@ def _restart_chat_session(settings: Settings, session_id: str) -> str | None:
     """Start ``session_id`` over: the same chat in the list, with a new empty session.
 
     The chat keeps its name and its place in the list, but now points at a fresh
-    session id, so the conversation starts empty and the assistant no longer sees
-    the old messages. Local bookkeeping only: the backend has no call that deletes
-    a chat, so the old session and the user's long-term memory (which belongs to
-    ``user_id``, not to a chat) stay untouched. The old entry moves to
-    ``settings.archived_chats`` so its session id - the only key to that history -
-    is not lost.
+    session id, so the conversation starts empty. This is the local half of
+    deleting a chat: the caller deletes the old session on the backend first
+    (``APIClient.delete_session``), which also leaves the user's long-term memory
+    (it belongs to ``user_id``, not to a chat) alone. Nothing is archived any more:
+    there is no history left to find. ``settings.archived_chats`` only keeps the
+    entries that earlier versions wrote there.
 
     Returns the new session id, or ``None`` when ``session_id`` is not in the
     list (nothing is changed then).
@@ -508,10 +508,6 @@ def _restart_chat_session(settings: Settings, session_id: str) -> str | None:
         return None
 
     old = chat_sessions[index]
-    settings.archived_chats = [
-        entry for entry in settings.archived_chats if entry.get("id") != old["id"]
-    ] + [old]
-
     new_id = str(uuid.uuid4())
     chat_sessions[index] = {"id": new_id, "name": old["name"]}
     settings.chat_sessions = chat_sessions
@@ -604,7 +600,7 @@ class ChatView(ft.Container):
 
         self.delete_chat_btn = ft.IconButton(
             icon=ft.icons.DELETE_OUTLINE,
-            tooltip="Изтрий чата (остава празен и започва наново)",
+            tooltip="Изтрий разговора (чатът остава, празен)",
             on_click=self.on_delete_chat_click,
         )
 
@@ -802,12 +798,13 @@ class ChatView(ft.Container):
         self._activate_session(new_session, reload_history=False)
 
     async def on_delete_chat_click(self, e):
-        """Empty the open chat and stay in it, as a new empty session.
+        """Delete the open chat's conversation for good and stay in the chat, empty.
 
-        The chat keeps its name and its place in the list; only the session behind
-        it changes (see ``_restart_chat_session``). Nothing is sent to the
-        backend: the old conversation stays there and so does the long-term
-        memory, which belongs to the user.
+        The conversation is deleted on the backend first (messages, summary,
+        attached files; the long-term memories stay). If that fails nothing
+        changes and the user can try again; asking twice is safe. Then the chat
+        keeps its name and its place in the list and continues as a new empty
+        session (see ``_restart_chat_session``).
         """
         if self._is_streaming:
             show_snackbar(self.page, "Изчакай края на отговора или го спри, преди да изтриеш чата.")
@@ -820,17 +817,26 @@ class ChatView(ft.Container):
         confirmed = await confirm_dialog(
             self.page,
             "Изтриване на чата",
-            f"„{name}“ ще остане в списъка, но празен: започва нов разговор и "
-            "Лили няма да вижда досегашните съобщения. Старият разговор остава "
-            "запазен в бекенда, а дългосрочната памет (спомените) не се пипа.",
+            f"Разговорът в „{name}“ ще бъде изтрит завинаги: съобщенията, "
+            "резюмето и прикачените файлове. Чатът остава в списъка, но празен. "
+            "Спомените на Лили за теб (дългосрочната памет) не се пипат.",
             confirm_text="Изтрий",
         )
         if not confirmed:
             return
 
-        # Read after the dialog: the settings may have been saved in the meantime.
-        settings = load_settings()
         old_id = self.session_id
+        try:
+            await self.api_client.delete_session(old_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as ex:  # noqa: BLE001
+            logger.error("Failed to delete chat %s on the backend: %s", old_id[:8], ex)
+            show_snackbar(self.page, f"Разговорът не беше изтрит, чатът е непроменен. {describe_error(ex)}")
+            return
+
+        # Read after the dialog and the call: the settings may have been saved meanwhile.
+        settings = load_settings()
         new_id = _restart_chat_session(settings, old_id)
         if new_id is None:
             return
@@ -838,18 +844,14 @@ class ChatView(ft.Container):
         if not save_settings(settings):
             show_snackbar(self.page, "Неуспешно запазване на настройките.")
             return
-        logger.info(
-            "Chat %s was emptied, it continues as session %s; the old conversation stays on the backend.",
-            old_id[:8],
-            new_id[:8],
-        )
+        logger.info("Chat %s was deleted on the backend, it continues as session %s.", old_id[:8], new_id[:8])
 
         self._apply_session_options(settings.chat_sessions, new_id)
         # The new session has no history to fetch, so only the screen is cleared.
         self._activate_session(new_id, reload_history=False)
         show_snackbar(
             self.page,
-            "Чатът е изчистен. Старият разговор остава в бекенда.",
+            "Разговорът е изтрит. Спомените са запазени.",
             success=True,
         )
 

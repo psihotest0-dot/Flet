@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from httpx_sse import aconnect_sse
@@ -395,6 +396,18 @@ class APIClient:
         response = await self.client.delete(f"/chat/attachments/{attachment_id}", headers=headers)
         _raise_for_status(response)
         logger.info("Attachment %s deleted.", attachment_id)
+
+    async def delete_session(self, session_id: str) -> None:
+        """Delete a conversation on the backend for good.
+
+        Its messages, rolling summary, traces and attached files go; the user's
+        memories stay. A session that is not there is not an error (204), so
+        asking twice is safe.
+        """
+        headers = {"X-User-ID": self.user_id}
+        response = await self.client.delete(f"/chat/sessions/{quote(session_id, safe='')}", headers=headers)
+        _raise_for_status(response)
+        logger.info("Session %s deleted.", session_id)
 
     @retry(
         stop=stop_after_attempt(3),

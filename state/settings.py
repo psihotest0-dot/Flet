@@ -99,9 +99,10 @@ class Settings(BaseModel):
     user_id: str | None = None
     session_id: str | None = None
     chat_sessions: list[dict] = []
-    # Chats the user removed from the list. Only the screen forgets them: their
-    # history stays on the backend, and keeping the ids here means the key to it
-    # is not lost for good (a removed entry can be copied back into chat_sessions).
+    # Left over from earlier versions, when "delete chat" only started a new session
+    # and kept the old id here as the key to the history that stayed on the backend.
+    # Deleting a chat now deletes it on the backend and adds nothing here; the field
+    # stays so that old entries survive saving the settings.
     archived_chats: list[dict] = []
     display_name: str = DEFAULT_DISPLAY_NAME
 
