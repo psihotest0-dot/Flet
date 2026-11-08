@@ -25,6 +25,11 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# pytest-asyncio warns when this is unset, and from pytest 9.2 on that warning is
+# raised at start-up under `-W error::DeprecationWarning` (CI), so no test runs.
+# Flet 0.24 holds pytest at 9.1 (packaging<24); Flet 1.x would not. "function" is
+# pytest-asyncio's documented default.
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 88
