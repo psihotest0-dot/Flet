@@ -269,7 +269,7 @@ def main(page: ft.Page):
         Memories belong to the user, not to a chat, so the Memory tab is not
         reloaded here - it refreshes when its tab is opened.
         """
-        logger.info("Active chat session changed to %s", session_id)
+        logger.info("Active chat session changed to %s", short_id(session_id))
 
     def create_chat() -> ChatView:
         return ChatView(page, api_client, on_session_changed=on_chat_session_changed)

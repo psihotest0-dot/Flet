@@ -316,6 +316,20 @@ def test_switching_chats_does_not_reload_the_memories(start_app, mock_page):
     mock_page.run_task.assert_not_called()
 
 
+def test_switching_chats_logs_only_the_start_of_the_session_id(
+    caplog, start_app
+):
+    session_id = "77777777-8888-9999-aaaa-bbbbbbbbbbbb"
+    tabs = start_app()
+    caplog.set_level(logging.INFO, logger="main")
+
+    tabs.tabs[0].content.on_session_changed(session_id)
+
+    # AGENTS.md rule 7: the full session_id is the key to the conversation.
+    assert "Active chat session changed to 77777777" in caplog.text
+    assert session_id not in caplog.text
+
+
 def test_memory_tab_reloads_each_time_it_is_opened_again(start_app, mock_page):
     tabs = start_app()
     mock_page.run_task.reset_mock()

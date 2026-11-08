@@ -151,6 +151,22 @@ async def test_delete_session_sends_the_user_and_the_session(client):
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_delete_session_logs_only_the_start_of_the_id(client, caplog):
+    session_id = "22222222-3333-4444-5555-666666666666"
+    respx.delete(f"http://localhost:8080/chat/sessions/{session_id}").mock(
+        return_value=httpx.Response(204)
+    )
+    caplog.set_level(logging.INFO, logger="api.client")
+
+    await client.delete_session(session_id)
+
+    # AGENTS.md rule 7: the full session_id is the key to the conversation.
+    assert "Session 22222222 deleted." in caplog.text
+    assert session_id not in caplog.text
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_delete_session_escapes_the_id_and_reports_a_refusal(client):
     # An id with characters that mean something in a path stays one path segment.
     route = respx.delete("http://localhost:8080/chat/sessions/a%2Fb%20c").mock(

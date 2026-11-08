@@ -407,7 +407,8 @@ class APIClient:
         headers = {"X-User-ID": self.user_id}
         response = await self.client.delete(f"/chat/sessions/{quote(session_id, safe='')}", headers=headers)
         _raise_for_status(response)
-        logger.info("Session %s deleted.", session_id)
+        # Only the first 8 characters: the full id is the key to the conversation.
+        logger.info("Session %s deleted.", session_id[:8])
 
     @retry(
         stop=stop_after_attempt(3),
