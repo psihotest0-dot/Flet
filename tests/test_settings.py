@@ -225,6 +225,197 @@ def test_unusable_display_name_in_the_file_does_not_cost_the_identity(
     assert settings.display_name == "42"
 
 
+# ------------------------------------------------------- durable, serial writes
+def test_save_forces_the_text_to_the_disk_before_replacing_the_file(
+    mock_settings_file, monkeypatch
+):
+    import os
+
+    events = []
+    real_fsync, real_replace = os.fsync, os.replace
+    monkeypatch.setattr(os, "fsync", lambda fd: (events.append("fsync"), real_fsync(fd))[1])
+    monkeypatch.setattr(
+        os, "replace", lambda a, b: (events.append("replace"), real_replace(a, b))[1]
+    )
+
+    assert save_settings(Settings(user_id=ORIGINAL_USER_ID)) is True
+
+    # Without the fsync a power cut right after the replace can leave an empty
+    # or zeroed settings.json - and with it a new user_id at the next start.
+    assert events == ["fsync", "replace"]
+    assert load_settings().user_id == ORIGINAL_USER_ID
+
+
+def test_saves_from_two_threads_at_once_all_succeed_and_leave_a_whole_file(
+    mock_settings_file,
+):
+    import threading
+
+    # Flet runs synchronous handlers in threads: the chat and the settings dialog
+    # can save in the same second. The temporary file used to be named after the
+    # second, so two such saves wrote into one file and one of them failed.
+    saves_per_thread = 40
+    start = threading.Barrier(2)
+    results: list[bool] = []
+
+    def save_many(name: str) -> None:
+        start.wait()
+        for _ in range(saves_per_thread):
+            results.append(save_settings(Settings(user_id=ORIGINAL_USER_ID, display_name=name)))
+
+    threads = [threading.Thread(target=save_many, args=(name,)) for name in ("Иван", "Мария")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert results == [True] * (2 * saves_per_thread)
+    saved = json.loads(mock_settings_file.read_text(encoding="utf-8"))
+    assert saved["user_id"] == ORIGINAL_USER_ID
+    assert saved["display_name"] in ("Иван", "Мария")
+    assert list(mock_settings_file.parent.glob("settings.tmp.*")) == []
+
+
+def test_writes_go_one_at_a_time(mock_settings_file, monkeypatch):
+    import os
+    import threading
+    import time
+
+    real_replace = os.replace
+    lock = threading.Lock()
+    inside = {"now": 0, "most": 0}
+
+    def slow_replace(src, dst):
+        with lock:
+            inside["now"] += 1
+            inside["most"] = max(inside["most"], inside["now"])
+        time.sleep(0.005)
+        with lock:
+            inside["now"] -= 1
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", slow_replace)
+    start = threading.Barrier(2)
+
+    def save_many() -> None:
+        start.wait()
+        for _ in range(10):
+            save_settings(Settings(user_id=ORIGINAL_USER_ID))
+
+    threads = [threading.Thread(target=save_many) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert inside["most"] == 1
+
+
+def test_every_save_uses_a_temporary_file_of_its_own(mock_settings_file, monkeypatch):
+    import os
+
+    # Also when two windows of the app save at once (a lock does not reach
+    # another process): names made from the current second used to collide.
+    used = []
+    real_replace = os.replace
+    monkeypatch.setattr(os, "replace", lambda src, dst: (used.append(src), real_replace(src, dst))[1])
+
+    for _ in range(5):
+        save_settings(Settings(user_id=ORIGINAL_USER_ID))
+
+    assert len(set(used)) == 5
+
+
+# ------------------------------------------- settings.json.bak, the last good copy
+def _remember(settings: Settings) -> None:
+    """Save ``settings`` and read them back once - that is when the copy is taken."""
+    save_settings(settings)
+    load_settings()
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        b"",
+        b"\x00" * 512,
+        b"\xff\xfe not utf-8 \xc3",
+        # Only the address can still be read out of it, not the user_id.
+        b'{\n    "base_url": "http://localhost:8080",\n    "user_id": "123e',
+    ],
+    ids=["empty", "zeroed", "not-utf8", "cut-before-the-user-id"],
+)
+def test_a_wrecked_file_gets_the_identity_back_from_the_last_good_copy(
+    mock_settings_file, damage, caplog
+):
+    _remember(
+        Settings(
+            user_id=ORIGINAL_USER_ID,
+            session_id=ORIGINAL_SESSION_ID,
+            chat_sessions=[{"id": ORIGINAL_SESSION_ID, "name": "Чат 1"}],
+            display_name="Иван",
+        )
+    )
+    # What NTFS can leave after a power cut, or a file that is not text at all.
+    mock_settings_file.write_bytes(damage)
+
+    with caplog.at_level("WARNING", logger="state.settings"):
+        settings = load_settings()
+
+    assert f"restored user_id={ORIGINAL_USER_ID[:8]}" in caplog.text
+    assert ORIGINAL_USER_ID not in caplog.text
+
+    assert settings.user_id == ORIGINAL_USER_ID
+    assert settings.session_id == ORIGINAL_SESSION_ID
+    assert settings.chat_sessions == [{"id": ORIGINAL_SESSION_ID, "name": "Чат 1"}]
+    assert settings.display_name == "Иван"
+    # The restored settings are saved, the wrecked file is kept aside.
+    assert json.loads(mock_settings_file.read_text(encoding="utf-8"))["user_id"] == ORIGINAL_USER_ID
+    assert len(list(mock_settings_file.parent.glob("settings.json.broken.*"))) == 1
+
+
+def test_ids_still_readable_in_the_broken_file_win_over_the_copy(mock_settings_file):
+    _remember(Settings(user_id="00000000-0000-0000-0000-000000000000"))
+    # The broken file is newer than the copy, and its ids can still be read.
+    mock_settings_file.write_text(
+        f'{{"user_id": "{ORIGINAL_USER_ID}", "session_id": "{ORIGINAL_SESSION_ID}", broken',
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+
+    assert settings.user_id == ORIGINAL_USER_ID
+    assert settings.session_id == ORIGINAL_SESSION_ID
+
+
+def test_without_a_copy_a_wrecked_file_still_starts_with_defaults(mock_settings_file):
+    mock_settings_file.write_bytes(b"\x00" * 64)
+
+    settings = load_settings()
+
+    assert settings.user_id is None
+    assert len(list(mock_settings_file.parent.glob("settings.json.broken.*"))) == 1
+
+
+def test_settings_without_a_user_id_never_replace_the_copy(mock_settings_file):
+    backup = mock_settings_file.with_name("settings.json.bak")
+    _remember(Settings(user_id=ORIGINAL_USER_ID))
+    assert json.loads(backup.read_text(encoding="utf-8"))["user_id"] == ORIGINAL_USER_ID
+
+    # A file that lost its user_id is read without trouble - but it is not worth
+    # keeping, and it must not push the identity out of the copy.
+    _remember(Settings(base_url="http://127.0.0.1:8080"))
+
+    assert json.loads(backup.read_text(encoding="utf-8"))["user_id"] == ORIGINAL_USER_ID
+
+
+def test_the_copy_follows_the_settings_that_were_read(mock_settings_file):
+    backup = mock_settings_file.with_name("settings.json.bak")
+    _remember(Settings(user_id=ORIGINAL_USER_ID, session_id="s-1"))
+    _remember(Settings(user_id=ORIGINAL_USER_ID, session_id="s-2"))
+
+    assert json.loads(backup.read_text(encoding="utf-8"))["session_id"] == "s-2"
+
+
 def test_recovering_broken_settings_logs_only_the_start_of_the_ids(isolated_settings, caplog):
     user_id = "123e4567-e89b-12d3-a456-426614174000"
     session_id = "abcdef12-3456-7890-abcd-ef1234567890"

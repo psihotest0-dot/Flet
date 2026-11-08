@@ -133,8 +133,13 @@
 | `_decode_settings_text(text)` | Разчита файла; връща `(данни, поправен)`. |
 | `_salvage_fields(text)` | Изважда `base_url`, `user_id`, `session_id` от счупен JSON. |
 | `_backup_broken_settings()` | Преименува нечетим файл на `settings.json.broken.<време>` вместо да го трие. |
-| `load_settings()` | Чете настройките. Поправя ги на място, при безнадеждно повреда запазва `user_id`/`session_id`, ако се виждат. |
-| `save_settings(settings)` | Атомарен запис през `settings.tmp.<време>`; връща `False` и записва грешката при неуспех. |
+| `_backup_file()` | Пътят на `settings.json.bak` — последното копие, прочетено без проблем. |
+| `_remember_good_copy(settings)` | След успешно четене записва настройките в `settings.json.bak` — само ако имат `user_id` и само ако са се променили. |
+| `_settings_from_backup()` | Настройките от `settings.json.bak`, ако копието се чете и има `user_id`; иначе `None`. |
+| `_use_restored(settings)` | Прави копието текущи настройки: записва го в `settings.json` и пише в лога първите 8 знака на id-тата. |
+| `load_settings()` | Чете настройките. Поправя ги на място, при безнадеждно повреда запазва `user_id`/`session_id`, ако се виждат; ако `user_id` не се вижда (празен, нулев, нечетим файл) — взема копието от `settings.json.bak`, а повредения файл мести настрана. |
+| `_write_atomically(path, text)` | Запис по един (заключване): временен файл с уникално име `settings.tmp.*`, `flush` + `fsync`, после `os.replace`. Токът да спре — остава старият или новият файл, никога празен. Връща `False` и записва грешката при неуспех. |
+| `save_settings(settings)` | Записва настройките в `settings.json` през `_write_atomically`. |
 
 ## views/ui_utils.py
 

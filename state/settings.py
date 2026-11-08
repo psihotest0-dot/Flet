@@ -6,6 +6,8 @@ import json
 import logging
 import os
 import re
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,10 @@ DEFAULT_BASE_URL = "http://localhost:8080"
 # label is allowed to be (the settings dialog enforces the same limit).
 DEFAULT_DISPLAY_NAME = "Ти"
 MAX_DISPLAY_NAME_CHARS = 40
+
+# Flet runs synchronous event handlers in threads: the chat and the settings dialog
+# can save in the same moment. Writes go one at a time.
+_WRITE_LOCK = threading.Lock()
 
 # Matches the identifying fields even when the surrounding document is broken.
 _SCALAR_FIELD_PATTERN = re.compile(
@@ -227,13 +233,72 @@ def _backup_broken_settings() -> None:
         logger.error("Failed to backup unreadable settings file: %s", backup_error)
 
 
+def _backup_file() -> Path:
+    """``settings.json.bak``: the settings as they were last read without trouble."""
+    return SETTINGS_FILE.with_name(SETTINGS_FILE.name + ".bak")
+
+
+def _remember_good_copy(settings: Settings) -> None:
+    """Keep settings that were just read without trouble in ``settings.json.bak``.
+
+    The copy is taken when the file is read, not when it is saved, so a crash in
+    the middle of a save cannot spoil both. Only settings with a ``user_id`` are
+    worth keeping, and the copy is rewritten only when it changed.
+    """
+    if not settings.user_id:
+        return
+    text = settings.model_dump_json(indent=4)
+    backup = _backup_file()
+    try:
+        if backup.read_text(encoding="utf-8") == text:
+            return
+    except (OSError, ValueError):
+        pass  # missing or unreadable: write it anew
+    if not _write_atomically(backup, text):
+        logger.warning("Could not refresh %s.", backup.name)
+
+
+def _settings_from_backup() -> Settings | None:
+    """The settings kept in ``settings.json.bak``, if they hold a ``user_id``."""
+    backup = _backup_file()
+    try:
+        text = backup.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        logger.error("Could not read %s: %s", backup.name, e)
+        return None
+    data, _ = _decode_settings_text(text)
+    if data is None:
+        return None
+    try:
+        settings = Settings(**data)
+    except (TypeError, ValueError):
+        return None
+    return settings if settings.user_id else None
+
+
+def _use_restored(settings: Settings) -> Settings:
+    """Make the settings from ``settings.json.bak`` the current ones."""
+    # Only the first 8 characters, like everywhere else in the log.
+    logger.warning(
+        "settings.json gave no user_id; restored user_id=%s session_id=%s from %s",
+        (settings.user_id or "")[:8],
+        (settings.session_id or "")[:8],
+        _backup_file().name,
+    )
+    save_settings(settings)
+    return settings
+
+
 def load_settings() -> Settings:
     """Load settings from the local JSON file.
 
     A hand-edited file must never cost the user their identity: ``user_id`` and
     ``session_id`` are what keep the chat, memory and file history reachable on
     the backend. The file is therefore repaired in place whenever possible and
-    only moved aside when it holds no recoverable data at all.
+    only moved aside when it holds no recoverable data at all. Before starting
+    without a ``user_id`` the last good copy (``settings.json.bak``) is tried.
     """
     if not SETTINGS_FILE.exists():
         return Settings()
@@ -243,13 +308,23 @@ def load_settings() -> Settings:
     except (OSError, ValueError) as e:
         # ValueError covers a file that is not UTF-8 decodable at all.
         logger.error(f"Failed to read settings file: {e}")
-        return Settings()
+        restored = _settings_from_backup()
+        if restored is None:
+            return Settings()
+        _backup_broken_settings()
+        return _use_restored(restored)
 
     data, repaired = _decode_settings_text(text)
 
     if data is None:
         salvaged = _salvage_fields(text)
         _backup_broken_settings()
+        if not salvaged.get("user_id"):
+            # An empty or zeroed file (a power cut right after a save) or one whose
+            # user_id cannot be read: the last good copy keeps the identity.
+            restored = _settings_from_backup()
+            if restored is not None:
+                return _use_restored(restored)
         if not salvaged:
             # Nothing recoverable: the app starts with a fresh user_id, and the
             # old history can only be reached again from the backup file.
@@ -273,7 +348,12 @@ def load_settings() -> Settings:
         # The JSON itself is readable, so the file is kept for the user to fix;
         # only the offending values fall back to their defaults.
         logger.error(f"Failed to parse settings values, using defaults: {e}")
-        return Settings()
+        restored = _settings_from_backup()
+        if restored is None:
+            return Settings()
+        # The file is still kept for the user, next to the restored one.
+        _backup_broken_settings()
+        return _use_restored(restored)
 
     if repaired:
         logger.warning(
@@ -281,22 +361,45 @@ def load_settings() -> Settings:
             "it has been rewritten in canonical form."
         )
         save_settings(settings)
+    _remember_good_copy(settings)
     return settings
 
 
-def save_settings(settings: Settings) -> bool:
-    """Save settings to the local JSON file using atomic write."""
-    temp_file = SETTINGS_FILE.with_name(f"settings.tmp.{int(time.time())}")
-    try:
-        with open(temp_file, "w", encoding="utf-8") as f:
-            f.write(settings.model_dump_json(indent=4))
-        os.replace(temp_file, SETTINGS_FILE)
-        return True
-    except (OSError, ValueError) as e:
-        logger.error(f"Failed to save settings to file: {e}")
+def _write_atomically(path: Path, text: str) -> bool:
+    """Replace ``path`` with ``text`` so that a crash leaves the old or the new file.
+
+    The text goes to a temporary file with a unique name next to ``path`` and is
+    forced to the disk (``fsync``) before it takes the place of the old file:
+    without that, a power cut right after the replace could leave an empty or
+    zeroed file behind. Returns ``False`` and logs the reason on failure.
+    """
+    with _WRITE_LOCK:
+        temp_file: Path | None = None
         try:
-            if temp_file.exists():
-                temp_file.unlink()
-        except OSError as unlink_error:
-            logger.warning(f"Failed to remove temporary file {temp_file}: {unlink_error}")
+            # The prefix is git-ignored (settings.tmp.*).
+            fd, temp_name = tempfile.mkstemp(dir=path.parent, prefix="settings.tmp.")
+            temp_file = Path(temp_name)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_file, path)
+            return True
+        except (OSError, ValueError) as e:
+            logger.error(f"Failed to save {path.name}: {e}")
+            try:
+                if temp_file is not None and temp_file.exists():
+                    temp_file.unlink()
+            except OSError as unlink_error:
+                logger.warning(f"Failed to remove temporary file {temp_file}: {unlink_error}")
+            return False
+
+
+def save_settings(settings: Settings) -> bool:
+    """Save settings to the local JSON file (see :func:`_write_atomically`)."""
+    try:
+        text = settings.model_dump_json(indent=4)
+    except ValueError as e:
+        logger.error(f"Failed to save settings to file: {e}")
         return False
+    return _write_atomically(SETTINGS_FILE, text)
