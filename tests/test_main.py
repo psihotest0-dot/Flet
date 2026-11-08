@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import sys
@@ -174,7 +175,7 @@ def settings_dialog_spy(monkeypatch):
     return captured
 
 
-def test_saving_settings_keeps_the_identity_and_swaps_the_client(
+def test_saving_settings_keeps_the_identity_and_repoints_the_same_client(
     start_app, settings_dialog_spy
 ):
     save_settings(
@@ -199,9 +200,69 @@ def test_saving_settings_keeps_the_identity_and_swaps_the_client(
     assert saved.user_id == USER_ID
     assert saved.session_id == "session-1"
     assert saved.chat_sessions == [{"id": "session-1", "name": "Чат 1"}]
-    assert chat_view.api_client is not previous_client
-    assert chat_view.api_client.base_url == "http://127.0.0.1:9000"
-    assert chat_view.api_client.user_id == USER_ID
+    # The chat messages and proposal cards hold this very object.
+    assert chat_view.api_client is previous_client
+    assert previous_client.base_url == "http://127.0.0.1:9000"
+    assert previous_client.user_id == USER_ID
+
+
+@pytest.mark.parametrize(
+    "new_url", ["http://127.0.0.1:9000", "http://localhost:8080"], ids=["changed", "same"]
+)
+def test_saving_settings_never_closes_the_client(
+    start_app, settings_dialog_spy, mock_page, new_url
+):
+    # "Запази" is also pressed with nothing changed (the dialog was opened only to
+    # copy the user_id). Closing the client cut off the answer being streamed.
+    save_settings(Settings(user_id=USER_ID, base_url="http://localhost:8080"))
+    tabs = start_app()
+    client = tabs.tabs[0].content.api_client
+    mock_page.run_task.reset_mock()
+
+    settings_dialog_spy["on_save"](new_url, "Ти")
+
+    mock_page.run_task.assert_not_called()
+    assert client.client.is_closed is False
+    assert client.base_url == new_url
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_client_held_from_before_the_save_reaches_the_new_address(
+    start_app, settings_dialog_spy
+):
+    save_settings(Settings(user_id=USER_ID, base_url="http://localhost:8080"))
+    tabs = start_app()
+    # What a proposal card or a chat message got when it was drawn.
+    held = tabs.tabs[0].content.api_client
+    old = respx.post("http://localhost:8080/proposals/7/approve")
+    new = respx.post("http://127.0.0.1:9000/proposals/7/approve").mock(
+        return_value=httpx.Response(200, json={"id": 7, "status": "approved"})
+    )
+
+    settings_dialog_spy["on_save"]("http://127.0.0.1:9000", "Ти")
+    await held.approve_proposal(7)
+
+    assert new.called
+    assert not old.called
+
+
+@pytest.mark.asyncio
+async def test_stop_still_reaches_the_answer_being_streamed_after_a_save(
+    start_app, settings_dialog_spy
+):
+    tabs = start_app()
+    chat_view = tabs.tabs[0].content
+    # The stream records its task on the client it reads through.
+    answer = asyncio.get_running_loop().create_task(asyncio.sleep(10))
+    chat_view.api_client._current_stream_task = answer
+
+    settings_dialog_spy["on_save"]("http://127.0.0.1:9000", "Ти")
+    # What "Спри" does (ChatView.stop_generation_click).
+    chat_view.api_client.cancel_stream()
+
+    with pytest.raises(asyncio.CancelledError):
+        await answer
 
 
 def test_dialog_is_built_with_the_saved_chat_name_and_reopens_with_it(
@@ -267,18 +328,17 @@ def test_closing_the_session_stops_the_health_poll_and_closes_the_client(
     mock_page.run_task.assert_called_once_with(client.aclose)
 
 
-def test_closing_the_session_after_a_save_closes_the_new_client(
+def test_closing_the_session_after_a_save_closes_the_one_client(
     start_app, settings_dialog_spy, mock_page
 ):
     tabs = start_app()
+    client = tabs.tabs[0].content.api_client
     settings_dialog_spy["on_save"]("http://127.0.0.1:9000", "Ти")
-    current = tabs.tabs[0].content.api_client
     mock_page.run_task.reset_mock()
 
     mock_page.on_disconnect(None)
 
-    # The previous client was closed by the save; only the current one remains.
-    mock_page.run_task.assert_called_once_with(current.aclose)
+    mock_page.run_task.assert_called_once_with(client.aclose)
 
 
 @respx.mock

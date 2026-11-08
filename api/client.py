@@ -304,6 +304,16 @@ class APIClient:
         self.client = httpx.AsyncClient(base_url=self.base_url)
         self._current_stream_task = None
 
+    def set_base_url(self, base_url: str) -> None:
+        """Send the next requests to ``base_url``.
+
+        The client stays the same object: the views, the chat messages and the
+        proposal cards all hold it, and an answer being streamed keeps reading
+        through it. A request already on its way finishes at the old address.
+        """
+        self.base_url = base_url
+        self.client.base_url = base_url
+
     def cancel_stream(self):
         """Cancel the current streaming task."""
         if self._current_stream_task and not self._current_stream_task.done():

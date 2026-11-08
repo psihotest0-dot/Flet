@@ -1563,5 +1563,6 @@ def test_a_new_base_url_reaches_the_bot_tab(start_app, monkeypatch):
 
     captured["on_save"]("http://127.0.0.1:9000", "Ти")
 
-    assert view.api_client is not previous
+    # The tab keeps its client, which now talks to the new address.
+    assert view.api_client is previous
     assert view.api_client.base_url == "http://127.0.0.1:9000"

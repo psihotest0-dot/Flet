@@ -34,6 +34,21 @@ async def test_client_context_manager():
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_set_base_url_sends_the_next_requests_to_the_new_address(client):
+    old = respx.get("http://localhost:8080/healthz").mock(return_value=httpx.Response(200))
+    new = respx.get("http://127.0.0.1:9000/healthz").mock(return_value=httpx.Response(200))
+
+    client.set_base_url("http://127.0.0.1:9000")
+
+    assert await client.check_health() is True
+    assert new.called
+    assert not old.called
+    assert client.base_url == "http://127.0.0.1:9000"
+    assert client.client.is_closed is False
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_check_health_success(client):
     respx.get("http://localhost:8080/healthz").mock(return_value=httpx.Response(200))
     result = await client.check_health()

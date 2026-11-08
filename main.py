@@ -174,9 +174,7 @@ def main(page: ft.Page):
     views: dict[int, ft.Control] = {}
 
     def apply_settings(new_url: str, display_name: str = DEFAULT_DISPLAY_NAME):
-        """Persist the validated Base URL and chat name; point every view at a new client."""
-        nonlocal api_client
-
+        """Persist the validated Base URL and chat name; point the client at the URL."""
         # Re-read the file before writing: the chat view stores its session_id
         # and chat_sessions there, and saving the snapshot loaded at startup
         # would silently revert them to an older session.
@@ -200,16 +198,15 @@ def main(page: ft.Page):
         settings.chat_sessions = current.chat_sessions
         settings.display_name = current.display_name
 
-        # The old client keeps pointing at the previous URL - replace it and
-        # hand the new one to every view that was already created.
-        previous_client = api_client
-        api_client = APIClient(base_url=settings.base_url, user_id=settings.user_id)
+        # The one client is kept and only pointed at the new address. Replacing
+        # and closing it cut off an answer that was being streamed, broke the
+        # proposal cards and the chat messages (they hold the client) and left
+        # "Спри" cancelling on a client that was not streaming.
+        if api_client.base_url != settings.base_url:
+            api_client.set_base_url(settings.base_url)
         for view in views.values():
-            view.api_client = api_client
             if isinstance(view, ChatView):
                 view.set_display_name(settings.display_name)
-        if previous_client is not None:
-            page.run_task(previous_client.aclose)
 
         show_snackbar(page, "Настройките са запазени успешно!", success=True)
 
@@ -242,16 +239,14 @@ def main(page: ft.Page):
     )
 
     async def probe_backend() -> bool:
-        # Looked up on every poll: saving a new Base URL replaces ``api_client``
-        # and closes the old one, so a bound ``api_client.check_health`` would
-        # keep the indicator red for good.
+        # Saving a new Base URL points the same client at it, so the indicator
+        # follows the new address on its next poll.
         return await api_client.check_health()
 
     task_handle = page.run_task(run_health_checks, probe_backend, set_status)
 
     def on_disconnect(e):
-        # ``api_client`` is read when the session ends: after a saved Base URL it
-        # is the replacement client, the old one is already closed.
+        # The session has one client for its whole life; it is closed here.
         logger.info("The window was closed, the HTTP client is shut down.")
         task_handle.cancel()
         try:
