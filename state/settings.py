@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """State management for application settings."""
+
+from __future__ import annotations
 
 import json
 import logging

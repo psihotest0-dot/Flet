@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """API client module for handling communication with the backend service."""
+
+from __future__ import annotations
 
 import asyncio
 import json
@@ -301,7 +301,10 @@ class APIClient:
     def __init__(self, base_url: str, user_id: str):
         self.base_url = base_url
         self.user_id = user_id
-        self.client = httpx.AsyncClient(base_url=self.base_url)
+        self.client = httpx.AsyncClient(
+            base_url=self.base_url,
+            headers={"X-User-ID": user_id}
+        )
         self._current_stream_task = None
 
     def set_base_url(self, base_url: str) -> None:
@@ -347,11 +350,9 @@ class APIClient:
         """
         if len(file_content) > 100 * 1024 * 1024:
             raise ValueError("File too large. Maximum size is 100MB.")
-        headers = {"X-User-ID": self.user_id}
         files = {"file": (filename, file_content, mime_type)}
         response = await self.client.post(
             "/v1/files",
-            headers=headers,
             files=files,
             timeout=httpx.Timeout(5.0, read=None)
         )
@@ -371,15 +372,13 @@ class APIClient:
 
     async def delete_file(self, file_id: str) -> None:
         """Delete a file by its ID."""
-        headers = {"X-User-ID": self.user_id}
-        response = await self.client.delete(f"/v1/files/{file_id}", headers=headers)
+        response = await self.client.delete(f"/v1/files/{file_id}")
         _raise_for_status(response)
         logger.info("File %s deleted.", file_id)
 
     async def list_attachments(self, session_id: str) -> list[ChatAttachment]:
         """The files attached to a conversation, newest first (without their text)."""
-        headers = {"X-User-ID": self.user_id}
-        response = await self._get("/chat/attachments", headers=headers, params={"session_id": session_id})
+        response = await self._get("/chat/attachments", params={"session_id": session_id})
         return [ChatAttachment(**item) for item in response.json()]
 
     async def upload_attachment(self, session_id: str, name: str, content: str) -> ChatAttachment:
@@ -389,9 +388,8 @@ class APIClient:
         content again changes nothing (``unchanged``). The text is the user's own
         material - only the id and the sizes are logged.
         """
-        headers = {"X-User-ID": self.user_id}
         payload = {"session_id": session_id, "name": name, "content": content}
-        response = await self.client.post("/chat/attachments", headers=headers, json=payload)
+        response = await self.client.post("/chat/attachments", json=payload)
         _raise_for_status(response)
         attachment = ChatAttachment(**response.json())
         logger.info(
@@ -402,8 +400,7 @@ class APIClient:
 
     async def delete_attachment(self, attachment_id: str) -> None:
         """Remove a file attached to a conversation."""
-        headers = {"X-User-ID": self.user_id}
-        response = await self.client.delete(f"/chat/attachments/{attachment_id}", headers=headers)
+        response = await self.client.delete(f"/chat/attachments/{attachment_id}")
         _raise_for_status(response)
         logger.info("Attachment %s deleted.", attachment_id)
 
@@ -414,8 +411,7 @@ class APIClient:
         memories stay. A session that is not there is not an error (204), so
         asking twice is safe.
         """
-        headers = {"X-User-ID": self.user_id}
-        response = await self.client.delete(f"/chat/sessions/{quote(session_id, safe='')}", headers=headers)
+        response = await self.client.delete(f"/chat/sessions/{quote(session_id, safe='')}")
         _raise_for_status(response)
         # Only the first 8 characters: the full id is the key to the conversation.
         logger.info("Session %s deleted.", session_id[:8])
@@ -438,35 +434,31 @@ class APIClient:
 
     async def list_files(self) -> list[IngestedFile]:
         """List all files uploaded by the user."""
-        headers = {"X-User-ID": self.user_id}
-        response = await self._get("/v1/files", headers=headers)
+        response = await self._get("/v1/files")
         return [IngestedFile(**item) for item in response.json()]
 
     async def get_file_status(self, file_id: str) -> IngestedFile:
         """Get the current status of a file."""
-        headers = {"X-User-ID": self.user_id}
-        response = await self._get(f"/v1/files/{file_id}", headers=headers)
+        response = await self._get(f"/v1/files/{file_id}")
         return IngestedFile(**response.json())
 
     async def update_file_category(self, file_id: str, category: str) -> IngestedFile:
         """Update the category of a file."""
-        headers = {"X-User-ID": self.user_id}
         payload = {"category": category, "manual_override": True}
-        response = await self.client.patch(f"/v1/files/{file_id}/category", headers=headers, json=payload)
+        response = await self.client.patch(f"/v1/files/{file_id}/category", json=payload)
         _raise_for_status(response)
         logger.info("File %s moved to category %s.", file_id, category)
         return IngestedFile(**response.json())
 
     async def create_memory(self, content: str, status: str = "candidate", source_message_id: str | None = None, importance: int | None = None, metadata: dict[str, Any] | None = None) -> Memory:
         """Create a new memory."""
-        headers = {"X-User-ID": self.user_id}
         payload = {"content": content, "status": status}
         if source_message_id:
             payload["source_message_id"] = source_message_id
         payload["importance"] = importance if importance is not None else DEFAULT_IMPORTANCE
         if metadata is not None:
             payload["metadata"] = metadata
-        response = await self.client.post("/memories", headers=headers, json=payload)
+        response = await self.client.post("/memories", json=payload)
         _raise_for_status(response)
         memory = Memory(**response.json())
         # The text of a memory is personal - only its id, status and importance are logged.
@@ -478,45 +470,39 @@ class APIClient:
 
         Without ``limit`` the backend returns only its default page (50).
         """
-        headers = {"X-User-ID": self.user_id}
         params: dict[str, Any] = {"session_id": session_id}
         if limit is not None:
             params["limit"] = limit
-        response = await self._get("/messages", headers=headers, params=params)
+        response = await self._get("/messages", params=params)
         return [Message(**item) for item in response.json()]
 
     async def list_memories(self, status: str | None = None) -> list[Memory]:
         """List memories for the user, optionally filtered by status."""
-        headers = {"X-User-ID": self.user_id}
         params = {}
         if status is not None:
             params["status"] = status
-        response = await self._get("/memories", headers=headers, params=params or None)
+        response = await self._get("/memories", params=params or None)
         return [Memory(**item) for item in response.json()]
 
     async def update_memory(self, memory_id: str, content: str, status: str, importance: int, metadata: dict[str, Any] | None = None) -> Memory:
         """Update an existing memory."""
-        headers = {"X-User-ID": self.user_id}
         payload = {"content": content, "status": status, "importance": importance}
         if metadata is not None:
             payload["metadata"] = metadata
-        response = await self.client.put(f"/memories/{memory_id}", headers=headers, json=payload)
+        response = await self.client.put(f"/memories/{memory_id}", json=payload)
         _raise_for_status(response)
         logger.info("Memory %s updated (status %s, importance %s).", memory_id, status, importance)
         return Memory(**response.json())
 
     async def delete_memory(self, memory_id: str) -> None:
         """Delete a memory by its ID."""
-        headers = {"X-User-ID": self.user_id}
-        response = await self.client.delete(f"/memories/{memory_id}", headers=headers)
+        response = await self.client.delete(f"/memories/{memory_id}")
         _raise_for_status(response)
         logger.info("Memory %s deleted.", memory_id)
 
     async def list_proposals(self) -> list[Proposal]:
         """The writes the assistant proposed that still wait for an answer, oldest first."""
-        headers = {"X-User-ID": self.user_id}
-        response = await self.client.get("/proposals", headers=headers)
-        _raise_for_status(response)
+        response = await self._get("/proposals")
         return [Proposal(**item) for item in response.json()]
 
     async def approve_proposal(self, proposal_id: int) -> Proposal:
@@ -528,23 +514,19 @@ class APIClient:
         return await self._decide_proposal(proposal_id, "reject")
 
     async def _decide_proposal(self, proposal_id: int, verb: str) -> Proposal:
-        headers = {"X-User-ID": self.user_id}
-        response = await self.client.post(f"/proposals/{proposal_id}/{verb}", headers=headers)
+        response = await self.client.post(f"/proposals/{proposal_id}/{verb}")
         _raise_for_status(response)
         logger.info("Proposal %s: %s.", proposal_id, verb)
         return Proposal(**response.json())
 
     async def list_rules(self) -> list[Rule]:
         """The global rules of the user, newest first."""
-        headers = {"X-User-ID": self.user_id}
-        response = await self.client.get("/rules", headers=headers)
-        _raise_for_status(response)
+        response = await self._get("/rules")
         return [Rule(**item) for item in response.json()]
 
     async def delete_rule(self, rule_id: int) -> None:
         """Delete a global rule."""
-        headers = {"X-User-ID": self.user_id}
-        response = await self.client.delete(f"/rules/{rule_id}", headers=headers)
+        response = await self.client.delete(f"/rules/{rule_id}")
         _raise_for_status(response)
         logger.info("Rule %s deleted.", rule_id)
 
@@ -560,13 +542,12 @@ class APIClient:
         starts at the newest); ``symbol`` limits the page to one stock. Reading
         the journal is not logged: the tab asks for it every few seconds.
         """
-        headers = {"X-User-ID": self.user_id}
         params: dict[str, Any] = {"limit": limit}
         if before_id:
             params["before_id"] = before_id
         if symbol:
             params["symbol"] = symbol
-        response = await self._get("/oracle/decisions", headers=headers, params=params)
+        response = await self._get("/oracle/decisions", params=params)
         return OracleDecisionPage(**response.json())
 
     def regenerate_chat(self, session_id: str) -> AsyncIterator[Any]:
@@ -589,11 +570,10 @@ class APIClient:
         What the model wrote and what the documents say never reach the log: an
         undecodable frame is reported by its size only.
         """
-        headers = {"X-User-ID": self.user_id}
         try:
             self._current_stream_task = asyncio.current_task()
             async with aconnect_sse(
-                self.client, "POST", path, headers=headers, json=payload,
+                self.client, "POST", path, json=payload,
                 timeout=httpx.Timeout(5.0, read=None),
             ) as event_source:
                 try:

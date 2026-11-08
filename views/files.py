@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Files view component for uploading and managing files."""
+
+from __future__ import annotations
 
 import asyncio
 import logging

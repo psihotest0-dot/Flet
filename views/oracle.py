@@ -5,6 +5,7 @@ The bot asks the backend for a verdict on every signal (``APPROVE``, ``VETO`` or
 tab only reads that journal: it neither calls the bot nor the model. In shadow
 mode the bot ignores the verdicts, so the journal is the whole result.
 """
+
 from __future__ import annotations
 
 import asyncio

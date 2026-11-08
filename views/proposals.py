@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Cards for the writes the assistant proposes and the user confirms.
 
 The assistant never saves a global rule by itself, and it saves a memory only
@@ -7,6 +5,8 @@ when the turn read nothing but the conversation: text from a web page or a book
 could have told it what to remember. Everything else arrives as a proposal, here
 shown as a card with the text and two buttons.
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging

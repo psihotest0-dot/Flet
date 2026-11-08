@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Memory view component for managing AI agent memory."""
+
+from __future__ import annotations
 
 import asyncio
 import logging

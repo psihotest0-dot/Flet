@@ -5,6 +5,7 @@ file, how long a message may be. The limits are the backend's (``internal/attach
 and ``maxUserMessageTokens`` in ``internal/agent``); the backend checks them again,
 this is only so the user hears about a problem before the request and in Bulgarian.
 """
+
 from __future__ import annotations
 
 import json

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Chat view components for interacting with the AI agent."""
+
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -30,8 +30,6 @@ from views.proposals import ProposalCard
 from views.ui_utils import confirm_dialog, describe_error, safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
-
-DEBUG_MOCK_SOURCES = False
 
 # Flet 0.24 ListView is not virtualised, so rendering a very long history means
 # building hundreds of markdown widgets. Only the tail is rendered.
