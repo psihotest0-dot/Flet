@@ -1056,8 +1056,6 @@ class ChatView(ft.Container):
             self.input_field.focus()
 
     def did_mount(self):
-        if DEBUG_MOCK_SOURCES:
-            self.add_message("assistant", "Здравейте! Аз съм Лили. Как мога да ви помогна днес?", sources=_get_mock_sources())
         if self.page is not None:
             if self.file_picker not in self.page.overlay:
                 self.page.overlay.append(self.file_picker)
