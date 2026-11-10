@@ -11,6 +11,7 @@
 | [main.py](main.py) | Входна точка: логове, настройки, клиент, табове, проверка на връзката |
 | [api/client.py](api/client.py) | Единственото място за HTTP заявки към бекенда, моделите на данните, `APIError` |
 | [state/settings.py](state/settings.py) | `settings.json`: четене, поправка при повреда, атомарен запис |
+| [state/chat_sessions.py](state/chat_sessions.py) | Сесиите на чатовете в настройките: имена, id-та, поправка на повредени записи |
 | [views/ui_utils.py](views/ui_utils.py) | Общи помощници на изгледите: `safe_update`, снекбар, диалог, текстове за грешки |
 | [views/chat.py](views/chat.py) | Чатът: съобщения, SSE стрийм, източници, няколко сесии |
 | [views/markdown_safety.py](views/markdown_safety.py) | Картинките в отговорите стават връзки (П20): `disarm_images` |
@@ -143,6 +144,19 @@
 | `_write_atomically(path, text)` | Запис по един (заключване): временен файл с уникално име `settings.tmp.*`, `flush` + `fsync`, после `os.replace`. Токът да спре — остава старият или новият файл, никога празен. Връща `False` и записва грешката при неуспех. |
 | `save_settings(settings)` | Записва настройките в `settings.json` през `_write_atomically`. |
 
+
+## state/chat_sessions.py
+
+### Помощни функции за списъка с чатове
+
+| Функция | Какво прави |
+|---|---|
+| `_next_chat_name(chat_sessions)` | Първото свободно „Чат N“. |
+| `_unique_chat_name(name, chat_sessions)` | Име, което никой друг чат не ползва (добавя „(2)“ и т.н.). |
+| `_normalize_chat_sessions(settings)` | Чист списък `{"id", "name"}`. Записи без id се свързват с активната сесия. |
+| `_resolve_session_id(chat_sessions, selected)` | От стойността на падащото меню (id или име) намира запазеното id. |
+| `_restart_chat_session(settings, session_id)` | Започва чата отначало: същият запис (име и място в списъка) получава нов `session_id`, Връща новото id или `None` за непознат чат. Само локално: разговорът се трие в бекенда преди това (`on_delete_chat_click`); в `archived_chats` вече не се пише. |
+| `_ensure_chat_session(settings)` | Решава коя сесия да се отвори. Нов UUID се прави само ако няма никакъв запазен чат. |
 ## views/ui_utils.py
 
 | Функция | Какво прави |
@@ -197,17 +211,6 @@
 | `_source_key(source)` | Ключ (заглавие, откъс) за откриване на повтарящи се източници. |
 | `add_sources(sources)` | Групира източниците по файл и ги показва като чипове. |
 | `open_sources_panel(sources_to_display)` | Отваря панела „Източници (RAG)“. |
-
-### Помощни функции за списъка с чатове
-
-| Функция | Какво прави |
-|---|---|
-| `_next_chat_name(chat_sessions)` | Първото свободно „Чат N“. |
-| `_unique_chat_name(name, chat_sessions)` | Име, което никой друг чат не ползва (добавя „(2)“ и т.н.). |
-| `_normalize_chat_sessions(settings)` | Чист списък `{"id", "name"}`. Записи без id се свързват с активната сесия. |
-| `_resolve_session_id(chat_sessions, selected)` | От стойността на падащото меню (id или име) намира запазеното id. |
-| `_restart_chat_session(settings, session_id)` | Започва чата отначало: същият запис (име и място в списъка) получава нов `session_id`, Връща новото id или `None` за непознат чат. Само локално: разговорът се трие в бекенда преди това (`on_delete_chat_click`); в `archived_chats` вече не се пише. |
-| `_ensure_chat_session(settings)` | Решава коя сесия да се отвори. Нов UUID се прави само ако няма никакъв запазен чат. |
 
 ### ChatView — екранът на чата
 

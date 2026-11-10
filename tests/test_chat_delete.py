@@ -8,8 +8,9 @@ import httpx
 import pytest
 
 from api.client import APIError
+from state.chat_sessions import _restart_chat_session
 from state.settings import Settings, load_settings, save_settings
-from views.chat import ChatView, _restart_chat_session
+from views.chat import ChatView
 
 CHAT_1 = "11111111-1111-1111-1111-111111111111"
 CHAT_2 = "22222222-2222-2222-2222-222222222222"

@@ -18,12 +18,12 @@ from api.client import (
     StreamError,
     UploadResult,
 )
+from state.chat_sessions import _normalize_chat_sessions
 from state.settings import Settings, load_settings, save_settings
 from views.chat import (
     HISTORY_PAGE_SIZE,
     HISTORY_REQUEST_LIMIT,
     ChatView,
-    _normalize_chat_sessions,
 )
 from views.files import FilesView, embedding_state
 from views.memory import MemoryView
