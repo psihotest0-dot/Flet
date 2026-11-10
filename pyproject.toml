@@ -5,10 +5,13 @@ description = "Flet client for AI agent"
 requires-python = ">=3.11"
 dependencies = [
     "flet==0.24.0",
-    "httpx",
-    "httpx-sse",
-    "tenacity",
-    "pydantic>=2.0.0"
+    # Bounds: from the version the code is tested with up to, not including, the
+    # next breaking release (for a 0.x package that is the next minor). What is
+    # really installed is fixed in requirements-lock.txt.
+    "httpx>=0.28,<1",
+    "httpx-sse>=0.4,<0.5",
+    "tenacity>=9.2,<10",
+    "pydantic>=2.14,<3"
 ]
 
 [build-system]
@@ -17,10 +20,10 @@ build-backend = "hatchling.build"
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
-    "pytest-asyncio",
-    "ruff",
-    "respx"
+    "pytest>=9.1,<10",
+    "pytest-asyncio>=1.4,<2",
+    "ruff>=0.17,<0.18",
+    "respx>=0.23,<0.24"
 ]
 
 [tool.pytest.ini_options]

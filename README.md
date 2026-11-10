@@ -99,9 +99,10 @@
    ```
 
 3. **Инсталиране на зависимости:**
-   Инсталирайте проекта заедно със зависимостите за разработка:
+   Инсталирайте точните версии от `requirements-lock.txt` и после самия проект (без нови зависимости; `pip install -e .[dev]` също работи, но взема най-новото в границите от `pyproject.toml`):
    ```bash
-   pip install -e .[dev]
+   pip install -r requirements-lock.txt
+   pip install -e . --no-deps
    ```
 
 4. **Стартиране на приложението:**
@@ -120,9 +121,10 @@
 
 - **Мрежови заявки:** Всички HTTP заявки към бекенда задължително минават през `api/client.py`.
 - **Тестване:** Тестовете не правят реални мрежови повиквания (използвайте мокове, напр. `respx`). Изпълнявайте тестовете чрез `python -m pytest` или `PYTHONPATH=. pytest`. `tests/conftest.py` насочва `settings.json` към временна папка, така че тестовете не пипат истинския файл. Нова логика получава тест.
-- **Качество на кода:** Преди всеки Pull Request `ruff check .` (линтер) и `pytest` (тестове) трябва да преминават без грешки. CI ги пуска на Python 3.11 с `-W error::DeprecationWarning` (затова `requires-python` е `>=3.11`).
+- **Качество на кода:** Преди всеки Pull Request `ruff check .` (линтер) и `pytest` (тестове) трябва да преминават без грешки. CI ги пуска на Python 3.11, на Linux и на Windows, с `-W error::DeprecationWarning` (затова `requires-python` е `>=3.11`).
 - **Грешки и логове:** Грешките на приложението се записват локално в `app.log` с помощта на `logging.handlers.RotatingFileHandler`. Избягвайте използването на чист `print` за грешки. Изгледът, който хваща грешка, я записва с `logger.error`/`warning`, казва на потребителя какво е станало (`describe_error`/`error_detail`) и винаги пуска `asyncio.CancelledError` нагоре. Подробности — в „Логове“ по-долу.
 - **Flet версия:** Версията на Flet е стриктно фиксирана на `0.24.0`. Диалозите и SnackBar компонентите трябва да се управляват чрез `page.open()` и `page.close()`.
+- **Зависимости:** Границите са в `pyproject.toml`, точните версии — в `requirements-lock.txt` (един файл за Linux и Windows), от който инсталира CI. Ново издание се взема така: `uv pip compile pyproject.toml --extra dev --universal --python-version 3.11 -o requirements-lock.txt`, после `ruff check .` и `pytest` в чист venv. Работният процес `Audit` пуска `pip-audit` върху файла при всяко качване и всеки понеделник.
 - **Идентичност:** Не опростявай кода за `user_id` и `settings.json` — нов `user_id` или `session_id` осиротява цялата стара история.
 
 Същите правила, в кратък вид, са и в [`AGENTS.md`](AGENTS.md).
