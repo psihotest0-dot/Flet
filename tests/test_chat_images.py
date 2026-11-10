@@ -10,7 +10,7 @@ import random
 
 import pytest
 
-from views.chat import ChatMessage
+from views.chat_message import ChatMessage
 from views.markdown_safety import IMAGE_MARK, WORD_JOINER, disarm_images
 
 FENCE = "`" * 3

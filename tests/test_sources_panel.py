@@ -4,7 +4,8 @@ import flet as ft
 import pytest
 
 from state.settings import Settings, save_settings
-from views.chat import ChatMessage, ChatView
+from views.chat import ChatView
+from views.chat_message import ChatMessage
 from views.sources import format_source_score, source_details, source_type_label
 
 

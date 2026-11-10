@@ -10,7 +10,8 @@ import pytest
 import respx
 
 from api.client import APIClient, APIError, Proposal, Rule
-from views.chat import ChatMessage, ChatView
+from views.chat import ChatView
+from views.chat_message import ChatMessage
 from views.memory import MemoryView
 from views.proposals import ProposalCard, kind_label, origin_warning
 
