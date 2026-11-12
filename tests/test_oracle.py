@@ -10,6 +10,7 @@ import flet as ft
 import httpx
 import pytest
 import respx
+from helpers import tab_labels, tab_view
 from tenacity import wait_none
 
 import main as main_module
@@ -88,8 +89,10 @@ class FakeJournal:
     async def __call__(self, limit=50, before_id=None, symbol=None):
         self.calls.append({"limit": limit, "before_id": before_id, "symbol": symbol})
         matching = [
-            row for row in self.rows
-            if (not before_id or row.id < before_id) and (not symbol or row.symbol == symbol)
+            row
+            for row in self.rows
+            if (not before_id or row.id < before_id)
+            and (not symbol or row.symbol == symbol)
         ]
         shown = matching[:limit]
         next_id = shown[-1].id if len(shown) == limit else 0
@@ -168,19 +171,30 @@ async def test_journal_is_read_for_the_user_and_parsed(client):
     assert dict(request.url.params) == {"limit": "50"}
     assert result.next_before_id == 7
     [first] = result.decisions
-    assert (first.id, first.verdict, first.symbol, first.latency_ms) == (7, "VETO", "AAPL", 1050)
+    assert (first.id, first.verdict, first.symbol, first.latency_ms) == (
+        7,
+        "VETO",
+        "AAPL",
+        1050,
+    )
     assert first.created_at == datetime(2026, 11, 6, 15, 0, 0, tzinfo=UTC)
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_the_version_of_the_signal_and_of_the_prompt_are_read_when_present(client):
+async def test_the_version_of_the_signal_and_of_the_prompt_are_read_when_present(
+    client,
+):
     respx.get(f"{BASE_URL}/oracle/decisions").mock(
         return_value=httpx.Response(
             200,
             json={
                 "decisions": [
-                    {"id": 10, "signal_version": "oracle-probe", "prompt_version": "8a4f4388a9c7"},
+                    {
+                        "id": 10,
+                        "signal_version": "oracle-probe",
+                        "prompt_version": "8a4f4388a9c7",
+                    },
                     {"id": 9, "signal_version": "1.0.0"},
                     {"id": 8},
                 ],
@@ -259,7 +273,9 @@ async def test_a_refused_journal_request_is_final_and_keeps_the_backend_text(
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_a_failing_backend_is_asked_again_before_giving_up(client, no_retry_delay):
+async def test_a_failing_backend_is_asked_again_before_giving_up(
+    client, no_retry_delay
+):
     route = respx.get(f"{BASE_URL}/oracle/decisions").mock(
         side_effect=[httpx.Response(503), httpx.Response(200, json={"decisions": []})]
     )
@@ -362,7 +378,9 @@ def test_details_of_a_failed_question_name_the_error_and_the_attempts():
 
 
 def test_details_name_the_version_of_the_prompt_when_the_backend_sends_it():
-    assert "Промпт: 3f9a1c0b2d4e" in decision_details(decision(5, prompt_version="3f9a1c0b2d4e"))
+    assert "Промпт: 3f9a1c0b2d4e" in decision_details(
+        decision(5, prompt_version="3f9a1c0b2d4e")
+    )
     assert "Промпт" not in decision_details(decision(5))
 
 
@@ -410,7 +428,12 @@ def test_the_order_of_the_rows_does_not_matter():
 def test_a_signal_that_never_got_a_final_answer_is_asked_but_not_answered():
     rows = [
         signal(1, "HOLD", signal_id="a"),
-        failed(2, mode="shadow", signal_id="b", created_at=EVALUATION_START + timedelta(hours=1)),
+        failed(
+            2,
+            mode="shadow",
+            signal_id="b",
+            created_at=EVALUATION_START + timedelta(hours=1),
+        ),
         signal(3, "APPROVE", signal_id="c"),
     ]
 
@@ -436,7 +459,10 @@ def test_only_shadow_mode_counts():
 
 def test_rows_before_the_start_of_the_evaluation_do_not_count():
     before = EVALUATION_START - timedelta(seconds=1)
-    rows = [signal(1, "VETO", created_at=before), signal(2, "VETO", created_at=EVALUATION_START)]
+    rows = [
+        signal(1, "VETO", created_at=before),
+        signal(2, "VETO", created_at=EVALUATION_START),
+    ]
 
     progress = count_progress(rows)
 
@@ -479,9 +505,13 @@ def test_the_probes_note_is_not_needed_before_there_is_a_signal():
 
 def test_the_minimum_needs_all_three_bars():
     def many(approve, veto, silent):
-        rows = [signal(i, "APPROVE", signal_version="1.0.0") for i in range(1, approve + 1)]
+        rows = [
+            signal(i, "APPROVE", signal_version="1.0.0") for i in range(1, approve + 1)
+        ]
         rows += [signal(1000 + i, "VETO", signal_version="1.0.0") for i in range(veto)]
-        rows += [signal(2000 + i, "HOLD", signal_version="1.0.0") for i in range(silent)]
+        rows += [
+            signal(2000 + i, "HOLD", signal_version="1.0.0") for i in range(silent)
+        ]
         return count_progress(rows)
 
     assert many(30, 30, 0).reached is True
@@ -499,8 +529,11 @@ def test_the_minimum_needs_all_three_bars():
 @pytest.mark.asyncio
 async def test_opening_the_tab_loads_the_newest_page(mock_page, mock_api_client):
     view = make_view(
-        mock_page, mock_api_client,
-        decision(3, verdict="APPROVE"), decision(2), failed(1),
+        mock_page,
+        mock_api_client,
+        decision(3, verdict="APPROVE"),
+        decision(2),
+        failed(1),
         next_before_id=0,
     )
 
@@ -519,7 +552,9 @@ async def test_opening_the_tab_loads_the_newest_page(mock_page, mock_api_client)
 
 
 @pytest.mark.asyncio
-async def test_a_journal_without_decisions_says_why_it_is_empty(mock_page, mock_api_client):
+async def test_a_journal_without_decisions_says_why_it_is_empty(
+    mock_page, mock_api_client
+):
     view = make_view(mock_page, mock_api_client)
 
     await view.load()
@@ -550,11 +585,14 @@ async def test_each_row_shows_the_time_symbol_reason_mode_and_latency(
 
 
 @pytest.mark.asyncio
-async def test_a_reason_the_model_wrote_is_shown_as_plain_text(mock_page, mock_api_client):
+async def test_a_reason_the_model_wrote_is_shown_as_plain_text(
+    mock_page, mock_api_client
+):
     # The reason comes from the model, which read news headlines; markup in it
     # must not be rendered or followed.
     view = make_view(
-        mock_page, mock_api_client,
+        mock_page,
+        mock_api_client,
         decision(1, reason="**важно** [линк](http://evil.example) <b>x</b>"),
     )
 
@@ -626,7 +664,9 @@ async def test_an_older_load_that_finishes_last_does_not_overwrite_the_newer_one
 @pytest.mark.asyncio
 async def test_a_cancelled_load_is_not_swallowed(mock_page, mock_api_client):
     view = make_view(mock_page, mock_api_client)
-    mock_api_client.list_oracle_decisions = AsyncMock(side_effect=asyncio.CancelledError)
+    mock_api_client.list_oracle_decisions = AsyncMock(
+        side_effect=asyncio.CancelledError
+    )
 
     with pytest.raises(asyncio.CancelledError):
         await view.load()
@@ -634,7 +674,9 @@ async def test_a_cancelled_load_is_not_swallowed(mock_page, mock_api_client):
 
 # ---------------------------------------------------------------------- filter
 @pytest.mark.asyncio
-async def test_the_symbol_is_upper_cased_and_sent_to_the_backend(mock_page, mock_api_client):
+async def test_the_symbol_is_upper_cased_and_sent_to_the_backend(
+    mock_page, mock_api_client
+):
     view = make_view(mock_page, mock_api_client)
     view.symbol_field.value = "  aapl "
 
@@ -644,18 +686,20 @@ async def test_the_symbol_is_upper_cased_and_sent_to_the_backend(mock_page, mock
         limit=PAGE_SIZE, symbol="AAPL"
     )
     assert view.symbol_field.value == "AAPL"
-    assert view.symbol_field.error_text is None
+    assert view.symbol_field.error is None
 
 
 @pytest.mark.asyncio
-async def test_a_symbol_the_backend_would_refuse_is_not_sent(mock_page, mock_api_client):
+async def test_a_symbol_the_backend_would_refuse_is_not_sent(
+    mock_page, mock_api_client
+):
     view = make_view(mock_page, mock_api_client)
     view.symbol_field.value = "AAPL; DROP"
 
     await view.on_filter_submit(None)
 
     mock_api_client.list_oracle_decisions.assert_not_awaited()
-    assert view.symbol_field.error_text
+    assert view.symbol_field.error
     assert view._symbol is None
 
 
@@ -697,7 +741,9 @@ async def test_the_empty_message_names_the_symbol_that_was_asked_for(
 
 @pytest.mark.asyncio
 async def test_a_new_symbol_starts_the_list_over(mock_page, mock_api_client):
-    view = make_view(mock_page, mock_api_client, decision(9), decision(8), next_before_id=8)
+    view = make_view(
+        mock_page, mock_api_client, decision(9), decision(8), next_before_id=8
+    )
     await view.load()
     mock_api_client.list_oracle_decisions = AsyncMock(
         return_value=page(decision(5, symbol="NVDA"))
@@ -760,7 +806,9 @@ async def test_emptying_the_field_shows_every_symbol_without_pressing_anything(
 
 
 @pytest.mark.asyncio
-async def test_typing_into_the_field_does_not_ask_the_backend(mock_page, mock_api_client):
+async def test_typing_into_the_field_does_not_ask_the_backend(
+    mock_page, mock_api_client
+):
     view, journal = await filtered_on_aapl(mock_page, mock_api_client)
     calls = len(journal.calls)
 
@@ -774,7 +822,9 @@ async def test_typing_into_the_field_does_not_ask_the_backend(mock_page, mock_ap
 
 
 @pytest.mark.asyncio
-async def test_emptying_a_field_that_filtered_nothing_asks_nothing(mock_page, mock_api_client):
+async def test_emptying_a_field_that_filtered_nothing_asks_nothing(
+    mock_page, mock_api_client
+):
     view, journal = two_symbols(mock_page, mock_api_client)
     await view.refresh()
     calls = len(journal.calls)
@@ -792,17 +842,19 @@ async def test_emptying_the_field_takes_the_complaint_about_a_bad_symbol_away(
     view, _journal = two_symbols(mock_page, mock_api_client)
     view.symbol_field.value = "AAPL; DROP"
     await view.on_filter_submit(None)
-    assert view.symbol_field.error_text
+    assert view.symbol_field.error
     view.symbol_field.value = ""
 
     await view.on_symbol_change(None)
 
     # Flet hands back "" for an error text that was set and then cleared.
-    assert not view.symbol_field.error_text
+    assert not view.symbol_field.error
 
 
 @pytest.mark.asyncio
-async def test_refresh_uses_the_symbol_that_stands_in_the_field(mock_page, mock_api_client):
+async def test_refresh_uses_the_symbol_that_stands_in_the_field(
+    mock_page, mock_api_client
+):
     view, _journal = two_symbols(mock_page, mock_api_client)
     await view.refresh()
     view.symbol_field.value = " msft "
@@ -825,7 +877,7 @@ async def test_refresh_with_a_symbol_the_backend_would_refuse_asks_nothing(
     await view.on_refresh_click(None)
 
     assert len(journal.calls) == calls
-    assert view.symbol_field.error_text
+    assert view.symbol_field.error
     assert view._symbol == "AAPL"
     assert ids(view) == [3, 1]
 
@@ -835,16 +887,28 @@ async def test_the_counters_do_not_follow_the_symbol_filter(mock_page, mock_api_
     # The evaluation counts every signal of the bot, whatever the table shows.
     view, journal = two_symbols(mock_page, mock_api_client)
     await view.refresh()
-    whole = (view.approve_value.value, view.veto_value.value, view.availability_value.value)
+    whole = (
+        view.approve_value.value,
+        view.veto_value.value,
+        view.availability_value.value,
+    )
     assert whole[:2] == ("1 / 30", "2 / 30")
 
     view.symbol_field.value = "MSFT"
     await view.on_filter_submit(None)
     await view.on_refresh_click(None)
-    during = (view.approve_value.value, view.veto_value.value, view.availability_value.value)
+    during = (
+        view.approve_value.value,
+        view.veto_value.value,
+        view.availability_value.value,
+    )
     view.symbol_field.value = ""
     await view.on_refresh_click(None)
-    after = (view.approve_value.value, view.veto_value.value, view.availability_value.value)
+    after = (
+        view.approve_value.value,
+        view.veto_value.value,
+        view.availability_value.value,
+    )
 
     assert during == whole
     assert after == whole
@@ -856,7 +920,9 @@ async def test_the_counters_do_not_follow_the_symbol_filter(mock_page, mock_api_
 async def test_older_decisions_are_added_below_and_asked_for_by_the_last_id(
     mock_page, mock_api_client
 ):
-    view = make_view(mock_page, mock_api_client, decision(4), decision(3), next_before_id=3)
+    view = make_view(
+        mock_page, mock_api_client, decision(4), decision(3), next_before_id=3
+    )
     await view.load()
     assert view.more_btn.visible is True
     mock_api_client.list_oracle_decisions = AsyncMock(
@@ -900,7 +966,9 @@ async def test_nothing_is_asked_when_there_is_no_older_page(mock_page, mock_api_
 async def test_a_decision_that_is_already_listed_is_not_added_twice(
     mock_page, mock_api_client
 ):
-    view = make_view(mock_page, mock_api_client, decision(3), decision(2), next_before_id=2)
+    view = make_view(
+        mock_page, mock_api_client, decision(3), decision(2), next_before_id=2
+    )
     await view.load()
     mock_api_client.list_oracle_decisions = AsyncMock(
         return_value=page(decision(2), decision(1))
@@ -963,10 +1031,14 @@ async def test_older_decisions_that_arrive_after_a_reload_are_dropped(
 # ------------------------------------------------------------- new decisions
 @pytest.mark.asyncio
 async def test_new_decisions_go_on_top_and_older_pages_stay(mock_page, mock_api_client):
-    view = make_view(mock_page, mock_api_client, decision(3), decision(2), next_before_id=2)
+    view = make_view(
+        mock_page, mock_api_client, decision(3), decision(2), next_before_id=2
+    )
     await view.load()
     mock_api_client.list_oracle_decisions = AsyncMock(
-        return_value=page(decision(5), decision(4), decision(3), decision(2), next_before_id=2)
+        return_value=page(
+            decision(5), decision(4), decision(3), decision(2), next_before_id=2
+        )
     )
 
     await view.refresh_newest()
@@ -978,7 +1050,9 @@ async def test_new_decisions_go_on_top_and_older_pages_stay(mock_page, mock_api_
 
 
 @pytest.mark.asyncio
-async def test_a_poll_with_nothing_new_leaves_the_table_alone(mock_page, mock_api_client):
+async def test_a_poll_with_nothing_new_leaves_the_table_alone(
+    mock_page, mock_api_client
+):
     view = make_view(mock_page, mock_api_client, decision(2), decision(1))
     await view.load()
     rows = list(view.data_table.rows)
@@ -994,7 +1068,9 @@ async def test_a_poll_with_nothing_new_leaves_the_table_alone(mock_page, mock_ap
 async def test_a_page_of_new_decisions_starts_the_list_over_instead_of_leaving_a_hole(
     mock_page, mock_api_client
 ):
-    view = make_view(mock_page, mock_api_client, decision(3), decision(2), next_before_id=2)
+    view = make_view(
+        mock_page, mock_api_client, decision(3), decision(2), next_before_id=2
+    )
     await view.load()
     # Every row of the page is newer than everything on screen and more follow:
     # the decisions between 3 and 10 were never seen.
@@ -1009,7 +1085,9 @@ async def test_a_page_of_new_decisions_starts_the_list_over_instead_of_leaving_a
 
 
 @pytest.mark.asyncio
-async def test_the_first_decisions_arrive_in_an_empty_journal(mock_page, mock_api_client):
+async def test_the_first_decisions_arrive_in_an_empty_journal(
+    mock_page, mock_api_client
+):
     view = make_view(mock_page, mock_api_client)
     await view.load()
     assert view.empty_text.visible is True
@@ -1070,7 +1148,10 @@ async def test_the_poll_sleeps_then_refreshes_while_the_tab_is_visible(
 
     assert sleeps == [oracle_module.POLL_INTERVAL] * 2
     # One round: the newest rows of the table, then the counters.
-    limits = [call.kwargs["limit"] for call in mock_api_client.list_oracle_decisions.await_args_list]
+    limits = [
+        call.kwargs["limit"]
+        for call in mock_api_client.list_oracle_decisions.await_args_list
+    ]
     assert limits == [PAGE_SIZE, PROGRESS_PAGE_SIZE]
 
 
@@ -1127,7 +1208,9 @@ def bars(view: OracleView) -> dict[str, tuple[float, str]]:
 
 
 @pytest.mark.asyncio
-async def test_the_block_shows_the_counts_toward_the_minimum(mock_page, mock_api_client):
+async def test_the_block_shows_the_counts_toward_the_minimum(
+    mock_page, mock_api_client
+):
     journal = FakeJournal(
         signal(1, "APPROVE", signal_version="1.0.0"),
         signal(2, "APPROVE", signal_version="1.0.0"),
@@ -1153,7 +1236,9 @@ async def test_the_block_shows_the_counts_toward_the_minimum(mock_page, mock_api
 async def test_the_block_says_so_when_the_probes_cannot_be_told_apart(
     mock_page, mock_api_client
 ):
-    mock_api_client.list_oracle_decisions = FakeJournal(signal(1, "VETO"), signal(2, "APPROVE"))
+    mock_api_client.list_oracle_decisions = FakeJournal(
+        signal(1, "VETO"), signal(2, "APPROVE")
+    )
     view = OracleView(mock_page, mock_api_client)
 
     await view.refresh_progress(rebuild=True)
@@ -1163,7 +1248,9 @@ async def test_the_block_says_so_when_the_probes_cannot_be_told_apart(
 
 
 @pytest.mark.asyncio
-async def test_before_any_signal_the_block_says_there_are_none(mock_page, mock_api_client):
+async def test_before_any_signal_the_block_says_there_are_none(
+    mock_page, mock_api_client
+):
     mock_api_client.list_oracle_decisions = FakeJournal()
     view = OracleView(mock_page, mock_api_client)
 
@@ -1210,12 +1297,17 @@ async def test_the_journal_is_read_back_to_the_start_of_the_evaluation_in_big_pa
     # must not be read past.
     old = [
         decision(
-            i, signal_id=f"old-{i}", mode="shadow",
+            i,
+            signal_id=f"old-{i}",
+            mode="shadow",
             created_at=EVALUATION_START - timedelta(days=1),
         )
         for i in (1, 2, 3)
     ]
-    rows = [signal(i + 10, "VETO", signal_id=f"s{i}", signal_version="1.0.0") for i in range(450)]
+    rows = [
+        signal(i + 10, "VETO", signal_id=f"s{i}", signal_version="1.0.0")
+        for i in range(450)
+    ]
     journal = FakeJournal(*old, *rows)
     mock_api_client.list_oracle_decisions = journal
     view = OracleView(mock_page, mock_api_client)
@@ -1231,7 +1323,9 @@ async def test_the_journal_is_read_back_to_the_start_of_the_evaluation_in_big_pa
 
 
 @pytest.mark.asyncio
-async def test_the_counters_ignore_the_symbol_filter_of_the_table(mock_page, mock_api_client):
+async def test_the_counters_ignore_the_symbol_filter_of_the_table(
+    mock_page, mock_api_client
+):
     journal = FakeJournal(
         signal(1, "VETO", symbol="AAPL", signal_version="1.0.0"),
         signal(2, "APPROVE", symbol="NVDA", signal_version="1.0.0"),
@@ -1267,7 +1361,9 @@ async def test_a_poll_reads_only_the_rows_it_has_not_seen(mock_page, mock_api_cl
 
 
 @pytest.mark.asyncio
-async def test_reading_stops_at_the_newest_row_that_is_already_known(mock_page, mock_api_client):
+async def test_reading_stops_at_the_newest_row_that_is_already_known(
+    mock_page, mock_api_client
+):
     mock_api_client.list_oracle_decisions = FakeJournal(
         *[signal(i, "VETO", signal_version="1.0.0") for i in range(1, 6)]
     )
@@ -1302,7 +1398,8 @@ async def test_a_full_refresh_forgets_rows_the_backend_no_longer_has(
     mock_page, mock_api_client
 ):
     journal = FakeJournal(
-        signal(1, "VETO", signal_version="1.0.0"), signal(2, "VETO", signal_version="1.0.0")
+        signal(1, "VETO", signal_version="1.0.0"),
+        signal(2, "VETO", signal_version="1.0.0"),
     )
     mock_api_client.list_oracle_decisions = journal
     view = OracleView(mock_page, mock_api_client)
@@ -1315,7 +1412,9 @@ async def test_a_full_refresh_forgets_rows_the_backend_no_longer_has(
 
 
 @pytest.mark.asyncio
-async def test_a_page_that_does_not_go_back_ends_the_reading(mock_page, mock_api_client):
+async def test_a_page_that_does_not_go_back_ends_the_reading(
+    mock_page, mock_api_client
+):
     rows = [signal(i, "VETO", signal_version="1.0.0") for i in (5, 4)]
     calls = []
 
@@ -1340,7 +1439,9 @@ async def test_counters_that_cannot_be_read_keep_the_old_numbers_and_say_why(
     mock_api_client.list_oracle_decisions = journal
     view = OracleView(mock_page, mock_api_client)
     await view.refresh_progress(rebuild=True)
-    mock_api_client.list_oracle_decisions = AsyncMock(side_effect=httpx.ConnectError("down"))
+    mock_api_client.list_oracle_decisions = AsyncMock(
+        side_effect=httpx.ConnectError("down")
+    )
     caplog.set_level(logging.WARNING)
 
     await view.refresh_progress()
@@ -1359,7 +1460,9 @@ async def test_counters_that_cannot_be_read_keep_the_old_numbers_and_say_why(
 
 
 @pytest.mark.asyncio
-async def test_a_failing_counter_read_does_not_break_the_table(mock_page, mock_api_client):
+async def test_a_failing_counter_read_does_not_break_the_table(
+    mock_page, mock_api_client
+):
     async def journal(limit=50, before_id=None, symbol=None):
         if limit == PROGRESS_PAGE_SIZE:
             raise APIError(500, "boom")
@@ -1377,7 +1480,9 @@ async def test_a_failing_counter_read_does_not_break_the_table(mock_page, mock_a
 
 @pytest.mark.asyncio
 async def test_a_cancelled_counter_read_is_not_swallowed(mock_page, mock_api_client):
-    mock_api_client.list_oracle_decisions = AsyncMock(side_effect=asyncio.CancelledError)
+    mock_api_client.list_oracle_decisions = AsyncMock(
+        side_effect=asyncio.CancelledError
+    )
     view = OracleView(mock_page, mock_api_client)
 
     with pytest.raises(asyncio.CancelledError):
@@ -1399,10 +1504,22 @@ async def test_the_block_shows_no_trade_outcome(mock_page, mock_api_client):
         for control in view.progress_block.content.controls
         if isinstance(control, ft.Text)
     ]
-    texts += [view.approve_value.value, view.veto_value.value, view.availability_value.value]
+    texts += [
+        view.approve_value.value,
+        view.veto_value.value,
+        view.availability_value.value,
+    ]
     joined = " ".join(texts).lower()
 
-    for word in ("доход", "печалб", "загуба", "p&l", "profit", "return", "резултат на сдел"):
+    for word in (
+        "доход",
+        "печалб",
+        "загуба",
+        "p&l",
+        "profit",
+        "return",
+        "резултат на сдел",
+    ):
         assert word not in joined
 
 
@@ -1410,7 +1527,9 @@ async def test_the_block_shows_no_trade_outcome(mock_page, mock_api_client):
 def test_polling_runs_only_while_the_tab_is_visible(mock_page, mock_api_client):
     view = OracleView(mock_page, mock_api_client)
     view.did_mount()
-    assert [c for c in mock_page.run_task.call_args_list if c.args[0] == view.poll] == []
+    assert [
+        c for c in mock_page.run_task.call_args_list if c.args[0] == view.poll
+    ] == []
 
     view.set_active(True)
     mock_page.run_task.assert_any_call(view.poll)
@@ -1465,8 +1584,6 @@ def test_leaving_stops_everything(mock_page, mock_api_client):
 @pytest.fixture
 def start_app(monkeypatch, mock_page):
     monkeypatch.setattr(main_module, "setup_logging", lambda: None)
-    monkeypatch.setattr(main_module, "wrap_run_task", lambda page: None)
-    monkeypatch.setattr(ft.Tabs, "update", lambda self: None)
 
     def start() -> ft.Tabs:
         main_module.main(mock_page)
@@ -1482,12 +1599,13 @@ def select_tab(tabs: ft.Tabs, index: int) -> None:
 def test_the_bot_is_the_fourth_tab_and_is_built_when_first_opened(start_app):
     tabs = start_app()
 
-    assert [tab.text for tab in tabs.tabs] == ["Чат", "Памет", "Файлове", "Бот"]
-    assert tabs.tabs[3].content is None
+    assert tab_labels(tabs) == ["Чат", "Памет", "Файлове", "Бот"]
+    # Until it is opened, an empty container holds its place.
+    assert not isinstance(tab_view(tabs, 3), OracleView)
 
     select_tab(tabs, 3)
 
-    assert isinstance(tabs.tabs[3].content, OracleView)
+    assert isinstance(tab_view(tabs, 3), OracleView)
 
 
 def test_opening_the_bot_tab_the_first_time_starts_its_poll_but_does_not_load_twice(
@@ -1497,7 +1615,7 @@ def test_opening_the_bot_tab_the_first_time_starts_its_poll_but_does_not_load_tw
     mock_page.run_task.reset_mock()
 
     select_tab(tabs, 3)
-    view = tabs.tabs[3].content
+    view = tab_view(tabs, 3)
 
     # The first load is the view's own (when it is mounted).
     mock_page.run_task.assert_called_once_with(view.poll)
@@ -1506,20 +1624,20 @@ def test_opening_the_bot_tab_the_first_time_starts_its_poll_but_does_not_load_tw
 def test_the_bot_tab_is_read_again_each_time_it_is_opened_again(start_app, mock_page):
     tabs = start_app()
     select_tab(tabs, 3)
-    view = tabs.tabs[3].content
+    view = tab_view(tabs, 3)
     select_tab(tabs, 0)
     mock_page.run_task.reset_mock()
 
     select_tab(tabs, 3)
 
     assert mock_page.run_task.call_args_list[0].args == (view.refresh,)
-    assert tabs.tabs[3].content is view
+    assert tab_view(tabs, 3) is view
 
 
 def test_the_bot_polls_only_while_its_tab_is_open(start_app):
     tabs = start_app()
     select_tab(tabs, 3)
-    view = tabs.tabs[3].content
+    view = tab_view(tabs, 3)
     assert view._polling is True
 
     select_tab(tabs, 0)
@@ -1530,11 +1648,11 @@ def test_the_bot_polls_only_while_its_tab_is_open(start_app):
 def test_switching_between_files_and_the_bot_swaps_the_pollers(start_app):
     tabs = start_app()
     select_tab(tabs, 2)
-    files_view = tabs.tabs[2].content
+    files_view = tab_view(tabs, 2)
     assert files_view._polling is True
 
     select_tab(tabs, 3)
-    bot_view = tabs.tabs[3].content
+    bot_view = tab_view(tabs, 3)
 
     assert files_view._polling is False
     assert bot_view._polling is True
@@ -1558,7 +1676,7 @@ def test_a_new_base_url_reaches_the_bot_tab(start_app, monkeypatch):
     monkeypatch.setattr(main_module, "SettingsDialog", Spy)
     tabs = start_app()
     select_tab(tabs, 3)
-    view = tabs.tabs[3].content
+    view = tab_view(tabs, 3)
     previous = view.api_client
 
     captured["on_save"]("http://127.0.0.1:9000", "Ти")

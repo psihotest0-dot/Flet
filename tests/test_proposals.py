@@ -1,13 +1,14 @@
 """The proposals the assistant makes and the user confirms: client, card, chat, memory tab."""
+
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import flet as ft
 import httpx
 import pytest
 import respx
+from helpers import mounted
 
 from api.client import APIClient, APIError, Proposal, Rule
 from views.chat import ChatView
@@ -43,23 +44,18 @@ def client():
     return APIClient(base_url=BASE, user_id="123e4567-e89b-12d3-a456-426614174000")
 
 
-@pytest.fixture
-def mock_page():
-    page = MagicMock(spec=ft.Page)
-    page.overlay = []
-    return page
-
-
 def attached(control_class):
-    """Pretend a control is attached to a page (``Control.uid`` is read-only)."""
-    return patch.object(control_class, "uid", new_callable=PropertyMock, return_value="uid-1")
+    """Pretend the controls of this class are on a page."""
+    return mounted(control_class)
 
 
 # --------------------------------------------------------------------- client
 @respx.mock
 @pytest.mark.asyncio
 async def test_list_proposals_parses_the_backend_shape(client):
-    route = respx.get(f"{BASE}/proposals").mock(return_value=httpx.Response(200, json=[RULE, MEMORY]))
+    route = respx.get(f"{BASE}/proposals").mock(
+        return_value=httpx.Response(200, json=[RULE, MEMORY])
+    )
 
     proposals = await client.list_proposals()
 
@@ -82,7 +78,9 @@ async def test_list_proposals_tolerates_an_empty_list(client):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("verb", ["approve", "reject"])
 async def test_deciding_posts_to_the_proposal(client, verb):
-    route = respx.post(f"{BASE}/proposals/17/{verb}").mock(return_value=httpx.Response(200, json=RULE))
+    route = respx.post(f"{BASE}/proposals/17/{verb}").mock(
+        return_value=httpx.Response(200, json=RULE)
+    )
 
     decide = getattr(client, f"{verb}_proposal")
     result = await decide(17)
@@ -97,10 +95,16 @@ async def test_deciding_posts_to_the_proposal(client, verb):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status", "body"),
-    [(404, "proposal not found"), (409, "proposal already decided"), (422, "too many global rules")],
+    [
+        (404, "proposal not found"),
+        (409, "proposal already decided"),
+        (422, "too many global rules"),
+    ],
 )
 async def test_deciding_raises_the_backend_text(client, status, body):
-    respx.post(f"{BASE}/proposals/17/approve").mock(return_value=httpx.Response(status, text=body))
+    respx.post(f"{BASE}/proposals/17/approve").mock(
+        return_value=httpx.Response(status, text=body)
+    )
 
     with pytest.raises(APIError) as exc_info:
         await client.approve_proposal(17)
@@ -115,7 +119,15 @@ async def test_rules_list_and_delete(client):
     respx.get(f"{BASE}/rules").mock(
         return_value=httpx.Response(
             200,
-            json=[{"id": 3, "key": "tone", "value": "Бъди кратка", "enabled": True, "updated_at": "2026-11-01T10:00:00Z"}],
+            json=[
+                {
+                    "id": 3,
+                    "key": "tone",
+                    "value": "Бъди кратка",
+                    "enabled": True,
+                    "updated_at": "2026-11-01T10:00:00Z",
+                }
+            ],
         )
     )
     delete = respx.delete(f"{BASE}/rules/3").mock(return_value=httpx.Response(204))
@@ -123,14 +135,24 @@ async def test_rules_list_and_delete(client):
     rules = await client.list_rules()
     await client.delete_rule(3)
 
-    assert rules == [Rule(id=3, key="tone", value="Бъди кратка", enabled=True, updated_at=rules[0].updated_at)]
+    assert rules == [
+        Rule(
+            id=3,
+            key="tone",
+            value="Бъди кратка",
+            enabled=True,
+            updated_at=rules[0].updated_at,
+        )
+    ]
     assert delete.calls.last.request.headers["X-User-ID"] == client.user_id
 
 
 @respx.mock
 @pytest.mark.asyncio
 async def test_delete_rule_raises_for_a_missing_rule(client):
-    respx.delete(f"{BASE}/rules/9").mock(return_value=httpx.Response(404, text="rule not found"))
+    respx.delete(f"{BASE}/rules/9").mock(
+        return_value=httpx.Response(404, text="rule not found")
+    )
 
     with pytest.raises(APIError) as exc_info:
         await client.delete_rule(9)
@@ -143,7 +165,9 @@ def sse(*frames: bytes):
         for frame in frames:
             yield frame
 
-    return httpx.Response(200, content=body(), headers={"Content-Type": "text/event-stream"})
+    return httpx.Response(
+        200, content=body(), headers={"Content-Type": "text/event-stream"}
+    )
 
 
 @respx.mock
@@ -158,7 +182,9 @@ def sse(*frames: bytes):
 async def test_streams_deliver_the_proposals_event(client, method, path, args):
     payload = b'event: proposals\ndata: [{"id": 17, "summary": "x"}]\n\n'
     respx.post(f"{BASE}{path}").mock(
-        return_value=sse('data: {"content": "Предлагам"}\n\n'.encode(), payload, b"data: [DONE]\n\n")
+        return_value=sse(
+            'data: {"content": "Предлагам"}\n\n'.encode(), payload, b"data: [DONE]\n\n"
+        )
     )
 
     results = [item async for item in getattr(client, method)(**args)]
@@ -174,12 +200,18 @@ async def test_streams_deliver_the_proposals_event(client, method, path, args):
 @pytest.mark.parametrize("data", ["not json", '{"id": 1}'])
 async def test_a_malformed_proposals_event_is_skipped(client, data):
     respx.post(f"{BASE}/chat/stream").mock(
-        return_value=sse(f"event: proposals\ndata: {data}\n\n".encode(), b'data: {"content": "ok"}\n\n', b"data: [DONE]\n\n")
+        return_value=sse(
+            f"event: proposals\ndata: {data}\n\n".encode(),
+            b'data: {"content": "ok"}\n\n',
+            b"data: [DONE]\n\n",
+        )
     )
 
     results = [item async for item in client.stream_chat(session_id="s", content="hi")]
 
-    assert results == [{"content": "ok"}], "the answer survives a broken proposals event"
+    assert results == [{"content": "ok"}], (
+        "the answer survives a broken proposals event"
+    )
 
 
 # ----------------------------------------------------------------------- card
@@ -237,7 +269,9 @@ def test_card_of_a_plain_turn_has_no_warning():
 async def test_approve_calls_the_backend_and_reports():
     api_client = card_api()
     decided = []
-    card = make_card(api_client, on_decided=lambda p, approved: decided.append((p.id, approved)))
+    card = make_card(
+        api_client, on_decided=lambda p, approved: decided.append((p.id, approved))
+    )
 
     await card._approve(None)
 
@@ -253,7 +287,9 @@ async def test_approve_calls_the_backend_and_reports():
 async def test_reject_calls_the_backend_and_reports():
     api_client = card_api()
     decided = []
-    card = make_card(api_client, on_decided=lambda p, approved: decided.append((p.id, approved)))
+    card = make_card(
+        api_client, on_decided=lambda p, approved: decided.append((p.id, approved))
+    )
 
     await card._reject(None)
 
@@ -267,29 +303,39 @@ async def test_reject_calls_the_backend_and_reports():
 @pytest.mark.parametrize("status", [404, 409])
 async def test_a_proposal_closed_elsewhere_ends_the_card_quietly(status, mock_page):
     api_client = card_api()
-    api_client.approve_proposal = AsyncMock(side_effect=APIError(status, "proposal already decided"))
+    api_client.approve_proposal = AsyncMock(
+        side_effect=APIError(status, "proposal already decided")
+    )
     decided = []
-    card = make_card(api_client, page=mock_page, on_decided=lambda p, approved: decided.append(approved))
+    card = make_card(
+        api_client,
+        page=mock_page,
+        on_decided=lambda p, approved: decided.append(approved),
+    )
 
     await card._approve(None)
 
     assert card.buttons.visible is False
     assert "Вече е решено" in card.result.value
-    mock_page.open.assert_not_called()
-    assert decided == [False], "nothing was saved, so the list must not reload as if it was"
+    mock_page.show_dialog.assert_not_called()
+    assert decided == [False], (
+        "nothing was saved, so the list must not reload as if it was"
+    )
 
 
 @pytest.mark.asyncio
 async def test_too_many_rules_keeps_the_card_open(mock_page):
     api_client = card_api()
-    api_client.approve_proposal = AsyncMock(side_effect=APIError(422, "too many global rules"))
+    api_client.approve_proposal = AsyncMock(
+        side_effect=APIError(422, "too many global rules")
+    )
     card = make_card(api_client, page=mock_page)
 
     await card._approve(None)
 
     assert card.buttons.visible is True
     assert card.approve_btn.disabled is False and card.reject_btn.disabled is False
-    snackbar = mock_page.open.call_args.args[0]
+    snackbar = mock_page.show_dialog.call_args.args[0]
     assert "твърде много глобални правила" in snackbar.content.value
 
 
@@ -303,7 +349,10 @@ async def test_a_dead_backend_keeps_the_card_open(mock_page):
 
     assert card.buttons.visible is True
     assert card.approve_btn.disabled is False
-    assert "Бекендът не е достъпен" in mock_page.open.call_args.args[0].content.value
+    assert (
+        "Бекендът не е достъпен"
+        in mock_page.show_dialog.call_args.args[0].content.value
+    )
 
 
 @pytest.mark.asyncio
@@ -335,7 +384,9 @@ async def test_a_double_tap_decides_once():
 # ----------------------------------------------------------------------- chat
 def test_chat_message_shows_a_card_per_proposal(mock_page):
     api_client = card_api()
-    message = ChatMessage("assistant", "Предлагам", page=mock_page, api_client=api_client)
+    message = ChatMessage(
+        "assistant", "Предлагам", page=mock_page, api_client=api_client
+    )
 
     message.add_proposals([RULE, MEMORY])
 
@@ -399,7 +450,9 @@ async def test_the_stream_puts_the_proposals_under_the_answer(mock_page):
 def memory_view(mock_page, proposals=None, rules=None, **overrides):
     api_client = MagicMock(spec=APIClient)
     api_client.list_memories = AsyncMock(return_value=[])
-    api_client.list_proposals = AsyncMock(return_value=[Proposal(**p) for p in (proposals or [])], **overrides)
+    api_client.list_proposals = AsyncMock(
+        return_value=[Proposal(**p) for p in (proposals or [])], **overrides
+    )
     api_client.list_rules = AsyncMock(
         return_value=[Rule(id=r[0], key=r[1], value=r[2]) for r in (rules or [])]
     )
@@ -431,27 +484,34 @@ async def test_memory_tab_hides_the_sections_when_there_is_nothing(mock_page):
 
 @pytest.mark.asyncio
 async def test_memory_tab_lists_the_rules_with_a_count(mock_page):
-    view, _ = memory_view(mock_page, rules=[(3, "tone", "Бъди кратка"), (4, "language", "Български")])
+    view, _ = memory_view(
+        mock_page, rules=[(3, "tone", "Бъди кратка"), (4, "language", "Български")]
+    )
 
     await view.load_proposals_and_rules()
 
     assert view.rules_tile.visible is True
     assert view.rules_tile.title.value == "Глобални правила (2)"
-    assert [tile.title.value for tile in view.rules_column.controls] == ["tone", "language"]
+    assert [tile.title.value for tile in view.rules_column.controls] == [
+        "tone",
+        "language",
+    ]
     assert view.rules_column.controls[0].subtitle.value == "Бъди кратка"
 
 
 @pytest.mark.asyncio
 async def test_memory_tab_survives_a_backend_without_these_endpoints(mock_page):
     view, api_client = memory_view(mock_page)
-    api_client.list_proposals = AsyncMock(side_effect=APIError(404, "404 page not found"))
+    api_client.list_proposals = AsyncMock(
+        side_effect=APIError(404, "404 page not found")
+    )
     api_client.list_rules = AsyncMock(side_effect=httpx.ConnectError("refused"))
 
     await view.load_proposals_and_rules()
 
     assert view.proposals_section.visible is False
     assert view.rules_tile.visible is False
-    mock_page.open.assert_not_called()
+    mock_page.show_dialog.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -510,7 +570,9 @@ async def test_a_failed_rule_delete_keeps_the_rule_listed(mock_page):
         await view.delete_rule(Rule(id=3, key="tone", value="Бъди кратка"))
 
     assert [tile.title.value for tile in view.rules_column.controls] == ["tone"]
-    assert "Грешка при изтриване" in mock_page.open.call_args.args[0].content.value
+    assert (
+        "Грешка при изтриване" in mock_page.show_dialog.call_args.args[0].content.value
+    )
 
 
 @pytest.mark.asyncio

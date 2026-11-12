@@ -20,7 +20,10 @@ def saved():
 @pytest.fixture
 def dialog(mock_page, saved):
     return SettingsDialog(
-        mock_page, USER_ID, SAVED_URL, on_save=lambda url, name: saved.append((url, name))
+        mock_page,
+        USER_ID,
+        SAVED_URL,
+        on_save=lambda url, name: saved.append((url, name)),
     )
 
 
@@ -68,41 +71,48 @@ def test_invalid_base_urls_are_refused(raw):
 
 
 # ----------------------------------------------------------------------- save
-def test_invalid_url_is_not_saved(dialog, saved, mock_page):
+def test_invalid_url_is_not_saved(dialog, saved):
+    dialog.open(SAVED_URL)
     dialog.base_url_field.value = "ftp://host"
 
     dialog._save(None)
 
     assert saved == []
-    assert dialog.base_url_field.error_text
+    assert dialog.base_url_field.error
     # The dialog stays open so the address can be corrected.
-    mock_page.close.assert_not_called()
+    assert dialog.dialog.open is True
 
 
-def test_valid_url_is_saved_normalised_and_closes_the_dialog(dialog, saved, mock_page):
+def test_valid_url_is_saved_normalised_and_closes_the_dialog(dialog, saved):
+    dialog.open(SAVED_URL)
     dialog.base_url_field.value = " http://127.0.0.1:9000/ "
 
     dialog._save(None)
 
     assert saved == [("http://127.0.0.1:9000", "Ти")]
-    assert not dialog.base_url_field.error_text
-    mock_page.close.assert_called_once_with(dialog.dialog)
+    assert not dialog.base_url_field.error
+    assert dialog.dialog.open is False
 
 
-def test_cancel_closes_without_saving(dialog, saved, mock_page):
+def test_cancel_closes_without_saving(dialog, saved):
+    dialog.open(SAVED_URL)
     dialog.base_url_field.value = "http://127.0.0.1:9000"
 
     dialog._cancel(None)
 
     assert saved == []
-    mock_page.close.assert_called_once_with(dialog.dialog)
+    assert dialog.dialog.open is False
 
 
-def test_open_resets_what_was_typed_and_shown_before(dialog, mock_page):
+@pytest.mark.asyncio
+async def test_open_resets_what_was_typed_and_shown_before(
+    dialog, mock_page, clipboard
+):
     dialog.base_url_field.value = "nonsense"
     dialog._save(None)
-    dialog._show_result("Няма връзка", ft.colors.RED)
-    dialog._copy_user_id(None)
+    dialog._show_result("Няма връзка", ft.Colors.RED)
+    await dialog._copy_user_id(None)
+    assert dialog.copy_btn.icon == ft.Icons.CHECK
 
     dialog.display_name_field.value = "typed but not saved"
 
@@ -110,10 +120,10 @@ def test_open_resets_what_was_typed_and_shown_before(dialog, mock_page):
 
     assert dialog.base_url_field.value == SAVED_URL
     assert dialog.display_name_field.value == "Иван"
-    assert not dialog.base_url_field.error_text
+    assert not dialog.base_url_field.error
     assert dialog.check_result.visible is False
-    assert dialog.copy_btn.icon == ft.icons.COPY
-    mock_page.open.assert_called_once_with(dialog.dialog)
+    assert dialog.copy_btn.icon == ft.Icons.COPY
+    mock_page.show_dialog.assert_called_once_with(dialog.dialog)
 
 
 # -------------------------------------------------------------------- user_id
@@ -122,11 +132,27 @@ def test_user_id_is_shown_read_only(dialog):
     assert dialog.user_id_field.read_only is True
 
 
-def test_copy_button_puts_the_user_id_on_the_clipboard(dialog, mock_page):
-    dialog._copy_user_id(None)
+@pytest.mark.asyncio
+async def test_copy_button_puts_the_user_id_on_the_clipboard(dialog, clipboard):
+    await dialog._copy_user_id(None)
 
-    mock_page.set_clipboard.assert_called_once_with(USER_ID)
-    assert dialog.copy_btn.icon == ft.icons.CHECK
+    assert clipboard == [USER_ID]
+    assert dialog.copy_btn.icon == ft.Icons.CHECK
+    assert dialog.copy_btn.tooltip == "Копирано"
+
+
+@pytest.mark.asyncio
+async def test_copy_button_does_not_claim_a_copy_that_failed(dialog, monkeypatch):
+    class BrokenClipboard:
+        async def set(self, value):
+            raise RuntimeError("Session closed")
+
+    monkeypatch.setattr(ft, "Clipboard", BrokenClipboard)
+
+    await dialog._copy_user_id(None)
+
+    assert dialog.copy_btn.icon == ft.Icons.COPY
+    assert dialog.copy_btn.tooltip == "Копирай"
 
 
 def test_dialog_explains_what_the_user_id_is_for(dialog):
@@ -153,7 +179,7 @@ async def test_check_connection_reports_a_reachable_backend(dialog):
     assert route.called
     assert dialog.check_result.visible is True
     assert dialog.check_result.value == "Връзката е успешна."
-    assert dialog.check_result.color == ft.colors.GREEN
+    assert dialog.check_result.color == ft.Colors.GREEN
     assert dialog.check_btn.disabled is False
     assert dialog.check_progress.visible is False
 
@@ -180,7 +206,7 @@ async def test_check_connection_reports_an_unreachable_backend(dialog, outcome):
 
     assert dialog.check_result.visible is True
     assert dialog.check_result.value == "Няма връзка с http://127.0.0.1:8080"
-    assert dialog.check_result.color == ft.colors.RED
+    assert dialog.check_result.color == ft.Colors.RED
     assert dialog.check_btn.disabled is False
     assert dialog.check_progress.visible is False
 
@@ -193,7 +219,7 @@ async def test_check_connection_refuses_an_invalid_address_without_a_request(dia
 
     await dialog._check_connection(None)
 
-    assert dialog.base_url_field.error_text
+    assert dialog.base_url_field.error
     assert dialog.check_result.visible is False
     assert dialog.check_btn.disabled is False
 
@@ -241,7 +267,11 @@ def test_chat_name_is_not_saved_when_the_address_is_invalid(dialog, saved):
 
 def test_dialog_shows_the_saved_chat_name_and_limits_its_length(mock_page):
     dialog = SettingsDialog(
-        mock_page, USER_ID, SAVED_URL, on_save=lambda url, name: None, display_name="Иван"
+        mock_page,
+        USER_ID,
+        SAVED_URL,
+        on_save=lambda url, name: None,
+        display_name="Иван",
     )
 
     assert dialog.display_name_field.value == "Иван"

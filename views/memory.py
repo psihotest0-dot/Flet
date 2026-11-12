@@ -18,7 +18,14 @@ from api.client import (
     content_size,
 )
 from views.proposals import ProposalCard
-from views.ui_utils import confirm_dialog, error_detail, safe_update, show_snackbar
+from views.ui_utils import (
+    close_dialog,
+    confirm_dialog,
+    error_detail,
+    open_dialog,
+    safe_update,
+    show_snackbar,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +74,7 @@ def fact_key_tooltip(memory) -> str | None:
 
 def importance_dropdown(value: int | None, **kwargs) -> ft.Dropdown:
     return ft.Dropdown(
-        options=[ft.dropdown.Option(option) for option in IMPORTANCE_OPTIONS],
+        options=[ft.DropdownOption(option) for option in IMPORTANCE_OPTIONS],
         value=str(importance_or_default(value)),
         dense=True,
         **kwargs,
@@ -89,11 +96,13 @@ class MemoryRow(ft.DataRow):
         self.view = view
         self._saving = False
 
-        self.content_text = ft.Text(memory.content or "", tooltip=fact_key_tooltip(memory))
+        self.content_text = ft.Text(
+            memory.content or "", tooltip=fact_key_tooltip(memory)
+        )
         self.content_text_container = ft.Container(
             content=self.content_text,
             expand=True,
-            alignment=ft.alignment.top_left,
+            alignment=ft.Alignment.TOP_LEFT,
         )
 
         self.content_field = ft.TextField(
@@ -106,7 +115,7 @@ class MemoryRow(ft.DataRow):
             content=self.content_field,
             expand=True,
             visible=False,
-            alignment=ft.alignment.top_left,
+            alignment=ft.Alignment.TOP_LEFT,
         )
 
         self.importance_text = ft.Text(self._importance_label(memory))
@@ -114,13 +123,21 @@ class MemoryRow(ft.DataRow):
             memory.importance, width=90, visible=False
         )
 
-        self.edit_btn = ft.IconButton(icon=ft.icons.EDIT, tooltip="Редактирай", on_click=self._edit)
-        self.save_btn = ft.IconButton(icon=ft.icons.SAVE, tooltip="Запази", visible=False, on_click=self._save)
-        self.cancel_btn = ft.IconButton(icon=ft.icons.CANCEL, tooltip="Отказ", visible=False, on_click=self._cancel)
-        self.delete_btn = ft.IconButton(icon=ft.icons.DELETE, tooltip="Изтрий", on_click=self._delete)
+        self.edit_btn = ft.IconButton(
+            icon=ft.Icons.EDIT, tooltip="Редактирай", on_click=self._edit
+        )
+        self.save_btn = ft.IconButton(
+            icon=ft.Icons.SAVE, tooltip="Запази", visible=False, on_click=self._save
+        )
+        self.cancel_btn = ft.IconButton(
+            icon=ft.Icons.CANCEL, tooltip="Отказ", visible=False, on_click=self._cancel
+        )
+        self.delete_btn = ft.IconButton(
+            icon=ft.Icons.DELETE, tooltip="Изтрий", on_click=self._delete
+        )
         self.activate_btn = ft.IconButton(
-            icon=ft.icons.CHECK,
-            icon_color=ft.colors.GREEN,
+            icon=ft.Icons.CHECK,
+            icon_color=ft.Colors.GREEN,
             tooltip="Активирай",
             visible=memory.status == "candidate",
             on_click=self._activate,
@@ -128,7 +145,13 @@ class MemoryRow(ft.DataRow):
         self.status_text = ft.Text(memory.status or "")
 
         self.actions_row = ft.Row(
-            [self.activate_btn, self.edit_btn, self.save_btn, self.cancel_btn, self.delete_btn]
+            [
+                self.activate_btn,
+                self.edit_btn,
+                self.save_btn,
+                self.cancel_btn,
+                self.delete_btn,
+            ]
         )
 
         self.cells = [
@@ -171,7 +194,9 @@ class MemoryRow(ft.DataRow):
     def _reset_fields(self):
         """Put the editors back to what the server last returned."""
         self.content_field.value = self.memory.content or ""
-        self.importance_dropdown.value = str(importance_or_default(self.memory.importance))
+        self.importance_dropdown.value = str(
+            importance_or_default(self.memory.importance)
+        )
 
     def _edit(self, e):
         self._reset_fields()
@@ -204,7 +229,8 @@ class MemoryRow(ft.DataRow):
 
         new_content = (self.content_field.value or "").strip()
         new_importance = int(
-            self.importance_dropdown.value or importance_or_default(self.memory.importance)
+            self.importance_dropdown.value
+            or importance_or_default(self.memory.importance)
         )
         unchanged = new_content == (self.memory.content or "") and (
             new_importance == importance_or_default(self.memory.importance)
@@ -218,7 +244,7 @@ class MemoryRow(ft.DataRow):
         too_long = too_long_message(new_content)
         if too_long:
             # Stay in edit mode so the text can be shortened.
-            show_snackbar(self.view.page, too_long)
+            show_snackbar(self.view.page_ref, too_long)
             return
 
         self._saving = True
@@ -235,7 +261,10 @@ class MemoryRow(ft.DataRow):
             raise
         except Exception as ex:  # noqa: BLE001
             logger.error("Failed to update memory: %s", ex)
-            show_snackbar(self.view.page, f"Грешка при запазване на спомена: {error_detail(ex)}")
+            show_snackbar(
+                self.view.page_ref,
+                f"Грешка при запазване на спомена: {error_detail(ex)}",
+            )
             return
         finally:
             self._saving = False
@@ -260,18 +289,21 @@ class MemoryRow(ft.DataRow):
             raise
         except Exception as ex:  # noqa: BLE001
             logger.error("Failed to activate memory: %s", ex)
-            show_snackbar(self.view.page, f"Грешка при активиране на спомена: {error_detail(ex)}")
+            show_snackbar(
+                self.view.page_ref,
+                f"Грешка при активиране на спомена: {error_detail(ex)}",
+            )
             return
 
         self.view.replace_memory(updated)
         self.apply(updated)
-        show_snackbar(self.view.page, "Споменът е активиран!", success=True)
+        show_snackbar(self.view.page_ref, "Споменът е активиран!", success=True)
 
     async def _delete(self, e):
         if not self.memory.id:
             return
         confirmed = await confirm_dialog(
-            self.view.page,
+            self.view.page_ref,
             "Изтриване на спомен",
             "Сигурни ли сте, че искате да изтриете този спомен?",
         )
@@ -287,12 +319,17 @@ class MemoryRow(ft.DataRow):
             # user wanted is true, so the row goes too.
             if ex.status != 404:
                 logger.error("Failed to delete memory: %s", ex)
-                show_snackbar(self.view.page, f"Грешка при изтриване на спомена: {ex}")
+                show_snackbar(
+                    self.view.page_ref, f"Грешка при изтриване на спомена: {ex}"
+                )
                 return
             logger.info("Memory %s was already deleted on the backend.", self.memory.id)
         except Exception as ex:  # noqa: BLE001
             logger.error("Failed to delete memory: %s", ex)
-            show_snackbar(self.view.page, f"Грешка при изтриване на спомена: {error_detail(ex)}")
+            show_snackbar(
+                self.view.page_ref,
+                f"Грешка при изтриване на спомена: {error_detail(ex)}",
+            )
             return
 
         self.view.remove_memory_row(self)
@@ -303,43 +340,49 @@ class MemoryView(ft.Container):
 
     def __init__(self, page: ft.Page, api_client: APIClient):
         super().__init__()
-        self.page = page
+        # ``Control.page`` is read-only and raises until the view is on the page;
+        # the page the app was started with is kept under its own name.
+        self.page_ref = page
         self.api_client = api_client
         self.memories = []
-        self.alignment = ft.alignment.top_center
+        self.alignment = ft.Alignment.TOP_CENTER
         self.expand = True
 
         self.status_dropdown = ft.Dropdown(
             label="Филтър по статус",
             options=[
-                ft.dropdown.Option(FILTER_ALL),
-                ft.dropdown.Option("active"),
-                ft.dropdown.Option("candidate"),
-                ft.dropdown.Option("superseded"),
+                ft.DropdownOption(FILTER_ALL),
+                ft.DropdownOption("active"),
+                ft.DropdownOption("candidate"),
+                ft.DropdownOption("superseded"),
             ],
             value=FILTER_ALL,
-            on_change=self.on_filter_change,
+            on_select=self.on_filter_change,
             width=200,
         )
 
-        self.refresh_btn = ft.ElevatedButton(
+        self.refresh_btn = ft.Button(
             "Обнови",
-            icon=ft.icons.REFRESH,
+            icon=ft.Icons.REFRESH,
             on_click=self.on_refresh_click,
         )
 
-        self.new_btn = ft.ElevatedButton(
+        self.new_btn = ft.Button(
             "Нов спомен",
-            icon=ft.icons.ADD,
+            icon=ft.Icons.ADD,
             on_click=self.on_new_click,
         )
 
-        self.progress = ft.ProgressRing(width=16, height=16, stroke_width=2, visible=False)
+        self.progress = ft.ProgressRing(
+            width=16, height=16, stroke_width=2, visible=False
+        )
 
         self.data_table = ft.DataTable(
             columns=[
                 ft.DataColumn(ft.Text("Съдържание")),
-                ft.DataColumn(ft.Text("Важност", tooltip="От 1 (дреболия) до 10 (критично)")),
+                ft.DataColumn(
+                    ft.Text("Важност", tooltip="От 1 (дреболия) до 10 (критично)")
+                ),
                 ft.DataColumn(ft.Text("Статус")),
                 ft.DataColumn(ft.Text("Действия")),
             ],
@@ -347,7 +390,7 @@ class MemoryView(ft.Container):
         )
 
         self.empty_hint = ft.Text(
-            "Няма намерени спомени.", color=ft.colors.GREY_500, visible=False
+            "Няма намерени спомени.", color=ft.Colors.GREY_500, visible=False
         )
 
         # What the assistant proposed to remember and waits for the user's answer.
@@ -372,7 +415,12 @@ class MemoryView(ft.Container):
         self.content = ft.Column(
             controls=[
                 ft.Row(
-                    [self.status_dropdown, self.refresh_btn, self.new_btn, self.progress],
+                    [
+                        self.status_dropdown,
+                        self.refresh_btn,
+                        self.new_btn,
+                        self.progress,
+                    ],
                     alignment=ft.MainAxisAlignment.CENTER,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
@@ -380,7 +428,15 @@ class MemoryView(ft.Container):
                 ft.Container(content=self.rules_tile, width=SECTION_WIDTH),
                 self.empty_hint,
                 ft.Column(
-                    [ft.Row([self.data_table], scroll=ft.ScrollMode.ADAPTIVE)],
+                    [
+                        ft.Row(
+                            [self.data_table],
+                            scroll=ft.ScrollMode.ADAPTIVE,
+                            # A scrollable row is as wide as the tab; without this the
+                            # table sits at its left edge instead of in the middle.
+                            alignment=ft.MainAxisAlignment.CENTER,
+                        ),
+                    ],
                     scroll=ft.ScrollMode.ADAPTIVE,
                     expand=True,
                 ),
@@ -397,9 +453,7 @@ class MemoryView(ft.Container):
             max_lines=8,
             autofocus=True,
         )
-        self.new_importance = importance_dropdown(
-            None, label="Важност", width=120
-        )
+        self.new_importance = importance_dropdown(None, label="Важност", width=120)
         self.new_save_btn = ft.TextButton("Запази", on_click=self.on_new_save)
         self.new_dialog = ft.AlertDialog(
             modal=True,
@@ -425,8 +479,8 @@ class MemoryView(ft.Container):
         self._load_seq = 0
 
     def did_mount(self):
-        self._load_task = self.page.run_task(self.load_memories)
-        self._extras_task = self.page.run_task(self.load_proposals_and_rules)
+        self._load_task = self.page_ref.run_task(self.load_memories)
+        self._extras_task = self.page_ref.run_task(self.load_proposals_and_rules)
 
     def will_unmount(self):
         if self._load_task is not None:
@@ -455,7 +509,7 @@ class MemoryView(ft.Container):
             raise
         except Exception as e:  # noqa: BLE001
             logger.error("Failed to load memories: %s", e)
-            show_snackbar(self.page, "Неуспешно зареждане на спомените.")
+            show_snackbar(self.page_ref, "Неуспешно зареждане на спомените.")
             return
         finally:
             if sequence == self._load_seq:
@@ -479,7 +533,7 @@ class MemoryView(ft.Container):
             except asyncio.CancelledError:
                 pass
 
-        self._filter_task = self.page.run_task(debounced_load)
+        self._filter_task = self.page_ref.run_task(debounced_load)
 
     async def on_refresh_click(self, e):
         await self.load_memories()
@@ -509,7 +563,7 @@ class MemoryView(ft.Container):
             ProposalCard(
                 proposal,
                 self.api_client,
-                page=self.page,
+                page=self.page_ref,
                 on_decided=self._on_proposal_decided,
             )
             for proposal in proposals
@@ -519,8 +573,8 @@ class MemoryView(ft.Container):
 
     def _on_proposal_decided(self, proposal, approved: bool):
         """A saved proposal changes the table or the rules; the card keeps its result."""
-        if approved and self.page is not None:
-            self.page.run_task(self._reload_after_approval)
+        if approved and self.page_ref is not None:
+            self.page_ref.run_task(self._reload_after_approval)
 
     async def _reload_after_approval(self):
         await self.load_memories()
@@ -545,15 +599,17 @@ class MemoryView(ft.Container):
             title=ft.Text(rule.key),
             subtitle=ft.Text(rule.value, selectable=True),
             trailing=ft.IconButton(
-                icon=ft.icons.DELETE_OUTLINE,
+                icon=ft.Icons.DELETE_OUTLINE,
                 tooltip="Изтрий правилото",
-                on_click=lambda e, rule=rule: self.page.run_task(self.delete_rule, rule),
+                on_click=lambda e, rule=rule: self.page_ref.run_task(
+                    self.delete_rule, rule
+                ),
             ),
         )
 
     async def delete_rule(self, rule):
         confirmed = await confirm_dialog(
-            self.page,
+            self.page_ref,
             "Изтриване на правило",
             f"Да изтрия ли правилото „{rule.key}“? Лили вече няма да го спазва.",
         )
@@ -567,29 +623,31 @@ class MemoryView(ft.Container):
         except APIError as ex:
             if ex.status != 404:  # 404: already gone, the reload below shows it
                 logger.error("Failed to delete rule: %s", ex)
-                show_snackbar(self.page, f"Грешка при изтриване на правилото: {ex}")
+                show_snackbar(self.page_ref, f"Грешка при изтриване на правилото: {ex}")
                 return
             logger.info("Rule %s was already deleted on the backend.", rule.id)
         except Exception as ex:  # noqa: BLE001
             logger.error("Failed to delete rule: %s", ex)
-            show_snackbar(self.page, f"Неуспешно изтриване на правилото: {error_detail(ex)}")
+            show_snackbar(
+                self.page_ref, f"Неуспешно изтриване на правилото: {error_detail(ex)}"
+            )
             return
 
-        show_snackbar(self.page, "Правилото е изтрито.", success=True)
+        show_snackbar(self.page_ref, "Правилото е изтрито.", success=True)
         await self.load_rules()
 
     # ------------------------------------------------------------ new memory
     def on_new_click(self, e):
         self.new_content_field.value = ""
-        self.new_content_field.error_text = None
+        self.new_content_field.error = None
         self.new_importance.value = str(DEFAULT_IMPORTANCE)
-        self.page.open(self.new_dialog)
+        open_dialog(self.page_ref, self.new_dialog)
 
     def on_new_cancel(self, e):
-        self.page.close(self.new_dialog)
+        close_dialog(self.new_dialog)
 
     def _show_new_error(self, message: str):
-        self.new_content_field.error_text = message
+        self.new_content_field.error = message
         safe_update(self.new_dialog, self.new_content_field)
 
     async def on_new_save(self, e):
@@ -635,8 +693,8 @@ class MemoryView(ft.Container):
             self.new_save_btn.disabled = False
             safe_update(self.new_dialog, self.new_save_btn)
 
-        self.page.close(self.new_dialog)
-        show_snackbar(self.page, "Споменът е добавен!", success=True)
+        close_dialog(self.new_dialog)
+        show_snackbar(self.page_ref, "Споменът е добавен!", success=True)
         # Re-read instead of inserting locally: the active status filter decides
         # whether the new memory belongs in the table at all.
         await self.load_memories()

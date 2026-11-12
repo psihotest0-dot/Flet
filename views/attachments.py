@@ -62,12 +62,17 @@ def inserted_text(previous: str, current: str) -> str:
     while start < shortest and previous[start] == current[start]:
         start += 1
     end = 0
-    while end < shortest - start and previous[len(previous) - 1 - end] == current[len(current) - 1 - end]:
+    while (
+        end < shortest - start
+        and previous[len(previous) - 1 - end] == current[len(current) - 1 - end]
+    ):
         end += 1
-    return current[start:len(current) - end]
+    return current[start : len(current) - end]
 
 
-_PYTHON = re.compile(r"^\s*(?:def |class |import |from \S+ import |if __name__)", re.MULTILINE)
+_PYTHON = re.compile(
+    r"^\s*(?:def |class |import |from \S+ import |if __name__)", re.MULTILINE
+)
 
 
 def guess_extension(text: str) -> str:
@@ -94,6 +99,8 @@ def paste_file_name(text: str, taken: set[str]) -> str:
     """``paste_1.go``, ``paste_2.txt``...: the first number that is not in ``taken``."""
     extension = guess_extension(text)
     number = 1
-    while f"paste_{number}{extension}" in taken or f"paste_{number}" in {t.rsplit(".", 1)[0] for t in taken}:
+    while f"paste_{number}{extension}" in taken or f"paste_{number}" in {
+        t.rsplit(".", 1)[0] for t in taken
+    }:
         number += 1
     return f"paste_{number}{extension}"

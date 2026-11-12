@@ -71,26 +71,26 @@ class ProposalCard(ft.Container):
 
         self.padding = 10
         self.border_radius = 8
-        self.border = ft.border.all(1, ft.colors.AMBER_700)
-        self.margin = ft.margin.only(top=4)
+        self.border = ft.Border.all(1, ft.Colors.AMBER_700)
+        self.margin = ft.Margin.only(top=4)
 
         self.title = ft.Text(
             f"{kind_label(proposal)} — чака твоето потвърждение",
             size=12,
-            color=ft.colors.AMBER_200,
+            color=ft.Colors.AMBER_200,
         )
         self.body = ft.Text(proposal.summary or "", selectable=True)
         warning = origin_warning(proposal.external_sources)
         self.warning = ft.Text(
-            warning or "", size=12, color=ft.colors.ORANGE_300, visible=bool(warning)
+            warning or "", size=12, color=ft.Colors.ORANGE_300, visible=bool(warning)
         )
 
-        self.approve_btn = ft.ElevatedButton(
-            "Запази", icon=ft.icons.CHECK, on_click=self._approve
+        self.approve_btn = ft.Button(
+            "Запази", icon=ft.Icons.CHECK, on_click=self._approve
         )
         self.reject_btn = ft.TextButton("Откажи", on_click=self._reject)
         self.buttons = ft.Row([self.approve_btn, self.reject_btn], wrap=True)
-        self.result = ft.Text("", size=12, color=ft.colors.GREY_400, visible=False)
+        self.result = ft.Text("", size=12, color=ft.Colors.GREY_400, visible=False)
 
         self.content = ft.Column(
             [self.title, self.body, self.warning, self.buttons, self.result],
@@ -132,7 +132,7 @@ class ProposalCard(ft.Container):
                 # Decided elsewhere (Telegram) or expired: nothing is left to do here.
                 logger.info("Proposal %s is already closed: %s", self.proposal.id, ex)
                 self._show_result("Вече е решено или е изтекло.")
-                self._notify(approve=False)
+                self._tell_owner(approve=False)
                 return
             logger.error("Failed to decide proposal %s: %s", self.proposal.id, ex)
             self._set_busy(False)
@@ -145,9 +145,10 @@ class ProposalCard(ft.Container):
             return
 
         self._show_result("✅ Запазено." if approve else "🗑 Отхвърлено.")
-        self._notify(approve)
+        self._tell_owner(approve)
 
-    def _notify(self, approve: bool):
+    def _tell_owner(self, approve: bool):
+        # Not ``_notify``: Flet calls a control's ``_notify`` on every property change.
         if self.on_decided is not None:
             self.on_decided(self.proposal, approve)
 

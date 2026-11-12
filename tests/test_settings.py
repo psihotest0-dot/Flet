@@ -12,6 +12,7 @@ def mock_settings_file(tmp_path, monkeypatch):
     monkeypatch.setattr(state.settings, "SETTINGS_FILE", mock_file)
     return mock_file
 
+
 def test_load_default_settings():
     settings = load_settings()
     assert settings.base_url == "http://localhost:8080"
@@ -20,6 +21,7 @@ def test_load_default_settings():
 
 def test_save_settings_os_error(mock_settings_file, monkeypatch):
     import os
+
     def mock_replace(*args, **kwargs):
         raise OSError("Permission denied")
 
@@ -30,6 +32,7 @@ def test_save_settings_os_error(mock_settings_file, monkeypatch):
 
     assert result is False
 
+
 def test_save_and_load_settings(mock_settings_file):
     settings = Settings(base_url="http://example.com", user_id="test-uuid")
     save_settings(settings)
@@ -39,6 +42,7 @@ def test_save_and_load_settings(mock_settings_file):
     loaded_settings = load_settings()
     assert loaded_settings.base_url == "http://example.com"
     assert loaded_settings.user_id == "test-uuid"
+
 
 def test_load_settings_invalid_json(mock_settings_file):
     mock_settings_file.write_text("invalid json")
@@ -185,7 +189,10 @@ def test_display_name_is_saved_and_loaded(mock_settings_file):
     save_settings(Settings(display_name="Иван"))
 
     assert load_settings().display_name == "Иван"
-    assert json.loads(mock_settings_file.read_text(encoding="utf-8"))["display_name"] == "Иван"
+    assert (
+        json.loads(mock_settings_file.read_text(encoding="utf-8"))["display_name"]
+        == "Иван"
+    )
 
 
 @pytest.mark.parametrize("raw", ["", "   ", None, True, [], {"a": 1}])
@@ -233,7 +240,9 @@ def test_save_forces_the_text_to_the_disk_before_replacing_the_file(
 
     events = []
     real_fsync, real_replace = os.fsync, os.replace
-    monkeypatch.setattr(os, "fsync", lambda fd: (events.append("fsync"), real_fsync(fd))[1])
+    monkeypatch.setattr(
+        os, "fsync", lambda fd: (events.append("fsync"), real_fsync(fd))[1]
+    )
     monkeypatch.setattr(
         os, "replace", lambda a, b: (events.append("replace"), real_replace(a, b))[1]
     )
@@ -261,9 +270,13 @@ def test_saves_from_two_threads_at_once_all_succeed_and_leave_a_whole_file(
     def save_many(name: str) -> None:
         start.wait()
         for _ in range(saves_per_thread):
-            results.append(save_settings(Settings(user_id=ORIGINAL_USER_ID, display_name=name)))
+            results.append(
+                save_settings(Settings(user_id=ORIGINAL_USER_ID, display_name=name))
+            )
 
-    threads = [threading.Thread(target=save_many, args=(name,)) for name in ("Иван", "Мария")]
+    threads = [
+        threading.Thread(target=save_many, args=(name,)) for name in ("Иван", "Мария")
+    ]
     for thread in threads:
         thread.start()
     for thread in threads:
@@ -318,7 +331,9 @@ def test_every_save_uses_a_temporary_file_of_its_own(mock_settings_file, monkeyp
     # another process): names made from the current second used to collide.
     used = []
     real_replace = os.replace
-    monkeypatch.setattr(os, "replace", lambda src, dst: (used.append(src), real_replace(src, dst))[1])
+    monkeypatch.setattr(
+        os, "replace", lambda src, dst: (used.append(src), real_replace(src, dst))[1]
+    )
 
     for _ in range(5):
         save_settings(Settings(user_id=ORIGINAL_USER_ID))
@@ -369,7 +384,10 @@ def test_a_wrecked_file_gets_the_identity_back_from_the_last_good_copy(
     assert settings.chat_sessions == [{"id": ORIGINAL_SESSION_ID, "name": "Чат 1"}]
     assert settings.display_name == "Иван"
     # The restored settings are saved, the wrecked file is kept aside.
-    assert json.loads(mock_settings_file.read_text(encoding="utf-8"))["user_id"] == ORIGINAL_USER_ID
+    assert (
+        json.loads(mock_settings_file.read_text(encoding="utf-8"))["user_id"]
+        == ORIGINAL_USER_ID
+    )
     assert len(list(mock_settings_file.parent.glob("settings.json.broken.*"))) == 1
 
 
@@ -416,12 +434,15 @@ def test_the_copy_follows_the_settings_that_were_read(mock_settings_file):
     assert json.loads(backup.read_text(encoding="utf-8"))["session_id"] == "s-2"
 
 
-def test_recovering_broken_settings_logs_only_the_start_of_the_ids(isolated_settings, caplog):
+def test_recovering_broken_settings_logs_only_the_start_of_the_ids(
+    isolated_settings, caplog
+):
     user_id = "123e4567-e89b-12d3-a456-426614174000"
     session_id = "abcdef12-3456-7890-abcd-ef1234567890"
     # Unreadable as JSON, but the ids can still be read out of it.
     isolated_settings.write_text(
-        f'{{"user_id": "{user_id}", "session_id": "{session_id}", broken', encoding="utf-8"
+        f'{{"user_id": "{user_id}", "session_id": "{session_id}", broken',
+        encoding="utf-8",
     )
 
     with caplog.at_level("WARNING", logger="state.settings"):

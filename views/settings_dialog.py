@@ -11,7 +11,7 @@ import flet as ft
 
 from api.client import APIClient
 from state.settings import DEFAULT_DISPLAY_NAME, MAX_DISPLAY_NAME_CHARS
-from views.ui_utils import safe_update
+from views.ui_utils import close_dialog, copy_text, open_dialog, safe_update
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ class SettingsDialog:
         )
         self.check_btn = ft.OutlinedButton(
             "Провери връзката",
-            icon=ft.icons.NETWORK_CHECK,
+            icon=ft.Icons.NETWORK_CHECK,
             on_click=self._check_connection,
         )
         self.check_progress = ft.ProgressRing(
@@ -95,7 +95,7 @@ class SettingsDialog:
             label="Име в чата",
             value=display_name,
             max_length=MAX_DISPLAY_NAME_CHARS,
-            helper_text=f"Как се казваш в чата. Празно = „{DEFAULT_DISPLAY_NAME}“.",
+            helper=f"Как се казваш в чата. Празно = „{DEFAULT_DISPLAY_NAME}“.",
             on_submit=self._save,
         )
 
@@ -107,7 +107,7 @@ class SettingsDialog:
             expand=True,
         )
         self.copy_btn = ft.IconButton(
-            icon=ft.icons.COPY,
+            icon=ft.Icons.COPY,
             tooltip="Копирай",
             on_click=self._copy_user_id,
         )
@@ -126,7 +126,7 @@ class SettingsDialog:
                     self.display_name_field,
                     ft.Divider(),
                     ft.Row([self.user_id_field, self.copy_btn]),
-                    ft.Text(USER_ID_NOTE, size=12, color=ft.colors.GREY_500),
+                    ft.Text(USER_ID_NOTE, size=12, color=ft.Colors.GREY_500),
                 ],
                 tight=True,
                 width=480,
@@ -142,22 +142,22 @@ class SettingsDialog:
     def open(self, base_url: str, display_name: str = DEFAULT_DISPLAY_NAME) -> None:
         """Show the dialog with the currently saved values and a clean state."""
         self.base_url_field.value = base_url
-        self.base_url_field.error_text = None
+        self.base_url_field.error = None
         self.display_name_field.value = display_name
         self.check_result.visible = False
-        self.copy_btn.icon = ft.icons.COPY
+        self.copy_btn.icon = ft.Icons.COPY
         self.copy_btn.icon_color = None
         self.copy_btn.tooltip = "Копирай"
-        self.page.open(self.dialog)
+        open_dialog(self.page, self.dialog)
 
     def _cancel(self, e) -> None:
-        self.page.close(self.dialog)
+        close_dialog(self.dialog)
 
     def _save(self, e) -> None:
         url = self._validated_url()
         if url is None:
             return
-        self.page.close(self.dialog)
+        close_dialog(self.dialog)
         self._on_save(url, clean_display_name(self.display_name_field.value))
 
     def _validated_url(self) -> str | None:
@@ -165,18 +165,19 @@ class SettingsDialog:
         try:
             url = validate_base_url(self.base_url_field.value)
         except ValueError as ex:
-            self.base_url_field.error_text = str(ex)
+            self.base_url_field.error = str(ex)
             url = None
         else:
-            self.base_url_field.error_text = None
+            self.base_url_field.error = None
         safe_update(self.dialog, self.base_url_field)
         return url
 
     # ------------------------------------------------------------- user id
-    def _copy_user_id(self, e) -> None:
-        self.page.set_clipboard(self.user_id)
-        self.copy_btn.icon = ft.icons.CHECK
-        self.copy_btn.icon_color = ft.colors.GREEN
+    async def _copy_user_id(self, e) -> None:
+        if not await copy_text(self.page, self.user_id):
+            return
+        self.copy_btn.icon = ft.Icons.CHECK
+        self.copy_btn.icon_color = ft.Colors.GREEN
         self.copy_btn.tooltip = "Копирано"
         safe_update(self.dialog, self.copy_btn)
 
@@ -202,11 +203,13 @@ class SettingsDialog:
         finally:
             self._set_checking(False)
 
-        logger.info("Connection check for %s: %s", url, "ok" if healthy else "no answer")
+        logger.info(
+            "Connection check for %s: %s", url, "ok" if healthy else "no answer"
+        )
         if healthy:
-            self._show_result("Връзката е успешна.", ft.colors.GREEN)
+            self._show_result("Връзката е успешна.", ft.Colors.GREEN)
         else:
-            self._show_result(f"Няма връзка с {url}", ft.colors.RED)
+            self._show_result(f"Няма връзка с {url}", ft.Colors.RED)
 
     def _set_checking(self, checking: bool) -> None:
         self._checking = checking
@@ -214,9 +217,7 @@ class SettingsDialog:
         self.check_progress.visible = checking
         if checking:
             self.check_result.visible = False
-        safe_update(
-            self.dialog, self.check_btn, self.check_progress, self.check_result
-        )
+        safe_update(self.dialog, self.check_btn, self.check_progress, self.check_result)
 
     def _show_result(self, text: str, color: str) -> None:
         self.check_result.value = text

@@ -40,13 +40,30 @@ def content_size(text: str) -> int:
     """Size of ``text`` as the backend measures it (UTF-8 bytes)."""
     return len(text.encode("utf-8"))
 
+
 # File types the backend can turn into text (internal/ingest in C:\GO): text
 # formats, documents and images (OCR). The upload endpoint accepts anything, but
 # any other file ends as a failed ingest, so the picker offers only these.
 SUPPORTED_EXTENSIONS = (
-    "txt", "md", "csv", "json", "yaml", "yml", "log",
-    "html", "htm", "pdf", "docx", "xlsx", "epub",
-    "png", "jpg", "jpeg", "tif", "tiff", "bmp",
+    "txt",
+    "md",
+    "csv",
+    "json",
+    "yaml",
+    "yml",
+    "log",
+    "html",
+    "htm",
+    "pdf",
+    "docx",
+    "xlsx",
+    "epub",
+    "png",
+    "jpg",
+    "jpeg",
+    "tif",
+    "tiff",
+    "bmp",
 )
 
 
@@ -58,6 +75,7 @@ def is_supported_file(filename: str) -> bool:
 
 class Message(BaseModel):
     """Represents a chat message."""
+
     id: str | None = None
     user_id: str | None = None
     session_id: str | None = None
@@ -71,6 +89,7 @@ class Message(BaseModel):
 
 class Memory(BaseModel):
     """Represents a piece of memory stored in the system."""
+
     id: str | None = None
     user_id: str | None = None
     content: str | None = None
@@ -90,6 +109,7 @@ class Proposal(BaseModel):
     made it (``web_search``, ``web_fetch``, ``search_documents``,
     ``retrieved_documents``); empty means the turn read only the conversation.
     """
+
     id: int
     kind: str | None = None
     status: str | None = None
@@ -105,6 +125,7 @@ class Proposal(BaseModel):
 
 class Rule(BaseModel):
     """A global rule: the first thing in the system prompt of every session."""
+
     id: int
     key: str
     value: str
@@ -119,6 +140,7 @@ class OracleDecision(BaseModel):
     or ``failed`` (no verdict; ``error`` says why). In ``shadow`` mode the bot
     ignores the verdict, so the journal is the whole result.
     """
+
     id: int
     created_at: datetime | None = None
     request_id: str | None = None
@@ -150,6 +172,7 @@ class OracleDecisionPage(BaseModel):
     ``next_before_id`` is the ``before_id`` of the next page; 0 when this was the
     last one. An empty journal may arrive as ``"decisions": null``.
     """
+
     decisions: list[OracleDecision] = []
     next_before_id: int = 0
 
@@ -221,7 +244,14 @@ def _log_http_error(response: httpx.Response, error: APIError) -> None:
     """
     request = response.request
     level = logging.ERROR if error.status >= 500 else logging.WARNING
-    logger.log(level, "%s %s -> HTTP %s: %s", request.method, request.url.path, error.status, error.message)
+    logger.log(
+        level,
+        "%s %s -> HTTP %s: %s",
+        request.method,
+        request.url.path,
+        error.status,
+        error.message,
+    )
 
 
 def _raise_for_status(response: httpx.Response) -> None:
@@ -247,6 +277,7 @@ def _is_transient(error: BaseException) -> bool:
 
 class IngestedFile(BaseModel):
     """Represents a file uploaded to the system."""
+
     id: str | None = None
     user_id: str | None = None
     file_name: str | None = None
@@ -273,6 +304,7 @@ class ChatAttachment(BaseModel):
     It is not the library: the model sees it only in this conversation. ``created``,
     ``replaced`` and ``unchanged`` are set only in the answer to an upload.
     """
+
     id: str
     name: str
     bytes: int = 0
@@ -289,18 +321,19 @@ class ChatAttachment(BaseModel):
 @dataclass(frozen=True)
 class UploadResult:
     """The outcome of an upload: the stored file, and whether it was already there."""
+
     file: IngestedFile
     duplicate: bool = False
 
 
 class APIClient:
     """Client for making asynchronous requests to the AI agent backend API."""
+
     def __init__(self, base_url: str, user_id: str):
         self.base_url = base_url
         self.user_id = user_id
         self.client = httpx.AsyncClient(
-            base_url=self.base_url,
-            headers={"X-User-ID": user_id}
+            base_url=self.base_url, headers={"X-User-ID": user_id}
         )
         self._current_stream_task = None
 
@@ -339,7 +372,12 @@ class APIClient:
             logger.debug(f"Health check failed: {e}")
             return False
 
-    async def upload_file(self, file_content: bytes, filename: str, mime_type: str = "application/octet-stream") -> UploadResult:
+    async def upload_file(
+        self,
+        file_content: bytes,
+        filename: str,
+        mime_type: str = "application/octet-stream",
+    ) -> UploadResult:
         """Upload a file to the backend.
 
         A file the backend already holds (same content) is not an error: the
@@ -349,22 +387,27 @@ class APIClient:
             raise ValueError("File too large. Maximum size is 100MB.")
         files = {"file": (filename, file_content, mime_type)}
         response = await self.client.post(
-            "/v1/files",
-            files=files,
-            timeout=httpx.Timeout(5.0, read=None)
+            "/v1/files", files=files, timeout=httpx.Timeout(5.0, read=None)
         )
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 409:
                 await e.response.aread()
-                logger.info("File %s is already uploaded, the existing one is used.", filename)
+                logger.info(
+                    "File %s is already uploaded, the existing one is used.", filename
+                )
                 return UploadResult(IngestedFile(**e.response.json()), duplicate=True)
             error = APIError.from_response(response)
             _log_http_error(response, error)
             raise error from e
         uploaded = IngestedFile(**response.json())
-        logger.info("File %s uploaded (%d bytes, id %s).", filename, len(file_content), uploaded.id)
+        logger.info(
+            "File %s uploaded (%d bytes, id %s).",
+            filename,
+            len(file_content),
+            uploaded.id,
+        )
         return UploadResult(uploaded)
 
     async def delete_file(self, file_id: str) -> None:
@@ -375,10 +418,14 @@ class APIClient:
 
     async def list_attachments(self, session_id: str) -> list[ChatAttachment]:
         """The files attached to a conversation, newest first (without their text)."""
-        response = await self._get("/chat/attachments", params={"session_id": session_id})
+        response = await self._get(
+            "/chat/attachments", params={"session_id": session_id}
+        )
         return [ChatAttachment(**item) for item in response.json()]
 
-    async def upload_attachment(self, session_id: str, name: str, content: str) -> ChatAttachment:
+    async def upload_attachment(
+        self, session_id: str, name: str, content: str
+    ) -> ChatAttachment:
         """Attach a text file to a conversation.
 
         The same name again is a new version of the file (``replaced``), the same
@@ -391,7 +438,10 @@ class APIClient:
         attachment = ChatAttachment(**response.json())
         logger.info(
             "Attachment %s stored (%d bytes, %d lines, version %d).",
-            attachment.id, attachment.bytes, attachment.lines, attachment.version,
+            attachment.id,
+            attachment.bytes,
+            attachment.lines,
+            attachment.version,
         )
         return attachment
 
@@ -408,7 +458,9 @@ class APIClient:
         memories stay. A session that is not there is not an error (204), so
         asking twice is safe.
         """
-        response = await self.client.delete(f"/chat/sessions/{quote(session_id, safe='')}")
+        response = await self.client.delete(
+            f"/chat/sessions/{quote(session_id, safe='')}"
+        )
         _raise_for_status(response)
         # Only the first 8 characters: the full id is the key to the conversation.
         logger.info("Session %s deleted.", session_id[:8])
@@ -442,27 +494,45 @@ class APIClient:
     async def update_file_category(self, file_id: str, category: str) -> IngestedFile:
         """Update the category of a file."""
         payload = {"category": category, "manual_override": True}
-        response = await self.client.patch(f"/v1/files/{file_id}/category", json=payload)
+        response = await self.client.patch(
+            f"/v1/files/{file_id}/category", json=payload
+        )
         _raise_for_status(response)
         logger.info("File %s moved to category %s.", file_id, category)
         return IngestedFile(**response.json())
 
-    async def create_memory(self, content: str, status: str = "candidate", source_message_id: str | None = None, importance: int | None = None, metadata: dict[str, Any] | None = None) -> Memory:
+    async def create_memory(
+        self,
+        content: str,
+        status: str = "candidate",
+        source_message_id: str | None = None,
+        importance: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Memory:
         """Create a new memory."""
         payload = {"content": content, "status": status}
         if source_message_id:
             payload["source_message_id"] = source_message_id
-        payload["importance"] = importance if importance is not None else DEFAULT_IMPORTANCE
+        payload["importance"] = (
+            importance if importance is not None else DEFAULT_IMPORTANCE
+        )
         if metadata is not None:
             payload["metadata"] = metadata
         response = await self.client.post("/memories", json=payload)
         _raise_for_status(response)
         memory = Memory(**response.json())
         # The text of a memory is personal - only its id, status and importance are logged.
-        logger.info("Memory %s created (status %s, importance %s).", memory.id, status, payload["importance"])
+        logger.info(
+            "Memory %s created (status %s, importance %s).",
+            memory.id,
+            status,
+            payload["importance"],
+        )
         return memory
 
-    async def get_messages(self, session_id: str, limit: int | None = None) -> list[Message]:
+    async def get_messages(
+        self, session_id: str, limit: int | None = None
+    ) -> list[Message]:
         """Get chat messages for a session (oldest first).
 
         Without ``limit`` the backend returns only its default page (50).
@@ -481,14 +551,26 @@ class APIClient:
         response = await self._get("/memories", params=params or None)
         return [Memory(**item) for item in response.json()]
 
-    async def update_memory(self, memory_id: str, content: str, status: str, importance: int, metadata: dict[str, Any] | None = None) -> Memory:
+    async def update_memory(
+        self,
+        memory_id: str,
+        content: str,
+        status: str,
+        importance: int,
+        metadata: dict[str, Any] | None = None,
+    ) -> Memory:
         """Update an existing memory."""
         payload = {"content": content, "status": status, "importance": importance}
         if metadata is not None:
             payload["metadata"] = metadata
         response = await self.client.put(f"/memories/{memory_id}", json=payload)
         _raise_for_status(response)
-        logger.info("Memory %s updated (status %s, importance %s).", memory_id, status, importance)
+        logger.info(
+            "Memory %s updated (status %s, importance %s).",
+            memory_id,
+            status,
+            importance,
+        )
         return Memory(**response.json())
 
     async def delete_memory(self, memory_id: str) -> None:
@@ -553,9 +635,13 @@ class APIClient:
 
     def stream_chat(self, session_id: str, content: str) -> AsyncIterator[Any]:
         """Stream a chat response from the backend using Server-Sent Events (SSE)."""
-        return self._stream_sse("/chat/stream", {"session_id": session_id, "content": content})
+        return self._stream_sse(
+            "/chat/stream", {"session_id": session_id, "content": content}
+        )
 
-    async def _stream_sse(self, path: str, payload: dict[str, Any]) -> AsyncIterator[Any]:
+    async def _stream_sse(
+        self, path: str, payload: dict[str, Any]
+    ) -> AsyncIterator[Any]:
         """POST ``payload`` to ``path`` and yield what the backend streams back.
 
         Both chat endpoints write the same events (``sources``, text chunks,
@@ -570,7 +656,10 @@ class APIClient:
         try:
             self._current_stream_task = asyncio.current_task()
             async with aconnect_sse(
-                self.client, "POST", path, json=payload,
+                self.client,
+                "POST",
+                path,
+                json=payload,
                 timeout=httpx.Timeout(5.0, read=None),
             ) as event_source:
                 try:
@@ -591,13 +680,21 @@ class APIClient:
                         try:
                             yield {"type": "sources", "data": json.loads(sse.data)}
                         except json.JSONDecodeError as e:
-                            logger.error("Could not decode the sources frame (%d characters): %s", len(sse.data), e)
+                            logger.error(
+                                "Could not decode the sources frame (%d characters): %s",
+                                len(sse.data),
+                                e,
+                            )
                             yield {"type": "sources", "data": sse.data}
                     elif sse.event == "proposals":
                         try:
                             proposals = json.loads(sse.data)
                         except json.JSONDecodeError as e:
-                            logger.error("Could not decode the proposals frame (%d characters): %s", len(sse.data), e)
+                            logger.error(
+                                "Could not decode the proposals frame (%d characters): %s",
+                                len(sse.data),
+                                e,
+                            )
                             continue
                         if isinstance(proposals, list):
                             yield {"type": "proposals", "data": proposals}
@@ -605,7 +702,11 @@ class APIClient:
                         try:
                             chunk = json.loads(sse.data)
                         except json.JSONDecodeError as e:
-                            logger.error("Could not decode a stream chunk (%d characters): %s", len(sse.data), e)
+                            logger.error(
+                                "Could not decode a stream chunk (%d characters): %s",
+                                len(sse.data),
+                                e,
+                            )
                             yield sse.data
                             continue
                         if isinstance(chunk, dict) and "error" in chunk:

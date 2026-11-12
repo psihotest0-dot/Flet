@@ -25,8 +25,10 @@ DEFAULT_BASE_URL = "http://localhost:8080"
 DEFAULT_DISPLAY_NAME = "Ти"
 MAX_DISPLAY_NAME_CHARS = 40
 
-# Flet runs synchronous event handlers in threads: the chat and the settings dialog
-# can save in the same moment. Writes go one at a time.
+# Writes go one at a time. Flet 1.x runs every event handler on the event loop,
+# so two saves cannot overlap there any more; the lock stays for a save from a
+# thread (``asyncio.to_thread``, a test), where an interleaved write would cost
+# the user their settings.
 _WRITE_LOCK = threading.Lock()
 
 # Matches the identifying fields even when the surrounding document is broken.
@@ -252,7 +254,7 @@ def _remember_good_copy(settings: Settings) -> None:
     try:
         if backup.read_text(encoding="utf-8") == text:
             return
-    except (OSError, ValueError):
+    except OSError, ValueError:
         pass  # missing or unreadable: write it anew
     if not _write_atomically(backup, text):
         logger.warning("Could not refresh %s.", backup.name)
@@ -273,7 +275,7 @@ def _settings_from_backup() -> Settings | None:
         return None
     try:
         settings = Settings(**data)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return settings if settings.user_id else None
 
@@ -328,7 +330,9 @@ def load_settings() -> Settings:
         if not salvaged:
             # Nothing recoverable: the app starts with a fresh user_id, and the
             # old history can only be reached again from the backup file.
-            logger.warning("Settings file was unreadable and held no ids; starting with defaults.")
+            logger.warning(
+                "Settings file was unreadable and held no ids; starting with defaults."
+            )
             return Settings()
         # The ids outlived the document: keep them instead of minting new ones.
         settings = Settings(**salvaged)
@@ -391,7 +395,9 @@ def _write_atomically(path: Path, text: str) -> bool:
                 if temp_file is not None and temp_file.exists():
                     temp_file.unlink()
             except OSError as unlink_error:
-                logger.warning(f"Failed to remove temporary file {temp_file}: {unlink_error}")
+                logger.warning(
+                    f"Failed to remove temporary file {temp_file}: {unlink_error}"
+                )
             return False
 
 

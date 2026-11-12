@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import flet as ft
 import httpx
 import pytest
 import respx
+from helpers import mounted
 
 from api.client import APIClient, APIError, ChatAttachment
 from views.attachments import (
@@ -44,7 +46,9 @@ def test_utf8_with_or_without_a_byte_order_mark_is_read():
 
 
 def test_an_old_windows_1251_file_is_read_too():
-    assert read_text_file("Здравей, свят".encode("cp1251"), "old.txt") == "Здравей, свят"
+    assert (
+        read_text_file("Здравей, свят".encode("cp1251"), "old.txt") == "Здравей, свят"
+    )
 
 
 @pytest.mark.parametrize(
@@ -53,7 +57,9 @@ def test_an_old_windows_1251_file_is_read_too():
         (b"MZ\x90\x00\x03", "не е текстов"),
         (b"   \n\t ", "празен"),
         (b"", "празен"),
-        pytest.param(b"a" * (MAX_FILE_BYTES + 1), "по-голям", id="one byte over the limit"),
+        pytest.param(
+            b"a" * (MAX_FILE_BYTES + 1), "по-голям", id="one byte over the limit"
+        ),
         (b"\x98\xff\xfe", "не е текст в UTF-8"),  # 0x98 is not defined in Windows-1251
     ],
 )
@@ -111,8 +117,13 @@ def test_a_pasted_text_gets_the_extension_it_looks_like(text, extension):
 def test_pasted_files_are_numbered_without_clashing_with_the_ones_there():
     assert paste_file_name("x = 1", set()) == "paste_1.txt"
     assert paste_file_name("package a\nfunc f() {}", {"paste_1.go"}) == "paste_2.go"
-    assert paste_file_name("def f():\n  pass", {"paste_1.py", "paste_2.py", "main.py"}) == "paste_3.py"
-    assert paste_file_name("text", {"paste_1.go"}) == "paste_2.txt", "the number is not reused for another extension"
+    assert (
+        paste_file_name("def f():\n  pass", {"paste_1.py", "paste_2.py", "main.py"})
+        == "paste_3.py"
+    )
+    assert paste_file_name("text", {"paste_1.go"}) == "paste_2.txt", (
+        "the number is not reused for another extension"
+    )
 
 
 # ------------------------------------------------------------------ the client
@@ -122,9 +133,17 @@ def client():
 
 
 ATTACHMENT_JSON = {
-    "id": "a1", "name": "main.go", "bytes": 120, "lines": 9, "tokens": 40, "version": 1,
-    "created_at": "2026-11-07T20:00:00Z", "updated_at": "2026-11-07T20:00:00Z",
-    "created": True, "replaced": False, "unchanged": False,
+    "id": "a1",
+    "name": "main.go",
+    "bytes": 120,
+    "lines": 9,
+    "tokens": 40,
+    "version": 1,
+    "created_at": "2026-11-07T20:00:00Z",
+    "updated_at": "2026-11-07T20:00:00Z",
+    "created": True,
+    "replaced": False,
+    "unchanged": False,
 }
 
 
@@ -145,13 +164,19 @@ async def test_the_files_of_a_conversation_are_listed_for_that_session(client):
 @respx.mock
 @pytest.mark.asyncio
 async def test_a_file_is_sent_as_json_and_the_answer_says_what_happened(client):
-    route = respx.post(f"{BASE_URL}/chat/attachments").mock(return_value=httpx.Response(201, json=ATTACHMENT_JSON))
+    route = respx.post(f"{BASE_URL}/chat/attachments").mock(
+        return_value=httpx.Response(201, json=ATTACHMENT_JSON)
+    )
 
     result = await client.upload_attachment("chat-1", "main.go", "package main\n")
 
     assert isinstance(result, ChatAttachment)
     assert result.created is True and result.replaced is False
-    assert json.loads(route.calls[0].request.content) == {"session_id": "chat-1", "name": "main.go", "content": "package main\n"}
+    assert json.loads(route.calls[0].request.content) == {
+        "session_id": "chat-1",
+        "name": "main.go",
+        "content": "package main\n",
+    }
     assert route.calls[0].request.headers["X-User-ID"] == USER_ID
 
 
@@ -159,7 +184,9 @@ async def test_a_file_is_sent_as_json_and_the_answer_says_what_happened(client):
 @pytest.mark.asyncio
 async def test_a_refused_file_raises_with_the_status_and_the_text(client):
     respx.post(f"{BASE_URL}/chat/attachments").mock(
-        return_value=httpx.Response(422, text="this conversation already has 20 attached files\n")
+        return_value=httpx.Response(
+            422, text="this conversation already has 20 attached files\n"
+        )
     )
 
     with pytest.raises(APIError) as info:
@@ -172,13 +199,17 @@ async def test_a_refused_file_raises_with_the_status_and_the_text(client):
 @respx.mock
 @pytest.mark.asyncio
 async def test_a_file_is_removed_by_its_id(client):
-    route = respx.delete(f"{BASE_URL}/chat/attachments/a1").mock(return_value=httpx.Response(204))
+    route = respx.delete(f"{BASE_URL}/chat/attachments/a1").mock(
+        return_value=httpx.Response(204)
+    )
 
     await client.delete_attachment("a1")
 
     assert route.called
     with respx.mock:
-        respx.delete(f"{BASE_URL}/chat/attachments/gone").mock(return_value=httpx.Response(404, text="attachment not found"))
+        respx.delete(f"{BASE_URL}/chat/attachments/gone").mock(
+            return_value=httpx.Response(404, text="attachment not found")
+        )
         with pytest.raises(APIError) as info:
             await client.delete_attachment("gone")
         assert info.value.status == 404
@@ -187,7 +218,9 @@ async def test_a_file_is_removed_by_its_id(client):
 @respx.mock
 @pytest.mark.asyncio
 async def test_the_text_of_a_file_never_reaches_the_log(client, caplog):
-    respx.post(f"{BASE_URL}/chat/attachments").mock(return_value=httpx.Response(201, json=ATTACHMENT_JSON))
+    respx.post(f"{BASE_URL}/chat/attachments").mock(
+        return_value=httpx.Response(201, json=ATTACHMENT_JSON)
+    )
 
     with caplog.at_level("DEBUG"):
         await client.upload_attachment("chat-1", "secret.py", "PASSWORD = 'hunter2'\n")
@@ -198,14 +231,20 @@ async def test_the_text_of_a_file_never_reaches_the_log(client, caplog):
 
 
 # ------------------------------------------------------------------ the view
-def attachment(name="main.go", id="a1", lines=9, tokens=40, version=1) -> ChatAttachment:
-    return ChatAttachment(id=id, name=name, bytes=120, lines=lines, tokens=tokens, version=version)
+def attachment(
+    name="main.go", id="a1", lines=9, tokens=40, version=1
+) -> ChatAttachment:
+    return ChatAttachment(
+        id=id, name=name, bytes=120, lines=lines, tokens=tokens, version=version
+    )
 
 
 @pytest.fixture
 def view(mock_page, mock_api_client):
     mock_api_client.list_attachments = AsyncMock(return_value=[])
-    mock_api_client.upload_attachment = AsyncMock(side_effect=lambda session, name, text: attachment(name))
+    mock_api_client.upload_attachment = AsyncMock(
+        side_effect=lambda session, name, text: attachment(name)
+    )
     mock_api_client.delete_attachment = AsyncMock()
     v = ChatView(mock_page, mock_api_client)
     v.update = MagicMock()
@@ -231,23 +270,72 @@ def test_the_view_has_a_paperclip_a_row_for_the_files_and_a_picker(view):
     assert view.input_field.on_change is not None
 
 
-def test_did_mount_reads_the_files_before_the_history_and_adds_the_picker(mock_page, mock_api_client):
+def test_did_mount_reads_the_files_before_the_history(mock_page, mock_api_client):
     mock_api_client.list_attachments = AsyncMock(return_value=[])
     v = ChatView(mock_page, mock_api_client)
 
     v.did_mount()
 
     calls = [c.args[0] for c in mock_page.run_task.call_args_list]
-    assert calls == [v.load_attachments, v.load_history], "the history is what the view waits for, so it is last"
-    assert v.file_picker in mock_page.overlay
-
-    v.will_unmount()
-    assert v.file_picker not in mock_page.overlay
+    assert calls == [v.load_attachments, v.load_history], (
+        "the history is what the view waits for, so it is last"
+    )
 
 
 @pytest.mark.asyncio
-async def test_the_files_of_the_open_conversation_are_shown_as_chips(view, mock_api_client):
-    mock_api_client.list_attachments = AsyncMock(return_value=[attachment("main.go", lines=120), attachment("b.py", "a2", lines=7)])
+async def test_the_paperclip_opens_the_dialog_and_attaches_what_was_chosen(
+    view, mock_api_client, tmp_path
+):
+    chosen = [picked(tmp_path, "main.go", b"package main\n")]
+    view.file_picker.pick_files = AsyncMock(return_value=chosen)
+
+    with snackbars():
+        await view.attach_btn.on_click(None)
+
+    kwargs = view.file_picker.pick_files.await_args.kwargs
+    assert kwargs["allow_multiple"] is True
+    assert kwargs["file_type"] == ft.FilePickerFileType.ANY
+    assert [c.args[1] for c in mock_api_client.upload_attachment.await_args_list] == [
+        "main.go"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_dialog_closed_without_a_choice_attaches_nothing(view, mock_api_client):
+    view.file_picker.pick_files = AsyncMock(return_value=[])
+
+    with snackbars() as snackbar:
+        await view.attach_btn.on_click(None)
+
+    mock_api_client.upload_attachment.assert_not_awaited()
+    snackbar.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_dialog_that_does_not_open_is_said_and_logged(
+    view, mock_api_client, caplog
+):
+    # The call waits for the client; a closed session answers with an error.
+    view.file_picker.pick_files = AsyncMock(side_effect=RuntimeError("Session closed"))
+
+    with snackbars() as snackbar:
+        await view.attach_btn.on_click(None)
+
+    mock_api_client.upload_attachment.assert_not_awaited()
+    assert "не се отвори" in snackbar.call_args.args[1]
+    assert "The file dialog failed: Session closed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_the_files_of_the_open_conversation_are_shown_as_chips(
+    view, mock_api_client
+):
+    mock_api_client.list_attachments = AsyncMock(
+        return_value=[
+            attachment("main.go", lines=120),
+            attachment("b.py", "a2", lines=7),
+        ]
+    )
 
     await view.load_attachments()
 
@@ -276,7 +364,9 @@ async def test_an_answer_for_another_conversation_is_ignored(view, mock_api_clie
 
 
 @pytest.mark.asyncio
-async def test_a_failing_list_is_not_shown_to_the_user_and_keeps_what_there_was(view, mock_api_client):
+async def test_a_failing_list_is_not_shown_to_the_user_and_keeps_what_there_was(
+    view, mock_api_client
+):
     mock_api_client.list_attachments = AsyncMock(return_value=[attachment()])
     await view.load_attachments()
     mock_api_client.list_attachments = AsyncMock(side_effect=httpx.ConnectError("down"))
@@ -310,21 +400,26 @@ def test_a_new_empty_session_does_not_ask_for_files(view, mock_page):
 def picked(tmp_path, name, data: bytes):
     path = tmp_path / name
     path.write_bytes(data)
-    return SimpleNamespace(name=name, path=str(path))
+    return ft.FilePickerFile(id=0, name=name, size=len(data), path=str(path))
 
 
 @pytest.mark.asyncio
-async def test_chosen_files_are_attached_to_the_open_conversation(view, mock_api_client, tmp_path):
+async def test_chosen_files_are_attached_to_the_open_conversation(
+    view, mock_api_client, tmp_path
+):
     files = [
         picked(tmp_path, "main.go", b"package main\n"),
         picked(tmp_path, "stari.txt", "Здравей".encode("cp1251")),
     ]
 
     with snackbars() as snackbar:
-        await view.on_attach_result(SimpleNamespace(files=files))
+        await view.attach_files(files)
 
     sent = [c.args for c in mock_api_client.upload_attachment.await_args_list]
-    assert sent == [(view.session_id, "main.go", "package main\n"), (view.session_id, "stari.txt", "Здравей")]
+    assert sent == [
+        (view.session_id, "main.go", "package main\n"),
+        (view.session_id, "stari.txt", "Здравей"),
+    ]
     mock_api_client.list_attachments.assert_awaited()
     message = snackbar.call_args.args[1]
     assert "main.go" in message and "stari.txt" in message
@@ -332,7 +427,9 @@ async def test_chosen_files_are_attached_to_the_open_conversation(view, mock_api
 
 
 @pytest.mark.asyncio
-async def test_what_cannot_be_attached_is_reported_and_does_not_stop_the_others(view, mock_api_client, tmp_path):
+async def test_what_cannot_be_attached_is_reported_and_does_not_stop_the_others(
+    view, mock_api_client, tmp_path
+):
     files = [
         picked(tmp_path, "program.exe", b"MZ\x00\x01"),
         picked(tmp_path, "huge.log", b"x" * (MAX_FILE_BYTES + 1)),
@@ -341,9 +438,11 @@ async def test_what_cannot_be_attached_is_reported_and_does_not_stop_the_others(
     ]
 
     with snackbars() as snackbar:
-        await view.on_attach_result(SimpleNamespace(files=files))
+        await view.attach_files(files)
 
-    assert [c.args[1] for c in mock_api_client.upload_attachment.await_args_list] == ["ok.py"]
+    assert [c.args[1] for c in mock_api_client.upload_attachment.await_args_list] == [
+        "ok.py"
+    ]
     reports = [c.args[1] for c in snackbar.call_args_list]
     problems = next(r for r in reports if r.startswith("Не са прикачени"))
     assert "program.exe: не е текстов файл" in problems
@@ -354,10 +453,12 @@ async def test_what_cannot_be_attached_is_reported_and_does_not_stop_the_others(
 
 @pytest.mark.asyncio
 async def test_a_refused_upload_says_why_in_bulgarian(view, mock_api_client, tmp_path):
-    mock_api_client.upload_attachment = AsyncMock(side_effect=APIError(422, "this conversation already has 20 attached files"))
+    mock_api_client.upload_attachment = AsyncMock(
+        side_effect=APIError(422, "this conversation already has 20 attached files")
+    )
 
     with snackbars() as snackbar:
-        await view.on_attach_result(SimpleNamespace(files=[picked(tmp_path, "a.txt", b"x")]))
+        await view.attach_files([picked(tmp_path, "a.txt", b"x")])
 
     message = snackbar.call_args.args[1]
     assert "20 файла" in message and "1 MB" in message
@@ -365,25 +466,33 @@ async def test_a_refused_upload_says_why_in_bulgarian(view, mock_api_client, tmp
 
 
 @pytest.mark.asyncio
-async def test_a_file_that_vanished_or_has_no_path_is_handled(view, mock_api_client, tmp_path):
-    gone = SimpleNamespace(name="gone.txt", path=str(tmp_path / "gone.txt"))
-    web = SimpleNamespace(name="web.txt", path=None)
+async def test_a_file_that_vanished_or_has_no_path_is_handled(
+    view, mock_api_client, tmp_path
+):
+    gone = ft.FilePickerFile(
+        id=0, name="gone.txt", size=1, path=str(tmp_path / "gone.txt")
+    )
+    web = ft.FilePickerFile(id=1, name="web.txt", size=1, path=None)
 
     with snackbars() as snackbar:
-        await view.on_attach_result(SimpleNamespace(files=[gone, web]))
-        await view.on_attach_result(SimpleNamespace(files=None))
+        await view.attach_files([gone, web])
+        await view.attach_files(None)
 
     mock_api_client.upload_attachment.assert_not_awaited()
     assert "gone.txt: файлът не може да се прочете" in snackbar.call_args.args[1]
 
 
 @pytest.mark.asyncio
-async def test_the_cross_on_a_chip_removes_the_file_and_reads_the_list_again(view, mock_api_client):
+async def test_the_cross_on_a_chip_removes_the_file_and_reads_the_list_again(
+    view, mock_api_client
+):
     mock_api_client.list_attachments = AsyncMock(return_value=[attachment()])
     await view.load_attachments()
     mock_api_client.list_attachments = AsyncMock(return_value=[])
 
-    await view.on_attachment_delete(SimpleNamespace(control=view.attachments_row.controls[0]))
+    await view.on_attachment_delete(
+        SimpleNamespace(control=view.attachments_row.controls[0])
+    )
 
     mock_api_client.delete_attachment.assert_awaited_once_with("a1")
     assert chips(view) == []
@@ -391,11 +500,15 @@ async def test_the_cross_on_a_chip_removes_the_file_and_reads_the_list_again(vie
 
 @pytest.mark.asyncio
 async def test_a_file_that_was_gone_already_is_not_an_error(view, mock_api_client):
-    mock_api_client.delete_attachment = AsyncMock(side_effect=APIError(404, "attachment not found"))
+    mock_api_client.delete_attachment = AsyncMock(
+        side_effect=APIError(404, "attachment not found")
+    )
     mock_api_client.list_attachments = AsyncMock(return_value=[])
 
     with snackbars() as snackbar:
-        await view.on_attachment_delete(SimpleNamespace(control=SimpleNamespace(data="a1")))
+        await view.on_attachment_delete(
+            SimpleNamespace(control=SimpleNamespace(data="a1"))
+        )
 
     snackbar.assert_not_called()
     mock_api_client.list_attachments.assert_awaited()
@@ -405,10 +518,14 @@ async def test_a_file_that_was_gone_already_is_not_an_error(view, mock_api_clien
 async def test_a_failed_removal_says_so_and_keeps_the_chip(view, mock_api_client):
     mock_api_client.list_attachments = AsyncMock(return_value=[attachment()])
     await view.load_attachments()
-    mock_api_client.delete_attachment = AsyncMock(side_effect=httpx.ConnectError("down"))
+    mock_api_client.delete_attachment = AsyncMock(
+        side_effect=httpx.ConnectError("down")
+    )
 
     with snackbars() as snackbar:
-        await view.on_attachment_delete(SimpleNamespace(control=view.attachments_row.controls[0]))
+        await view.on_attachment_delete(
+            SimpleNamespace(control=view.attachments_row.controls[0])
+        )
 
     assert "не беше махнат" in snackbar.call_args.args[1]
     assert chips(view) == ["main.go · 9 реда"]
@@ -438,7 +555,9 @@ async def test_typing_never_asks(view, mock_api_client):
 
 
 @pytest.mark.asyncio
-async def test_a_big_paste_can_become_a_file_and_the_field_goes_back(view, mock_api_client):
+async def test_a_big_paste_can_become_a_file_and_the_field_goes_back(
+    view, mock_api_client
+):
     await type_text(view, "Намери грешката: ")
 
     with confirming(True) as dialog, snackbars():
@@ -447,8 +566,12 @@ async def test_a_big_paste_can_become_a_file_and_the_field_goes_back(view, mock_
     dialog.assert_awaited_once()
     assert "токена" in dialog.await_args.args[2]
     assert dialog.await_args.kwargs["destructive"] is False
-    mock_api_client.upload_attachment.assert_awaited_once_with(view.session_id, "paste_1.py", long_code())
-    assert view.input_field.value == "Намери грешката: ", "the question stays, the code is in the file"
+    mock_api_client.upload_attachment.assert_awaited_once_with(
+        view.session_id, "paste_1.py", long_code()
+    )
+    assert view.input_field.value == "Намери грешката: ", (
+        "the question stays, the code is in the file"
+    )
     assert view._input_text == "Намери грешката: "
 
 
@@ -465,7 +588,9 @@ async def test_a_paste_in_the_middle_is_taken_out_of_the_middle(view, mock_api_c
 
 
 @pytest.mark.asyncio
-async def test_a_paste_that_stays_in_the_message_is_not_asked_about_again(view, mock_api_client):
+async def test_a_paste_that_stays_in_the_message_is_not_asked_about_again(
+    view, mock_api_client
+):
     with confirming(False) as dialog:
         await type_text(view, long_code())
         await type_text(view, long_code() + " и още малко")
@@ -476,8 +601,12 @@ async def test_a_paste_that_stays_in_the_message_is_not_asked_about_again(view, 
 
 
 @pytest.mark.asyncio
-async def test_if_the_file_cannot_be_stored_the_text_stays_in_the_field(view, mock_api_client):
-    mock_api_client.upload_attachment = AsyncMock(side_effect=httpx.ConnectError("down"))
+async def test_if_the_file_cannot_be_stored_the_text_stays_in_the_field(
+    view, mock_api_client
+):
+    mock_api_client.upload_attachment = AsyncMock(
+        side_effect=httpx.ConnectError("down")
+    )
 
     with confirming(True), snackbars() as snackbar:
         await type_text(view, long_code())
@@ -487,7 +616,9 @@ async def test_if_the_file_cannot_be_stored_the_text_stays_in_the_field(view, mo
 
 
 @pytest.mark.asyncio
-async def test_the_name_of_a_pasted_file_does_not_clash_with_a_file_that_is_there(view, mock_api_client):
+async def test_the_name_of_a_pasted_file_does_not_clash_with_a_file_that_is_there(
+    view, mock_api_client
+):
     view.attachments = [attachment("paste_1.py")]
 
     with confirming(True), snackbars():
@@ -506,7 +637,9 @@ def too_long() -> str:
 
 
 @pytest.mark.asyncio
-async def test_a_message_over_the_limit_is_not_sent_but_offered_as_a_file(view, mock_api_client):
+async def test_a_message_over_the_limit_is_not_sent_but_offered_as_a_file(
+    view, mock_api_client
+):
     view.input_field.value = too_long()
     assert estimate_message_tokens(view.input_field.value.strip()) > MESSAGE_TOKEN_LIMIT
 
@@ -516,13 +649,18 @@ async def test_a_message_over_the_limit_is_not_sent_but_offered_as_a_file(view, 
     dialog.assert_awaited_once()
     assert "най-много се пращат 4000" in dialog.await_args.args[2]
     mock_api_client.stream_chat.assert_not_called()
-    assert mock_api_client.upload_attachment.await_args.args[2] == too_long().strip() or mock_api_client.upload_attachment.await_args.args[2] == too_long()
+    assert (
+        mock_api_client.upload_attachment.await_args.args[2] == too_long().strip()
+        or mock_api_client.upload_attachment.await_args.args[2] == too_long()
+    )
     assert view.input_field.value == "Виж прикачения файл paste_1.txt."
     assert view._is_streaming is False
 
 
 @pytest.mark.asyncio
-async def test_a_message_over_the_limit_that_the_user_keeps_is_not_sent_either(view, mock_api_client):
+async def test_a_message_over_the_limit_that_the_user_keeps_is_not_sent_either(
+    view, mock_api_client
+):
     view.input_field.value = too_long()
 
     with confirming(False):
@@ -542,24 +680,28 @@ async def test_a_message_of_exactly_the_limit_is_sent_as_it_is(view, mock_api_cl
     mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: stream(**kw))
     view.input_field.value = "a" * (MESSAGE_TOKEN_LIMIT * 4)
 
-    with confirming(True) as dialog, patch.object(ChatView, "uid", new_callable=PropertyMock, return_value="uid-1"):
+    with confirming(True) as dialog, mounted(ChatView):
         await view.send_message_click(None)
 
     dialog.assert_not_awaited()
     mock_api_client.stream_chat.assert_called_once()
     assert view.input_field.value == ""
-    assert view._input_text == "", "the remembered text follows the field, or the next paste is measured against old text"
+    assert view._input_text == "", (
+        "the remembered text follows the field, or the next paste is measured against old text"
+    )
 
 
 @pytest.mark.asyncio
-async def test_a_paste_right_after_sending_is_measured_against_an_empty_field(view, mock_api_client):
+async def test_a_paste_right_after_sending_is_measured_against_an_empty_field(
+    view, mock_api_client
+):
     async def stream(**_kwargs):
         yield "ok"
 
     mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: stream(**kw))
     view.input_field.value = "ред\n" * 1500  # a long message that was sent
     view._input_text = view.input_field.value
-    with patch.object(ChatView, "uid", new_callable=PropertyMock, return_value="uid-1"):
+    with mounted(ChatView):
         await view.send_message_click(None)
 
     with confirming(True) as dialog, snackbars():
@@ -569,7 +711,9 @@ async def test_a_paste_right_after_sending_is_measured_against_an_empty_field(vi
 
 
 @pytest.mark.asyncio
-async def test_an_unsent_text_comes_back_with_the_remembered_text(view, mock_api_client):
+async def test_an_unsent_text_comes_back_with_the_remembered_text(
+    view, mock_api_client
+):
     async def broken(**_kwargs):
         raise httpx.ConnectError("down")
         yield  # makes this an async generator, like the real stream
@@ -577,7 +721,7 @@ async def test_an_unsent_text_comes_back_with_the_remembered_text(view, mock_api
     mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: broken(**kw))
     view.input_field.value = "важен въпрос"
 
-    with patch.object(ChatView, "uid", new_callable=PropertyMock, return_value="uid-1"), snackbars():
+    with mounted(ChatView), snackbars():
         await view.send_message_click(None)
 
     assert view.input_field.value == "важен въпрос"
@@ -585,14 +729,18 @@ async def test_an_unsent_text_comes_back_with_the_remembered_text(view, mock_api
 
 
 @pytest.mark.asyncio
-async def test_a_second_big_change_while_the_question_is_open_does_not_open_another(view, mock_api_client):
+async def test_a_second_big_change_while_the_question_is_open_does_not_open_another(
+    view, mock_api_client
+):
     release = asyncio.Event()
 
     async def slow_dialog(*_args, **_kwargs):
         await release.wait()
         return False
 
-    with patch("views.chat.confirm_dialog", new=AsyncMock(side_effect=slow_dialog)) as dialog:
+    with patch(
+        "views.chat.confirm_dialog", new=AsyncMock(side_effect=slow_dialog)
+    ) as dialog:
         first = asyncio.create_task(type_text(view, long_code()))
         await asyncio.sleep(0)  # the first change has reached its question
         await type_text(view, long_code() + long_code())

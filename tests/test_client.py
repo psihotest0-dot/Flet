@@ -22,12 +22,16 @@ from api.client import (
 
 @pytest.fixture
 def client():
-    return APIClient(base_url="http://localhost:8080", user_id="123e4567-e89b-12d3-a456-426614174000")
+    return APIClient(
+        base_url="http://localhost:8080", user_id="123e4567-e89b-12d3-a456-426614174000"
+    )
 
 
 @pytest.mark.asyncio
 async def test_client_context_manager():
-    async with APIClient(base_url="http://localhost:8080", user_id="123e4567-e89b-12d3-a456-426614174000") as client:
+    async with APIClient(
+        base_url="http://localhost:8080", user_id="123e4567-e89b-12d3-a456-426614174000"
+    ) as client:
         assert client.client.is_closed is False
     assert client.client.is_closed is True
 
@@ -35,8 +39,12 @@ async def test_client_context_manager():
 @respx.mock
 @pytest.mark.asyncio
 async def test_set_base_url_sends_the_next_requests_to_the_new_address(client):
-    old = respx.get("http://localhost:8080/healthz").mock(return_value=httpx.Response(200))
-    new = respx.get("http://127.0.0.1:9000/healthz").mock(return_value=httpx.Response(200))
+    old = respx.get("http://localhost:8080/healthz").mock(
+        return_value=httpx.Response(200)
+    )
+    new = respx.get("http://127.0.0.1:9000/healthz").mock(
+        return_value=httpx.Response(200)
+    )
 
     client.set_base_url("http://127.0.0.1:9000")
 
@@ -66,11 +74,11 @@ async def test_check_health_failure(client):
 @respx.mock
 @pytest.mark.asyncio
 async def test_check_health_timeout(client):
-    respx.get("http://localhost:8080/healthz").mock(side_effect=httpx.TimeoutException("Timeout"))
+    respx.get("http://localhost:8080/healthz").mock(
+        side_effect=httpx.TimeoutException("Timeout")
+    )
     result = await client.check_health()
     assert result is False
-
-
 
 
 @respx.mock
@@ -84,7 +92,9 @@ async def test_check_health_failure_status(client):
 @respx.mock
 @pytest.mark.asyncio
 async def test_check_health_exception(client):
-    respx.get("http://localhost:8080/healthz").mock(side_effect=httpx.ConnectError("Connection refused"))
+    respx.get("http://localhost:8080/healthz").mock(
+        side_effect=httpx.ConnectError("Connection refused")
+    )
     result = await client.check_health()
     assert result is False
 
@@ -102,9 +112,11 @@ async def test_upload_file_success(client):
         "status": "uploaded",
         "local_path": "/tmp/test.txt",
         "created_at": "2023-01-01T00:00:00Z",
-        "updated_at": "2023-01-01T00:00:00Z"
+        "updated_at": "2023-01-01T00:00:00Z",
     }
-    respx.post("http://localhost:8080/v1/files").mock(return_value=httpx.Response(201, json=mock_response))
+    respx.post("http://localhost:8080/v1/files").mock(
+        return_value=httpx.Response(201, json=mock_response)
+    )
 
     result = await client.upload_file(b"test content", "test.txt", "text/plain")
 
@@ -118,7 +130,12 @@ async def test_upload_file_success(client):
 @respx.mock
 @pytest.mark.asyncio
 async def test_upload_file_conflict(client):
-    respx.post("http://localhost:8080/v1/files").mock(return_value=httpx.Response(409, json={"id": "conflict_id", "file_name": "test.txt", "status": "completed"}))
+    respx.post("http://localhost:8080/v1/files").mock(
+        return_value=httpx.Response(
+            409,
+            json={"id": "conflict_id", "file_name": "test.txt", "status": "completed"},
+        )
+    )
 
     result = await client.upload_file(b"test content", "test.txt")
     assert result.duplicate is True
@@ -136,7 +153,9 @@ async def test_upload_file_too_large(client):
 @respx.mock
 @pytest.mark.asyncio
 async def test_upload_file_server_error(client):
-    respx.post("http://localhost:8080/v1/files").mock(return_value=httpx.Response(500, json={"error": "Internal Server Error"}))
+    respx.post("http://localhost:8080/v1/files").mock(
+        return_value=httpx.Response(500, json={"error": "Internal Server Error"})
+    )
 
     with pytest.raises(APIError) as exc_info:
         await client.upload_file(b"test content", "test.txt", "text/plain")
@@ -146,7 +165,9 @@ async def test_upload_file_server_error(client):
 @respx.mock
 @pytest.mark.asyncio
 async def test_delete_file_success(client):
-    respx.delete("http://localhost:8080/v1/files/123e4567-e89b-12d3-a456-426614174001").mock(return_value=httpx.Response(204))
+    respx.delete(
+        "http://localhost:8080/v1/files/123e4567-e89b-12d3-a456-426614174001"
+    ).mock(return_value=httpx.Response(204))
 
     await client.delete_file("123e4567-e89b-12d3-a456-426614174001")
 
@@ -154,14 +175,17 @@ async def test_delete_file_success(client):
 @respx.mock
 @pytest.mark.asyncio
 async def test_delete_session_sends_the_user_and_the_session(client):
-    route = respx.delete("http://localhost:8080/chat/sessions/11111111-1111-1111-1111-111111111111").mock(
-        return_value=httpx.Response(204)
-    )
+    route = respx.delete(
+        "http://localhost:8080/chat/sessions/11111111-1111-1111-1111-111111111111"
+    ).mock(return_value=httpx.Response(204))
 
     await client.delete_session("11111111-1111-1111-1111-111111111111")
 
     assert route.called
-    assert route.calls.last.request.headers["X-User-ID"] == "123e4567-e89b-12d3-a456-426614174000"
+    assert (
+        route.calls.last.request.headers["X-User-ID"]
+        == "123e4567-e89b-12d3-a456-426614174000"
+    )
 
 
 @respx.mock
@@ -201,7 +225,9 @@ async def test_delete_session_escapes_the_id_and_reports_a_refusal(client):
 @respx.mock
 @pytest.mark.asyncio
 async def test_delete_file_not_found(client):
-    respx.delete("http://localhost:8080/v1/files/123e4567-e89b-12d3-a456-426614174001").mock(return_value=httpx.Response(404))
+    respx.delete(
+        "http://localhost:8080/v1/files/123e4567-e89b-12d3-a456-426614174001"
+    ).mock(return_value=httpx.Response(404))
 
     with pytest.raises(APIError) as exc_info:
         await client.delete_file("123e4567-e89b-12d3-a456-426614174001")
@@ -216,16 +242,18 @@ async def test_list_files_success(client):
             "id": "123e4567-e89b-12d3-a456-426614174001",
             "user_id": "123e4567-e89b-12d3-a456-426614174000",
             "file_name": "test1.txt",
-            "status": "uploaded"
+            "status": "uploaded",
         },
         {
             "id": "123e4567-e89b-12d3-a456-426614174002",
             "user_id": "123e4567-e89b-12d3-a456-426614174000",
             "file_name": "test2.txt",
-            "status": "processing"
-        }
+            "status": "processing",
+        },
     ]
-    respx.get("http://localhost:8080/v1/files").mock(return_value=httpx.Response(200, json=mock_response))
+    respx.get("http://localhost:8080/v1/files").mock(
+        return_value=httpx.Response(200, json=mock_response)
+    )
 
     result = await client.list_files()
 
@@ -284,9 +312,11 @@ async def test_get_file_status_success(client):
         "id": "123e4567-e89b-12d3-a456-426614174001",
         "user_id": "123e4567-e89b-12d3-a456-426614174000",
         "file_name": "test.txt",
-        "status": "processing"
+        "status": "processing",
     }
-    respx.get("http://localhost:8080/v1/files/123e4567-e89b-12d3-a456-426614174001").mock(return_value=httpx.Response(200, json=mock_response))
+    respx.get(
+        "http://localhost:8080/v1/files/123e4567-e89b-12d3-a456-426614174001"
+    ).mock(return_value=httpx.Response(200, json=mock_response))
 
     result = await client.get_file_status("123e4567-e89b-12d3-a456-426614174001")
 
@@ -303,11 +333,15 @@ async def test_update_file_category_success(client):
         "user_id": "123e4567-e89b-12d3-a456-426614174000",
         "file_name": "test.txt",
         "category": "medicine",
-        "manual_override": True
+        "manual_override": True,
     }
-    respx.patch("http://localhost:8080/v1/files/123e4567-e89b-12d3-a456-426614174001/category").mock(return_value=httpx.Response(200, json=mock_response))
+    respx.patch(
+        "http://localhost:8080/v1/files/123e4567-e89b-12d3-a456-426614174001/category"
+    ).mock(return_value=httpx.Response(200, json=mock_response))
 
-    result = await client.update_file_category("123e4567-e89b-12d3-a456-426614174001", "medicine")
+    result = await client.update_file_category(
+        "123e4567-e89b-12d3-a456-426614174001", "medicine"
+    )
 
     assert isinstance(result, IngestedFile)
     assert result.id == "123e4567-e89b-12d3-a456-426614174001"
@@ -318,10 +352,14 @@ async def test_update_file_category_success(client):
 @respx.mock
 @pytest.mark.asyncio
 async def test_update_file_category_not_found(client):
-    respx.patch("http://localhost:8080/v1/files/123e4567-e89b-12d3-a456-426614174001/category").mock(return_value=httpx.Response(404))
+    respx.patch(
+        "http://localhost:8080/v1/files/123e4567-e89b-12d3-a456-426614174001/category"
+    ).mock(return_value=httpx.Response(404))
 
     with pytest.raises(APIError) as exc_info:
-        await client.update_file_category("123e4567-e89b-12d3-a456-426614174001", "medicine")
+        await client.update_file_category(
+            "123e4567-e89b-12d3-a456-426614174001", "medicine"
+        )
     assert exc_info.value.status == 404
 
 
@@ -335,9 +373,11 @@ async def test_create_memory_success(client):
         "status": "candidate",
         "importance": 1,
         "created_at": "2023-01-01T00:00:00Z",
-        "updated_at": "2023-01-01T00:00:00Z"
+        "updated_at": "2023-01-01T00:00:00Z",
     }
-    respx.post("http://localhost:8080/memories").mock(return_value=httpx.Response(201, json=mock_response))
+    respx.post("http://localhost:8080/memories").mock(
+        return_value=httpx.Response(201, json=mock_response)
+    )
 
     result = await client.create_memory("This is a memory")
 
@@ -345,23 +385,30 @@ async def test_create_memory_success(client):
     assert result.id == "123e4567-e89b-12d3-a456-426614174001"
     assert result.content == "This is a memory"
 
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_create_memory_conflict(client):
-    respx.post("http://localhost:8080/memories").mock(return_value=httpx.Response(409, json={"error": "Conflict"}))
+    respx.post("http://localhost:8080/memories").mock(
+        return_value=httpx.Response(409, json={"error": "Conflict"})
+    )
 
     with pytest.raises(APIError) as exc_info:
         await client.create_memory("This is a memory")
     assert exc_info.value.status == 409
 
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_create_memory_server_error(client):
-    respx.post("http://localhost:8080/memories").mock(return_value=httpx.Response(500, json={"error": "Internal Server Error"}))
+    respx.post("http://localhost:8080/memories").mock(
+        return_value=httpx.Response(500, json={"error": "Internal Server Error"})
+    )
 
     with pytest.raises(APIError) as exc_info:
         await client.create_memory("This is a memory")
     assert exc_info.value.status == 500
+
 
 @respx.mock
 @pytest.mark.asyncio
@@ -371,16 +418,18 @@ async def test_list_memories_success(client):
             "id": "123e4567-e89b-12d3-a456-426614174001",
             "user_id": "123e4567-e89b-12d3-a456-426614174000",
             "content": "Memory 1",
-            "status": "candidate"
+            "status": "candidate",
         },
         {
             "id": "123e4567-e89b-12d3-a456-426614174002",
             "user_id": "123e4567-e89b-12d3-a456-426614174000",
             "content": "Memory 2",
-            "status": "active"
-        }
+            "status": "active",
+        },
     ]
-    respx.get("http://localhost:8080/memories").mock(return_value=httpx.Response(200, json=mock_response))
+    respx.get("http://localhost:8080/memories").mock(
+        return_value=httpx.Response(200, json=mock_response)
+    )
 
     result = await client.list_memories()
 
@@ -388,6 +437,7 @@ async def test_list_memories_success(client):
     assert isinstance(result[0], Memory)
     assert result[0].content == "Memory 1"
     assert result[1].content == "Memory 2"
+
 
 @respx.mock
 @pytest.mark.asyncio
@@ -397,22 +447,25 @@ async def test_list_memories_filtered(client):
             "id": "123e4567-e89b-12d3-a456-426614174001",
             "user_id": "123e4567-e89b-12d3-a456-426614174000",
             "content": "Memory 1",
-            "status": "candidate"
+            "status": "candidate",
         },
         {
             "id": "123e4567-e89b-12d3-a456-426614174002",
             "user_id": "123e4567-e89b-12d3-a456-426614174000",
             "content": "Memory 2",
-            "status": "active"
-        }
+            "status": "active",
+        },
     ]
-    respx.get("http://localhost:8080/memories?status=active").mock(return_value=httpx.Response(200, json=[mock_response[1]]))
+    respx.get("http://localhost:8080/memories?status=active").mock(
+        return_value=httpx.Response(200, json=[mock_response[1]])
+    )
 
     result = await client.list_memories(status="active")
 
     assert len(result) == 1
     assert isinstance(result[0], Memory)
     assert result[0].content == "Memory 2"
+
 
 @respx.mock
 @pytest.mark.asyncio
@@ -422,41 +475,63 @@ async def test_update_memory_success(client):
         "user_id": "123e4567-e89b-12d3-a456-426614174000",
         "content": "Updated memory",
         "status": "active",
-        "importance": 2
+        "importance": 2,
     }
-    respx.put("http://localhost:8080/memories/123e4567-e89b-12d3-a456-426614174001").mock(return_value=httpx.Response(200, json=mock_response))
+    respx.put(
+        "http://localhost:8080/memories/123e4567-e89b-12d3-a456-426614174001"
+    ).mock(return_value=httpx.Response(200, json=mock_response))
 
-    result = await client.update_memory("123e4567-e89b-12d3-a456-426614174001", content="Updated memory", status="active", importance=2)
+    result = await client.update_memory(
+        "123e4567-e89b-12d3-a456-426614174001",
+        content="Updated memory",
+        status="active",
+        importance=2,
+    )
 
     assert isinstance(result, Memory)
     assert result.content == "Updated memory"
     assert result.status == "active"
     assert result.importance == 2
 
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_update_memory_not_found(client):
-    respx.put("http://localhost:8080/memories/123e4567-e89b-12d3-a456-426614174001").mock(return_value=httpx.Response(404))
+    respx.put(
+        "http://localhost:8080/memories/123e4567-e89b-12d3-a456-426614174001"
+    ).mock(return_value=httpx.Response(404))
 
     with pytest.raises(APIError) as exc_info:
-        await client.update_memory("123e4567-e89b-12d3-a456-426614174001", content="Updated memory", status="active", importance=2)
+        await client.update_memory(
+            "123e4567-e89b-12d3-a456-426614174001",
+            content="Updated memory",
+            status="active",
+            importance=2,
+        )
     assert exc_info.value.status == 404
+
 
 @respx.mock
 @pytest.mark.asyncio
 async def test_delete_memory_success(client):
-    respx.delete("http://localhost:8080/memories/123e4567-e89b-12d3-a456-426614174001").mock(return_value=httpx.Response(204))
+    respx.delete(
+        "http://localhost:8080/memories/123e4567-e89b-12d3-a456-426614174001"
+    ).mock(return_value=httpx.Response(204))
 
     await client.delete_memory("123e4567-e89b-12d3-a456-426614174001")
+
 
 @respx.mock
 @pytest.mark.asyncio
 async def test_delete_memory_not_found(client):
-    respx.delete("http://localhost:8080/memories/123e4567-e89b-12d3-a456-426614174001").mock(return_value=httpx.Response(404))
+    respx.delete(
+        "http://localhost:8080/memories/123e4567-e89b-12d3-a456-426614174001"
+    ).mock(return_value=httpx.Response(404))
 
     with pytest.raises(APIError) as exc_info:
         await client.delete_memory("123e4567-e89b-12d3-a456-426614174001")
     assert exc_info.value.status == 404
+
 
 @respx.mock
 @pytest.mark.asyncio
@@ -465,9 +540,13 @@ async def test_stream_chat_success(client):
     async def sse_stream():
         yield b'data: {"content": "Hello"}\n\n'
         yield b'data: {"source": "Doc 1"}\n\n'
-        yield b'data: [DONE]\n\n'
+        yield b"data: [DONE]\n\n"
 
-    respx.post("http://localhost:8080/chat/stream").mock(return_value=httpx.Response(200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}))
+    respx.post("http://localhost:8080/chat/stream").mock(
+        return_value=httpx.Response(
+            200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}
+        )
+    )
 
     generator = client.stream_chat(session_id="session-123", content="Hi")
     results = [item async for item in generator]
@@ -476,21 +555,30 @@ async def test_stream_chat_success(client):
     assert results[0] == {"content": "Hello"}
     assert results[1] == {"source": "Doc 1"}
 
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_stream_chat_sends_the_user_header(client):
     async def sse_stream():
         yield b'data: {"content": "Hello"}\n\n'
-        yield b'data: [DONE]\n\n'
+        yield b"data: [DONE]\n\n"
 
     route = respx.post("http://localhost:8080/chat/stream").mock(
-        return_value=httpx.Response(200, content=sse_stream(), headers={"Content-Type": "text/event-stream"})
+        return_value=httpx.Response(
+            200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}
+        )
     )
 
-    _ = [item async for item in client.stream_chat(session_id="session-123", content="Hi")]
+    _ = [
+        item
+        async for item in client.stream_chat(session_id="session-123", content="Hi")
+    ]
 
     # The header is set once on the httpx client, so the SSE request must carry it too.
-    assert route.calls.last.request.headers["X-User-ID"] == "123e4567-e89b-12d3-a456-426614174000"
+    assert (
+        route.calls.last.request.headers["X-User-ID"]
+        == "123e4567-e89b-12d3-a456-426614174000"
+    )
 
 
 @respx.mock
@@ -500,10 +588,14 @@ async def test_stream_chat_error(client):
 
     async def sse_stream():
         yield b'data: {"content": "Hello"}\n\n'
-        yield b'event: error\n'
-        yield b'data: Something went wrong\n\n'
+        yield b"event: error\n"
+        yield b"data: Something went wrong\n\n"
 
-    respx.post("http://localhost:8080/chat/stream").mock(return_value=httpx.Response(200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}))
+    respx.post("http://localhost:8080/chat/stream").mock(
+        return_value=httpx.Response(
+            200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}
+        )
+    )
 
     generator = client.stream_chat(session_id="session-123", content="Hi")
 
@@ -512,10 +604,13 @@ async def test_stream_chat_error(client):
 
     assert str(exc_info.value) == "Something went wrong"
 
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_stream_chat_http_error(client):
-    respx.post("http://localhost:8080/chat/stream").mock(return_value=httpx.Response(500, json={"error": "Internal Error"}))
+    respx.post("http://localhost:8080/chat/stream").mock(
+        return_value=httpx.Response(500, json={"error": "Internal Error"})
+    )
 
     generator = client.stream_chat(session_id="session-123", content="Hi")
     with pytest.raises(APIError) as exc_info:
@@ -523,16 +618,21 @@ async def test_stream_chat_http_error(client):
             pass
     assert exc_info.value.status == 500
 
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_stream_chat_json_decode_error(client):
     async def sse_stream():
-        yield b'data: invalid_json\n\n'
-        yield b'event: sources\n'
-        yield b'data: invalid_sources_json\n\n'
-        yield b'data: [DONE]\n\n'
+        yield b"data: invalid_json\n\n"
+        yield b"event: sources\n"
+        yield b"data: invalid_sources_json\n\n"
+        yield b"data: [DONE]\n\n"
 
-    respx.post("http://localhost:8080/chat/stream").mock(return_value=httpx.Response(200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}))
+    respx.post("http://localhost:8080/chat/stream").mock(
+        return_value=httpx.Response(
+            200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}
+        )
+    )
 
     generator = client.stream_chat(session_id="session-123", content="Hi")
     results = [item async for item in generator]
@@ -671,7 +771,9 @@ async def test_category_error_shows_the_backend_text(client):
 @pytest.mark.asyncio
 async def test_stream_error_status_carries_the_backend_text(client):
     respx.post("http://localhost:8080/chat/regenerate").mock(
-        return_value=httpx.Response(400, text="no user message found to regenerate from\n")
+        return_value=httpx.Response(
+            400, text="no user message found to regenerate from\n"
+        )
     )
 
     with pytest.raises(APIError) as exc_info:
@@ -680,7 +782,6 @@ async def test_stream_error_status_carries_the_backend_text(client):
 
     assert exc_info.value.status == 400
     assert exc_info.value.message == "no user message found to regenerate from"
-
 
 
 @pytest.fixture
@@ -704,7 +805,9 @@ async def test_get_does_not_repeat_a_rejected_request(client, no_retry_delay):
     # A 4xx is final: one request, and the backend's text instead of a RetryError.
     assert route.call_count == 1
     assert exc_info.value.status == 400
-    assert exc_info.value.message == "status must be one of: candidate, active, superseded"
+    assert (
+        exc_info.value.message == "status must be one of: candidate, active, superseded"
+    )
 
 
 @respx.mock
@@ -790,14 +893,33 @@ async def test_create_memory_always_sends_a_valid_importance(client):
 
 @pytest.mark.parametrize(
     "name",
-    ["a.txt", "A.PDF", "book.epub", "scan.TIFF", "photo.jpeg", "notes.md", "table.xlsx", "page.htm"],
+    [
+        "a.txt",
+        "A.PDF",
+        "book.epub",
+        "scan.TIFF",
+        "photo.jpeg",
+        "notes.md",
+        "table.xlsx",
+        "page.htm",
+    ],
 )
 def test_supported_files(name):
     assert is_supported_file(name)
 
 
 @pytest.mark.parametrize(
-    "name", ["old.doc", "text.rtf", "slides.pptx", "archive.zip", "noextension", ".txt.bak", "logo.svg", ""]
+    "name",
+    [
+        "old.doc",
+        "text.rtf",
+        "slides.pptx",
+        "archive.zip",
+        "noextension",
+        ".txt.bak",
+        "logo.svg",
+        "",
+    ],
 )
 def test_unsupported_files(name):
     assert not is_supported_file(name)
@@ -828,7 +950,9 @@ async def test_refused_request_is_logged_with_method_path_and_status(client, cap
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_server_error_is_logged_as_an_error_and_without_the_query(client, caplog, no_retry_delay):
+async def test_server_error_is_logged_as_an_error_and_without_the_query(
+    client, caplog, no_retry_delay
+):
     respx.get("http://localhost:8080/messages").mock(return_value=httpx.Response(503))
 
     with caplog.at_level(logging.WARNING, logger="api.client"), pytest.raises(APIError):
@@ -858,9 +982,13 @@ async def test_repeated_request_is_logged(client, caplog, no_retry_delay):
 @pytest.mark.asyncio
 async def test_changes_are_logged_without_the_text_of_the_memory(client, caplog):
     respx.post("http://localhost:8080/memories").mock(
-        return_value=httpx.Response(201, json={"id": "m1", "content": "my private fact"})
+        return_value=httpx.Response(
+            201, json={"id": "m1", "content": "my private fact"}
+        )
     )
-    respx.delete("http://localhost:8080/memories/m1").mock(return_value=httpx.Response(204))
+    respx.delete("http://localhost:8080/memories/m1").mock(
+        return_value=httpx.Response(204)
+    )
 
     with caplog.at_level(logging.INFO, logger="api.client"):
         await client.create_memory("my private fact", importance=7)
@@ -890,13 +1018,20 @@ def _sse_response(*frames: bytes) -> httpx.Response:
         for frame in frames:
             yield frame
 
-    return httpx.Response(200, content=body(), headers={"Content-Type": "text/event-stream"})
+    return httpx.Response(
+        200, content=body(), headers={"Content-Type": "text/event-stream"}
+    )
 
 
 @pytest.mark.parametrize(
     ("method", "path", "args", "sent"),
     [
-        ("stream_chat", "/chat/stream", ("s1", "Hi"), {"session_id": "s1", "content": "Hi"}),
+        (
+            "stream_chat",
+            "/chat/stream",
+            ("s1", "Hi"),
+            {"session_id": "s1", "content": "Hi"},
+        ),
         ("regenerate_chat", "/chat/regenerate", ("s1",), {"session_id": "s1"}),
     ],
 )
@@ -954,7 +1089,9 @@ async def test_stream_chunk_with_an_error_key_raises(client):
 @pytest.mark.asyncio
 async def test_stream_chunk_that_is_not_an_object_does_not_crash(client):
     respx.post("http://localhost:8080/chat/stream").mock(
-        return_value=_sse_response(b"data: 123\n\n", b'data: "text"\n\n', b"data: [DONE]\n\n")
+        return_value=_sse_response(
+            b"data: 123\n\n", b'data: "text"\n\n', b"data: [DONE]\n\n"
+        )
     )
 
     assert [item async for item in client.stream_chat("s1", "Hi")] == [123, "text"]
@@ -964,7 +1101,9 @@ async def test_stream_chunk_that_is_not_an_object_does_not_crash(client):
 @pytest.mark.asyncio
 async def test_undecodable_frame_is_logged_by_size_not_by_content(client, caplog):
     respx.post("http://localhost:8080/chat/stream").mock(
-        return_value=_sse_response(b"data: private words of the answer\n\n", b"data: [DONE]\n\n")
+        return_value=_sse_response(
+            b"data: private words of the answer\n\n", b"data: [DONE]\n\n"
+        )
     )
 
     with caplog.at_level(logging.ERROR, logger="api.client"):
@@ -979,10 +1118,15 @@ async def test_undecodable_frame_is_logged_by_size_not_by_content(client, caplog
 @pytest.mark.asyncio
 async def test_refused_stream_request_is_logged_and_raised(client, caplog):
     respx.post("http://localhost:8080/chat/regenerate").mock(
-        return_value=httpx.Response(400, text="no user message found to regenerate from\n")
+        return_value=httpx.Response(
+            400, text="no user message found to regenerate from\n"
+        )
     )
 
-    with caplog.at_level(logging.WARNING, logger="api.client"), pytest.raises(APIError) as exc_info:
+    with (
+        caplog.at_level(logging.WARNING, logger="api.client"),
+        pytest.raises(APIError) as exc_info,
+    ):
         [item async for item in client.regenerate_chat("s1")]
 
     assert exc_info.value.status == 400

@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import uuid
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import flet as ft
 import httpx
 import pytest
+from helpers import mounted
 
 from api.client import (
     SUPPORTED_EXTENSIONS,
@@ -27,13 +28,6 @@ from views.chat import (
 )
 from views.files import FilesView, embedding_state
 from views.memory import MemoryView
-
-
-def mounted(view_class):
-    """Pretend the view is attached to a page (``Control.uid`` is read-only)."""
-    return patch.object(
-        view_class, "uid", new_callable=PropertyMock, return_value="uid-1"
-    )
 
 
 @pytest.fixture
@@ -65,8 +59,6 @@ async def test_memory_view_did_mount(mock_page, mock_api_client):
 async def test_files_view_did_mount(mock_page, mock_api_client):
     view = FilesView(mock_page, mock_api_client)
     view.did_mount()
-    # file picker should be in overlay
-    assert view.file_picker in mock_page.overlay
     mock_page.run_task.assert_any_call(view.initial_load)
 
 
@@ -76,7 +68,8 @@ async def test_files_view_polls_only_when_tab_is_active(mock_page, mock_api_clie
     view.did_mount()
 
     poll_calls = [
-        call for call in mock_page.run_task.call_args_list
+        call
+        for call in mock_page.run_task.call_args_list
         if call.args and call.args[0] == view.poll_statuses
     ]
     assert poll_calls == []
@@ -172,9 +165,10 @@ async def test_load_history_failure_of_a_left_chat_is_not_shown(
 
 @pytest.mark.asyncio
 async def test_new_chat_warns_when_the_settings_cannot_be_saved(chat_view):
-    with patch("views.chat.save_settings", return_value=False), patch(
-        "views.chat.show_snackbar"
-    ) as snackbar:
+    with (
+        patch("views.chat.save_settings", return_value=False),
+        patch("views.chat.show_snackbar") as snackbar,
+    ):
         await chat_view.on_new_chat_click(None)
 
     snackbar.assert_called_once()
@@ -268,27 +262,35 @@ async def test_load_history_keeps_the_sources_of_stored_answers(
     assert question.sources == []
     assert answer.sources == STORED_SOURCES
 
-    answer.did_mount()
+    # Drawn with the message itself, without an update of its own.
     assert answer.sources_row.visible is True
     chips = [c for c in answer.sources_row.controls if isinstance(c, ft.Chip)]
     assert [chip.label.value for chip in chips] == ["book.pdf"]
     # A message without references keeps its source row hidden.
-    question.did_mount()
     assert question.sources_row.visible is False
 
 
 @pytest.mark.asyncio
-async def test_sources_of_a_second_frame_join_the_first_ones(chat_view, mock_api_client):
+async def test_sources_of_a_second_frame_join_the_first_ones(
+    chat_view, mock_api_client
+):
     # The backend sends the sources of the prompt first, and the passages the model
     # found with a tool while it answered in a second "sources" frame, with only the
     # new ones (the same contract as docs/openapi.yaml, /chat/stream).
     summary = {
-        "chunk_id": "s1", "file_name": "summary.pdf", "content_snippet": "Резюме на книгата.",
-        "score": 0.12, "score_type": "distance", "source_type": "concept",
+        "chunk_id": "s1",
+        "file_name": "summary.pdf",
+        "content_snippet": "Резюме на книгата.",
+        "score": 0.12,
+        "score_type": "distance",
+        "source_type": "concept",
     }
     passage = {
-        "chunk_id": "p1", "file_name": "book.pdf", "content_snippet": "Откъс от книгата.",
-        "score": 0, "source_type": "text",
+        "chunk_id": "p1",
+        "file_name": "book.pdf",
+        "content_snippet": "Откъс от книгата.",
+        "score": 0,
+        "source_type": "text",
     }
 
     async def fake_stream(**_kwargs):
@@ -355,7 +357,9 @@ async def test_send_message_resets_state_after_stream_error(chat_view, mock_api_
         raise RuntimeError("boom")
         yield  # pragma: no cover
 
-    mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: failing_stream(**kw))
+    mock_api_client.stream_chat = MagicMock(
+        side_effect=lambda **kw: failing_stream(**kw)
+    )
     chat_view.input_field.value = "hi"
 
     with mounted(ChatView):
@@ -403,7 +407,7 @@ async def test_stream_error_is_shown_as_red_text_not_html(chat_view, mock_api_cl
     assert answer.error_text in answer.controls
     assert answer.error_text.visible is True
     assert answer.error_text.value == "Нещо се обърка. Опитай отново."
-    assert answer.error_text.color == ft.colors.RED
+    assert answer.error_text.color == ft.Colors.RED
     # The backend already stored the user's turn: it is not put back in the input.
     assert chat_view.input_field.value == ""
 
@@ -436,7 +440,7 @@ async def test_chat_tells_the_kinds_of_failure_apart(
     answer = chat_messages(chat_view)[-1]
     assert answer.error_text.visible is True
     assert expected in answer.error_text.value
-    assert answer.error_text.color == ft.colors.RED
+    assert answer.error_text.color == ft.Colors.RED
     assert chat_view.input_field.value == ("hi" if input_is_restored else "")
 
 
@@ -587,7 +591,9 @@ def test_chat_view_opens_the_saved_session(mock_page, mock_api_client):
     assert load_settings().session_id == CHAT_2
 
 
-def test_chat_view_reuses_stored_chat_when_session_id_is_missing(mock_page, mock_api_client):
+def test_chat_view_reuses_stored_chat_when_session_id_is_missing(
+    mock_page, mock_api_client
+):
     # A settings.json without the active id must not mint a brand new session.
     seed_chat_sessions(session_id=None)
 
@@ -602,7 +608,9 @@ def test_chat_view_reuses_stored_chat_when_session_id_is_missing(mock_page, mock
     ]
 
 
-def test_chat_view_keeps_a_session_missing_from_chat_sessions(mock_page, mock_api_client):
+def test_chat_view_keeps_a_session_missing_from_chat_sessions(
+    mock_page, mock_api_client
+):
     save_settings(
         Settings(
             user_id="user-1",
@@ -618,11 +626,15 @@ def test_chat_view_keeps_a_session_missing_from_chat_sessions(mock_page, mock_ap
     assert len(load_settings().chat_sessions) == 2
 
 
-def test_chat_entry_without_an_id_is_rebound_to_the_active_session(mock_page, mock_api_client):
+def test_chat_entry_without_an_id_is_rebound_to_the_active_session(
+    mock_page, mock_api_client
+):
     # A broken write leaves the active chat without an id; it must be kept and
     # rebound to the saved session_id instead of being replaced by a new one.
     save_settings(
-        Settings(user_id="user-1", session_id="legacy", chat_sessions=[{"name": "Чат 1"}])
+        Settings(
+            user_id="user-1", session_id="legacy", chat_sessions=[{"name": "Чат 1"}]
+        )
     )
 
     view = make_chat_view(mock_page, mock_api_client)
@@ -720,7 +732,9 @@ async def test_session_change_prefers_the_event_value(mock_page, mock_api_client
 
 
 @pytest.mark.asyncio
-async def test_session_change_maps_a_chat_name_to_its_saved_id(mock_page, mock_api_client):
+async def test_session_change_maps_a_chat_name_to_its_saved_id(
+    mock_page, mock_api_client
+):
     # Legacy option keyed by the label instead of the session id.
     seed_chat_sessions(session_id=CHAT_1)
     view = make_chat_view(mock_page, mock_api_client)
@@ -735,11 +749,15 @@ async def test_session_change_maps_a_chat_name_to_its_saved_id(mock_page, mock_a
 
 
 @pytest.mark.asyncio
-async def test_session_change_creates_id_only_for_an_unknown_chat(mock_page, mock_api_client):
+async def test_session_change_creates_id_only_for_an_unknown_chat(
+    mock_page, mock_api_client
+):
     seed_chat_sessions(session_id=CHAT_1)
     view = make_chat_view(mock_page, mock_api_client)
 
-    await view.on_session_change(SimpleNamespace(control=SimpleNamespace(value="Нов чат")))
+    await view.on_session_change(
+        SimpleNamespace(control=SimpleNamespace(value="Нов чат"))
+    )
 
     saved = load_settings()
     created = [chat for chat in saved.chat_sessions if chat["name"] == "Нов чат"]
@@ -750,7 +768,9 @@ async def test_session_change_creates_id_only_for_an_unknown_chat(mock_page, moc
 
 
 @pytest.mark.asyncio
-async def test_session_change_notifies_the_app_and_same_chat_is_a_noop(mock_page, mock_api_client):
+async def test_session_change_notifies_the_app_and_same_chat_is_a_noop(
+    mock_page, mock_api_client
+):
     seed_chat_sessions(session_id=CHAT_1)
     changes: list[str] = []
     view = make_chat_view(mock_page, mock_api_client, on_session_changed=changes.append)
@@ -829,7 +849,7 @@ async def test_poll_updates_status_and_embedding_cells(mock_page, mock_api_clien
     safe_update_mock.assert_called_once_with(view, status_cell, embedding_cell)
     assert status_cell.value == "completed"
     assert embedding_cell.value == "Готово · 7 части"
-    assert embedding_cell.color == ft.colors.GREEN
+    assert embedding_cell.color == ft.Colors.GREEN
     assert view.data_table.rows is rows_before
     assert view.files[0].status == "completed"
     assert view.files[0].chunk_count == 7
@@ -859,11 +879,17 @@ def _category_event(value):
 
 
 @pytest.mark.asyncio
-async def test_category_change_is_sent_to_the_backend_and_kept(mock_page, mock_api_client):
-    file = IngestedFile(id="f1", file_name="a.txt", status="completed", category="general")
+async def test_category_change_is_sent_to_the_backend_and_kept(
+    mock_page, mock_api_client
+):
+    file = IngestedFile(
+        id="f1", file_name="a.txt", status="completed", category="general"
+    )
     view = _files_view(mock_page, mock_api_client, [file])
     mock_api_client.update_file_category = AsyncMock(
-        return_value=file.model_copy(update={"category": "philosophy", "manual_override": True})
+        return_value=file.model_copy(
+            update={"category": "philosophy", "manual_override": True}
+        )
     )
     event = _category_event("philosophy")
 
@@ -878,13 +904,22 @@ async def test_category_change_is_sent_to_the_backend_and_kept(mock_page, mock_a
 
 
 @pytest.mark.asyncio
-async def test_refused_category_change_puts_the_saved_category_back(mock_page, mock_api_client):
-    file = IngestedFile(id="f1", file_name="a.txt", status="completed", category="general")
+async def test_refused_category_change_puts_the_saved_category_back(
+    mock_page, mock_api_client
+):
+    file = IngestedFile(
+        id="f1", file_name="a.txt", status="completed", category="general"
+    )
     view = _files_view(mock_page, mock_api_client, [file])
-    mock_api_client.update_file_category = AsyncMock(side_effect=APIError(400, "category must be one of: general"))
+    mock_api_client.update_file_category = AsyncMock(
+        side_effect=APIError(400, "category must be one of: general")
+    )
     event = _category_event("philosophy")
 
-    with patch("views.files.show_snackbar") as snackbar, patch("views.files.safe_update") as safe_update_mock:
+    with (
+        patch("views.files.show_snackbar") as snackbar,
+        patch("views.files.safe_update") as safe_update_mock,
+    ):
         await view.create_category_change_handler("f1")(event)
 
     # The database was not changed, so the dropdown must not claim it was.
@@ -934,8 +969,8 @@ def test_update_table_renders_embedding_column(mock_page, mock_api_client):
 @pytest.mark.parametrize(
     ("file", "expected"),
     [
-        (IngestedFile(status="pending"), ("Изчаква", ft.colors.AMBER)),
-        (IngestedFile(status="processing"), ("Обработва се", ft.colors.BLUE)),
+        (IngestedFile(status="pending"), ("Изчаква", ft.Colors.AMBER)),
+        (IngestedFile(status="processing"), ("Обработва се", ft.Colors.BLUE)),
         (
             IngestedFile(
                 status="completed",
@@ -943,7 +978,7 @@ def test_update_table_renders_embedding_column(mock_page, mock_api_client):
                 has_embeddings=True,
                 embedding_status="completed",
             ),
-            ("Готово · 2 части", ft.colors.GREEN),
+            ("Готово · 2 части", ft.Colors.GREEN),
         ),
         (
             IngestedFile(
@@ -952,7 +987,7 @@ def test_update_table_renders_embedding_column(mock_page, mock_api_client):
                 has_embeddings=True,
                 embedding_status="completed",
             ),
-            ("Готово · 1 част", ft.colors.GREEN),
+            ("Готово · 1 част", ft.Colors.GREEN),
         ),
         (
             IngestedFile(
@@ -961,11 +996,11 @@ def test_update_table_renders_embedding_column(mock_page, mock_api_client):
                 has_embeddings=False,
                 embedding_status="empty",
             ),
-            ("Няма текст", ft.colors.ORANGE),
+            ("Няма текст", ft.Colors.ORANGE),
         ),
-        (IngestedFile(status="failed"), ("Грешка", ft.colors.RED)),
+        (IngestedFile(status="failed"), ("Грешка", ft.Colors.RED)),
         # Payload from a backend without embedding metadata: fall back to status.
-        (IngestedFile(status="completed"), ("Готово", ft.colors.GREEN)),
+        (IngestedFile(status="completed"), ("Готово", ft.Colors.GREEN)),
     ],
 )
 def test_embedding_state_maps_backend_statuses(file, expected):
@@ -982,11 +1017,12 @@ async def test_failed_upload_shows_the_backend_text(
     mock_api_client.upload_file = AsyncMock(side_effect=APIError(413, "file too large"))
     view = FilesView(mock_page, mock_api_client)
 
-    with patch("views.files.safe_update"), patch(
-        "views.files.show_snackbar"
-    ) as snackbar:
-        await view.on_file_picker_result(
-            SimpleNamespace(files=[SimpleNamespace(name="big.pdf", path=str(picked))])
+    with (
+        patch("views.files.safe_update"),
+        patch("views.files.show_snackbar") as snackbar,
+    ):
+        await view.upload_files(
+            [ft.FilePickerFile(id=0, name="big.pdf", size=1, path=str(picked))]
         )
 
     snackbar.assert_called_once()
@@ -999,8 +1035,10 @@ def _picked(tmp_path, *names):
     for name in names:
         path = tmp_path / name
         path.write_bytes(b"x")
-        files.append(SimpleNamespace(name=name, path=str(path)))
-    return SimpleNamespace(files=files)
+        files.append(
+            ft.FilePickerFile(id=len(files), name=name, size=1, path=str(path))
+        )
+    return files
 
 
 @pytest.mark.asyncio
@@ -1010,10 +1048,13 @@ async def test_unsupported_file_is_not_uploaded(mock_page, mock_api_client, tmp_
     )
     view = FilesView(mock_page, mock_api_client)
 
-    with patch("views.files.safe_update"), patch(
-        "views.files.show_snackbar"
-    ) as snackbar:
-        await view.on_file_picker_result(_picked(tmp_path, "letter.doc", "slides.pptx", "ok.txt"))
+    with (
+        patch("views.files.safe_update"),
+        patch("views.files.show_snackbar") as snackbar,
+    ):
+        await view.upload_files(
+            _picked(tmp_path, "letter.doc", "slides.pptx", "ok.txt")
+        )
 
     # Only the supported file reaches the backend.
     assert [c.args[1] for c in mock_api_client.upload_file.call_args_list] == ["ok.txt"]
@@ -1030,17 +1071,20 @@ async def test_duplicate_upload_is_announced(mock_page, mock_api_client, tmp_pat
     # Uploads run concurrently, so the answer must depend on the file, not on
     # the order of the calls.
     async def upload(_content, name, *_args):
-        return UploadResult(existing, duplicate=True) if name == "book.pdf" else UploadResult(
-            IngestedFile(id="2", file_name=name)
+        return (
+            UploadResult(existing, duplicate=True)
+            if name == "book.pdf"
+            else UploadResult(IngestedFile(id="2", file_name=name))
         )
 
     mock_api_client.upload_file = AsyncMock(side_effect=upload)
     view = FilesView(mock_page, mock_api_client)
 
-    with patch("views.files.safe_update"), patch(
-        "views.files.show_snackbar"
-    ) as snackbar:
-        await view.on_file_picker_result(_picked(tmp_path, "book.pdf", "new.txt"))
+    with (
+        patch("views.files.safe_update"),
+        patch("views.files.show_snackbar") as snackbar,
+    ):
+        await view.upload_files(_picked(tmp_path, "book.pdf", "new.txt"))
 
     snackbar.assert_called_once()
     assert snackbar.call_args.args[1] == "Файлът вече е качен: book.pdf"
@@ -1060,10 +1104,11 @@ async def test_new_file_and_duplicate_are_reported_together_with_errors(
     mock_api_client.upload_file = AsyncMock(side_effect=upload)
     view = FilesView(mock_page, mock_api_client)
 
-    with patch("views.files.safe_update"), patch(
-        "views.files.show_snackbar"
-    ) as snackbar:
-        await view.on_file_picker_result(_picked(tmp_path, "a.pdf", "b.pdf"))
+    with (
+        patch("views.files.safe_update"),
+        patch("views.files.show_snackbar") as snackbar,
+    ):
+        await view.upload_files(_picked(tmp_path, "a.pdf", "b.pdf"))
 
     message = snackbar.call_args.args[1]
     assert "Неуспешно качване: b.pdf: file too large" in message
@@ -1078,21 +1123,25 @@ async def test_a_plain_upload_shows_no_message(mock_page, mock_api_client, tmp_p
     )
     view = FilesView(mock_page, mock_api_client)
 
-    with patch("views.files.safe_update"), patch(
-        "views.files.show_snackbar"
-    ) as snackbar:
-        await view.on_file_picker_result(_picked(tmp_path, "a.txt"))
+    with (
+        patch("views.files.safe_update"),
+        patch("views.files.show_snackbar") as snackbar,
+    ):
+        await view.upload_files(_picked(tmp_path, "a.txt"))
 
     snackbar.assert_not_called()
 
 
-def test_file_picker_offers_only_supported_extensions(mock_page, mock_api_client):
+@pytest.mark.asyncio
+async def test_file_picker_offers_only_supported_extensions(mock_page, mock_api_client):
     view = FilesView(mock_page, mock_api_client)
-    view.file_picker.pick_files = MagicMock()
+    # Nothing chosen: the dialog was closed.
+    view.file_picker.pick_files = AsyncMock(return_value=[])
 
-    view.upload_btn.on_click(None)
+    await view.upload_btn.on_click(None)
 
-    kwargs = view.file_picker.pick_files.call_args.kwargs
+    mock_api_client.upload_file.assert_not_called()
+    kwargs = view.file_picker.pick_files.await_args.kwargs
     assert kwargs["file_type"] == ft.FilePickerFileType.CUSTOM
     assert kwargs["allowed_extensions"] == list(SUPPORTED_EXTENSIONS)
     assert kwargs["allow_multiple"] is True
@@ -1149,7 +1198,9 @@ async def test_memory_row_edit_does_not_rebuild_table(mock_page, mock_api_client
 @pytest.mark.asyncio
 async def test_memory_row_save_updates_only_its_cells(mock_page, mock_api_client):
     view, row = _memory_row(
-        mock_page, mock_api_client, Memory(id="m1", content="old", status="active", importance=2)
+        mock_page,
+        mock_api_client,
+        Memory(id="m1", content="old", status="active", importance=2),
     )
     updated = Memory(id="m1", content="new", status="active", importance=2)
     mock_api_client.update_memory = AsyncMock(return_value=updated)
@@ -1210,9 +1261,10 @@ async def test_memory_row_save_error_shows_the_backend_text(mock_page, mock_api_
         side_effect=APIError(400, "content must be at most 32000 characters")
     )
 
-    with patch("views.memory.safe_update"), patch(
-        "views.memory.show_snackbar"
-    ) as snackbar:
+    with (
+        patch("views.memory.safe_update"),
+        patch("views.memory.show_snackbar") as snackbar,
+    ):
         row._edit(None)
         row.content_field.value = "new"
         await row._save(None)
@@ -1231,9 +1283,10 @@ async def test_memory_row_save_over_the_byte_limit_is_not_sent(
     )
     mock_api_client.update_memory = AsyncMock()
 
-    with patch("views.memory.safe_update"), patch(
-        "views.memory.show_snackbar"
-    ) as snackbar:
+    with (
+        patch("views.memory.safe_update"),
+        patch("views.memory.show_snackbar") as snackbar,
+    ):
         row._edit(None)
         # 20000 letters is under "32000 characters", but 40000 bytes in UTF-8.
         row.content_field.value = "я" * 20000
@@ -1251,7 +1304,9 @@ async def test_memory_row_save_over_the_byte_limit_is_not_sent(
 @pytest.mark.asyncio
 async def test_memory_row_activate_updates_status_in_place(mock_page, mock_api_client):
     view, row = _memory_row(
-        mock_page, mock_api_client, Memory(id="m1", content="a", status="candidate", importance=3)
+        mock_page,
+        mock_api_client,
+        Memory(id="m1", content="a", status="candidate", importance=3),
     )
     mock_api_client.update_memory = AsyncMock(
         return_value=Memory(id="m1", content="a", status="active", importance=3)
@@ -1275,8 +1330,9 @@ async def test_memory_row_delete_removes_row(mock_page, mock_api_client):
     )
     mock_api_client.delete_memory = AsyncMock(return_value=None)
 
-    with patch("views.memory.safe_update"), patch(
-        "views.memory.confirm_dialog", new=AsyncMock(return_value=True)
+    with (
+        patch("views.memory.safe_update"),
+        patch("views.memory.confirm_dialog", new=AsyncMock(return_value=True)),
     ):
         await row._delete(None)
 
@@ -1287,37 +1343,49 @@ async def test_memory_row_delete_removes_row(mock_page, mock_api_client):
 
 
 @pytest.mark.asyncio
-async def test_memory_row_delete_of_a_memory_that_is_gone_removes_the_row(mock_page, mock_api_client):
+async def test_memory_row_delete_of_a_memory_that_is_gone_removes_the_row(
+    mock_page, mock_api_client
+):
     # The backend answers 404 for a memory that does not exist any more.
     view, row = _memory_row(
         mock_page, mock_api_client, Memory(id="m1", content="a", status="active")
     )
-    mock_api_client.delete_memory = AsyncMock(side_effect=APIError(404, "memory not found"))
+    mock_api_client.delete_memory = AsyncMock(
+        side_effect=APIError(404, "memory not found")
+    )
 
-    with patch("views.memory.safe_update"), patch(
-        "views.memory.confirm_dialog", new=AsyncMock(return_value=True)
+    with (
+        patch("views.memory.safe_update"),
+        patch("views.memory.confirm_dialog", new=AsyncMock(return_value=True)),
     ):
         await row._delete(None)
 
     assert view.data_table.rows == []
     assert view.memories == []
-    mock_page.open.assert_not_called()  # no error snackbar: nothing went wrong
+    mock_page.show_dialog.assert_not_called()  # no error snackbar: nothing went wrong
 
 
 @pytest.mark.asyncio
-async def test_memory_row_delete_error_keeps_row_and_says_so(mock_page, mock_api_client):
+async def test_memory_row_delete_error_keeps_row_and_says_so(
+    mock_page, mock_api_client
+):
     view, row = _memory_row(
         mock_page, mock_api_client, Memory(id="m1", content="a", status="active")
     )
-    mock_api_client.delete_memory = AsyncMock(side_effect=APIError(500, "internal server error"))
+    mock_api_client.delete_memory = AsyncMock(
+        side_effect=APIError(500, "internal server error")
+    )
 
-    with patch("views.memory.safe_update"), patch(
-        "views.memory.confirm_dialog", new=AsyncMock(return_value=True)
+    with (
+        patch("views.memory.safe_update"),
+        patch("views.memory.confirm_dialog", new=AsyncMock(return_value=True)),
     ):
         await row._delete(None)
 
     assert view.data_table.rows == [row]
-    assert "Грешка при изтриване" in mock_page.open.call_args.args[0].content.value
+    assert (
+        "Грешка при изтриване" in mock_page.show_dialog.call_args.args[0].content.value
+    )
 
 
 @pytest.mark.asyncio
@@ -1326,8 +1394,9 @@ async def test_memory_row_delete_cancelled_keeps_row(mock_page, mock_api_client)
         mock_page, mock_api_client, Memory(id="m1", content="a", status="active")
     )
 
-    with patch("views.memory.safe_update"), patch(
-        "views.memory.confirm_dialog", new=AsyncMock(return_value=False)
+    with (
+        patch("views.memory.safe_update"),
+        patch("views.memory.confirm_dialog", new=AsyncMock(return_value=False)),
     ):
         await row._delete(None)
 
@@ -1340,8 +1409,10 @@ async def test_memory_row_ignores_updates_for_detached_view(mock_page, mock_api_
     view, row = _memory_row(
         mock_page, mock_api_client, Memory(id="m1", content="old", status="active")
     )
-    # Simulate a closed session: Control._dispose() sets page to None.
-    view.page = None
+    # The view was never put on a page (or its session is gone): ``view.page``
+    # raises, and an update of a row would raise with it.
+    with pytest.raises(RuntimeError):
+        _ = view.page
 
     row._edit(None)  # must not raise
 
@@ -1444,9 +1515,7 @@ async def test_memory_row_importance_can_be_edited_on_its_own(
 
 
 @pytest.mark.asyncio
-async def test_memory_row_save_without_any_change_is_a_noop(
-    mock_page, mock_api_client
-):
+async def test_memory_row_save_without_any_change_is_a_noop(mock_page, mock_api_client):
     _view, row = _memory_row(
         mock_page,
         mock_api_client,
@@ -1504,7 +1573,7 @@ async def test_new_memory_dialog_creates_an_active_memory_and_reloads(
     mock_page, mock_api_client
 ):
     view = _memory_view_with_dialog(mock_page, mock_api_client)
-    mock_page.open.assert_called_once_with(view.new_dialog)
+    mock_page.show_dialog.assert_called_once_with(view.new_dialog)
     mock_api_client.create_memory = AsyncMock(
         return_value=Memory(id="m9", content="x", status="active", importance=7)
     )
@@ -1517,7 +1586,7 @@ async def test_new_memory_dialog_creates_an_active_memory_and_reloads(
     mock_api_client.create_memory.assert_awaited_once_with(
         content="Предпочитам кратки отговори.", status="active", importance=7
     )
-    mock_page.close.assert_called_once_with(view.new_dialog)
+    assert view.new_dialog.open is False
     # The table is re-read, so the status filter decides what is shown.
     mock_api_client.list_memories.assert_awaited_once()
     snackbar.assert_called_once()
@@ -1545,8 +1614,8 @@ async def test_new_memory_needs_some_text(mock_page, mock_api_client):
     await view.on_new_save(None)
 
     mock_api_client.create_memory.assert_not_called()
-    assert view.new_content_field.error_text
-    mock_page.close.assert_not_called()
+    assert view.new_content_field.error
+    assert view.new_dialog.open is True
 
 
 @pytest.mark.parametrize(
@@ -1558,7 +1627,13 @@ async def test_new_memory_needs_some_text(mock_page, mock_api_client):
         ("я" * 20000, False),  # 20000 letters, but 40000 bytes
         ("a" * 32001, False),
     ],
-    ids=["cyrillic-at-limit", "latin-at-limit", "one-byte-over", "cyrillic-over", "latin-over"],
+    ids=[
+        "cyrillic-at-limit",
+        "latin-at-limit",
+        "one-byte-over",
+        "cyrillic-over",
+        "latin-over",
+    ],
 )
 @pytest.mark.asyncio
 async def test_new_memory_is_checked_against_the_backend_byte_limit(
@@ -1575,13 +1650,13 @@ async def test_new_memory_is_checked_against_the_backend_byte_limit(
 
     if is_sent:
         mock_api_client.create_memory.assert_awaited_once()
-        mock_page.close.assert_called_once_with(view.new_dialog)
+        assert view.new_dialog.open is False
     else:
         # The dialog says what is wrong instead of sending a doomed request.
         mock_api_client.create_memory.assert_not_called()
-        mock_page.close.assert_not_called()
-        assert "байта" in view.new_content_field.error_text
-        assert str(len(text.encode("utf-8"))) in view.new_content_field.error_text
+        assert view.new_dialog.open is True
+        assert "байта" in view.new_content_field.error
+        assert str(len(text.encode("utf-8"))) in view.new_content_field.error
     assert view._creating is False
     assert view.new_save_btn.disabled is False
 
@@ -1609,8 +1684,8 @@ async def test_new_memory_failure_keeps_the_dialog_open(
 
     await view.on_new_save(None)
 
-    assert view.new_content_field.error_text == expected
-    mock_page.close.assert_not_called()
+    assert view.new_content_field.error == expected
+    assert view.new_dialog.open is True
     mock_api_client.list_memories.assert_not_called()
     # The user can fix the text and try again.
     assert view._creating is False
@@ -1618,22 +1693,26 @@ async def test_new_memory_failure_keeps_the_dialog_open(
 
 
 # -------------------------------------------------------------------- helpers
-def test_safe_update_skips_detached_and_unmounted_controls(mock_page):
+def test_safe_update_skips_detached_and_unmounted_controls():
     from views.ui_utils import safe_update
 
     detached = ft.Container()
+    detached.update = MagicMock()
     safe_update(detached)  # no page -> silently ignored
+    detached.update.assert_not_called()
 
-    attached = ft.Container()
-    attached.page = mock_page
     child = ft.Text("x")
     child.update = MagicMock()
+    with mounted(ft.Container):
+        attached = ft.Container()
+        attached.update = MagicMock()
 
-    safe_update(attached, child)  # child never got a uid
-    child.update.assert_not_called()
+        safe_update(attached, child)  # the child never reached the page
+        child.update.assert_not_called()
+        attached.update.assert_not_called()
 
-    safe_update(attached)  # attached but not mounted -> no uid either
-    assert attached.page is mock_page
+        safe_update(attached)
+        attached.update.assert_called_once_with()
 
 
 @pytest.mark.asyncio
@@ -1656,7 +1735,3 @@ async def test_health_checks_notify_only_on_change(monkeypatch):
         await main_module.run_health_checks(probe, calls.append, interval=0)
 
     assert calls == [True, False]
-
-
-
-

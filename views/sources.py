@@ -3,6 +3,7 @@
 Pure functions over the ``dict`` the backend sends for a source, no Flet. The panel
 itself (``ChatMessage.open_sources_panel``) only lays the strings out.
 """
+
 from __future__ import annotations
 
 import logging
@@ -70,7 +71,9 @@ def source_details(src: dict) -> str:
     score = src.get("score", "N/A")
     score_type = src.get("score_type")
     if str(score_type or "").strip().lower() == DISTANCE_SCORE_TYPE:
-        parts.append(f"Разстояние: {format_source_score(score, score_type)} (по-малко = по-близо)")
+        parts.append(
+            f"Разстояние: {format_source_score(score, score_type)} (по-малко = по-близо)"
+        )
     elif score_type or score != 0:
         parts.append(f"Сходство: {format_source_score(score, score_type)}")
     # else: a source without a measure (a recalled memory) shows no score at all

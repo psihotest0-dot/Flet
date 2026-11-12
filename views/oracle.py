@@ -51,17 +51,17 @@ PROGRESS_BAR_WIDTH = 260
 
 # Verdict -> (label, colour, what it means).
 VERDICTS = {
-    "APPROVE": ("APPROVE", ft.colors.GREEN, "Моделът би пуснал сделката."),
-    "VETO": ("VETO", ft.colors.RED_400, "Моделът би спрял сделката."),
+    "APPROVE": ("APPROVE", ft.Colors.GREEN, "Моделът би пуснал сделката."),
+    "VETO": ("VETO", ft.Colors.RED_400, "Моделът би спрял сделката."),
     "HOLD": (
         "HOLD",
-        ft.colors.AMBER,
+        ft.Colors.AMBER,
         "Моделът не дава окончателен отговор; ботът пита пак на следващия такт.",
     ),
 }
 FAILED_VERDICT = (
     "Неуспех",
-    ft.colors.ORANGE,
+    ft.Colors.ORANGE,
     "Няма вердикт: заявката към модела не е завършила с годен отговор.",
 )
 
@@ -85,7 +85,7 @@ def verdict_cell(decision: OracleDecision) -> tuple[str, str, str]:
     verdict = (decision.verdict or "").strip()
     if verdict in VERDICTS:
         return VERDICTS[verdict]
-    return verdict or "—", ft.colors.GREY, "Непознат вердикт."
+    return verdict or "—", ft.Colors.GREY, "Непознат вердикт."
 
 
 def mode_cell(mode: str | None) -> tuple[str, str]:
@@ -137,7 +137,11 @@ def decision_details(decision: OracleDecision) -> str:
             f"{decision.completion_tokens or 0} изход"
         )
     if decision.finish_reason:
-        cut = " (отговорът е отрязан)" if decision.finish_reason == LENGTH_FINISH_REASON else ""
+        cut = (
+            " (отговорът е отрязан)"
+            if decision.finish_reason == LENGTH_FINISH_REASON
+            else ""
+        )
         lines.append(f"Край на отговора: {decision.finish_reason}{cut}")
     if decision.status == STATUS_FAILED and decision.error:
         lines.append(f"Грешка: {decision.error}")
@@ -153,6 +157,7 @@ class Progress:
     is true while no row says what version of signal it was, so the probes of the
     first day cannot be told from real signals yet.
     """
+
     asked: int = 0
     answered: int = 0
     approve: int = 0
@@ -223,10 +228,12 @@ class OracleView(ft.Container):
 
     def __init__(self, page: ft.Page, api_client: APIClient):
         super().__init__()
-        self.page = page
+        # ``Control.page`` is read-only and raises until the view is on the page;
+        # the page the app was started with is kept under its own name.
+        self.page_ref = page
         self.api_client = api_client
         self.expand = True
-        self.alignment = ft.alignment.top_center
+        self.alignment = ft.Alignment.TOP_CENTER
 
         # Newest first, like the backend sends them.
         self.decisions: list[OracleDecision] = []
@@ -257,24 +264,28 @@ class OracleView(ft.Container):
             on_change=self.on_symbol_change,
         )
         self.filter_btn = ft.IconButton(
-            icon=ft.icons.SEARCH,
+            icon=ft.Icons.SEARCH,
             tooltip="Покажи само този символ (празно = всички)",
             on_click=self.on_filter_submit,
         )
-        self.refresh_btn = ft.ElevatedButton(
+        self.refresh_btn = ft.Button(
             "Обнови",
-            icon=ft.icons.REFRESH,
+            icon=ft.Icons.REFRESH,
             on_click=self.on_refresh_click,
         )
-        self.progress = ft.ProgressRing(width=16, height=16, stroke_width=2, visible=False)
+        self.progress = ft.ProgressRing(
+            width=16, height=16, stroke_width=2, visible=False
+        )
 
         self.intro_text = ft.Text(
             "Решенията на Oracle за сигналите на трейдинг бота. "
             "В сенчест режим ботът само записва отговорите и не ги следва.",
             size=12,
-            color=ft.colors.GREY_400,
+            color=ft.Colors.GREY_400,
         )
-        self.approve_bar, self.approve_value, approve_row = self._progress_row("APPROVE")
+        self.approve_bar, self.approve_value, approve_row = self._progress_row(
+            "APPROVE"
+        )
         self.veto_bar, self.veto_value, veto_row = self._progress_row("VETO")
         self.availability_bar, self.availability_value, availability_row = (
             self._progress_row("Наличност")
@@ -284,10 +295,12 @@ class OracleView(ft.Container):
             "Пробните сигнали още не се изключват (бекендът не праща версията на "
             "сигнала) — числата може да са завишени.",
             size=12,
-            color=ft.colors.ORANGE_300,
+            color=ft.Colors.ORANGE_300,
             visible=False,
         )
-        self.progress_error = ft.Text("", size=12, color=ft.colors.RED_300, visible=False)
+        self.progress_error = ft.Text(
+            "", size=12, color=ft.Colors.RED_300, visible=False
+        )
         self.progress_block = ft.Container(
             content=ft.Column(
                 [
@@ -299,7 +312,7 @@ class OracleView(ft.Container):
                         "са по-високи, защото ботът записва „failed“ след своя таймаут, "
                         "а бекендът го води като „answered“.",
                         size=12,
-                        color=ft.colors.GREY_400,
+                        color=ft.Colors.GREY_400,
                     ),
                     approve_row,
                     veto_row,
@@ -313,11 +326,11 @@ class OracleView(ft.Container):
             ),
             padding=10,
             border_radius=8,
-            border=ft.border.all(1, ft.colors.OUTLINE_VARIANT),
+            border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
         )
-        self.updated_text = ft.Text("", size=12, color=ft.colors.GREY_400)
-        self.error_text = ft.Text("", size=12, color=ft.colors.RED_300, visible=False)
-        self.empty_text = ft.Text("", color=ft.colors.GREY_400, visible=False)
+        self.updated_text = ft.Text("", size=12, color=ft.Colors.GREY_400)
+        self.error_text = ft.Text("", size=12, color=ft.Colors.RED_300, visible=False)
+        self.empty_text = ft.Text("", color=ft.Colors.GREY_400, visible=False)
 
         self.data_table = ft.DataTable(
             columns=[
@@ -332,7 +345,7 @@ class OracleView(ft.Container):
         )
         self.more_btn = ft.TextButton(
             "Покажи по-стари",
-            icon=ft.icons.EXPAND_MORE,
+            icon=ft.Icons.EXPAND_MORE,
             visible=False,
             on_click=self.on_more_click,
         )
@@ -340,7 +353,12 @@ class OracleView(ft.Container):
         self.content = ft.Column(
             controls=[
                 ft.Row(
-                    [self.symbol_field, self.filter_btn, self.refresh_btn, self.progress],
+                    [
+                        self.symbol_field,
+                        self.filter_btn,
+                        self.refresh_btn,
+                        self.progress,
+                    ],
                     alignment=ft.MainAxisAlignment.CENTER,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
@@ -350,7 +368,13 @@ class OracleView(ft.Container):
                 self.error_text,
                 ft.Column(
                     [
-                        ft.Row([self.data_table], scroll=ft.ScrollMode.ADAPTIVE),
+                        ft.Row(
+                            [self.data_table],
+                            scroll=ft.ScrollMode.ADAPTIVE,
+                            # A scrollable row is as wide as the tab; without this the
+                            # table sits at its left edge instead of in the middle.
+                            alignment=ft.MainAxisAlignment.CENTER,
+                        ),
                         self.empty_text,
                         self.more_btn,
                     ],
@@ -366,7 +390,7 @@ class OracleView(ft.Container):
     # -------------------------------------------------------------- lifecycle
     def did_mount(self):
         if self._load_task is None:
-            self._load_task = self.page.run_task(self.refresh)
+            self._load_task = self.page_ref.run_task(self.refresh)
         if self._active:
             self.set_active(True)
 
@@ -374,9 +398,9 @@ class OracleView(ft.Container):
         """Fetch new decisions only while this tab is the visible one."""
         self._active = active
         if active:
-            if self._poll_task is None and self.page is not None:
+            if self._poll_task is None and self.page_ref is not None:
                 self._polling = True
-                self._poll_task = self.page.run_task(self.poll)
+                self._poll_task = self.page_ref.run_task(self.poll)
         else:
             self._polling = False
             if self._poll_task is not None:
@@ -414,7 +438,7 @@ class OracleView(ft.Container):
         """
         if (self.symbol_field.value or "").strip():
             return
-        self.symbol_field.error_text = None
+        self.symbol_field.error = None
         safe_update(self, self.symbol_field)
         if self._symbol is not None:
             self._symbol = None
@@ -424,10 +448,10 @@ class OracleView(ft.Container):
         """Make the field the filter. ``False`` (and a complaint) if it is not a symbol."""
         symbol = (self.symbol_field.value or "").strip().upper()
         if symbol and not SYMBOL_PATTERN.match(symbol):
-            self.symbol_field.error_text = "Невалиден символ (напр. AAPL, BRK.B)"
+            self.symbol_field.error = "Невалиден символ (напр. AAPL, BRK.B)"
             safe_update(self, self.symbol_field)
             return False
-        self.symbol_field.error_text = None
+        self.symbol_field.error = None
         self.symbol_field.value = symbol
         safe_update(self, self.symbol_field)
         self._symbol = symbol or None
@@ -558,16 +582,22 @@ class OracleView(ft.Container):
         its own error line.
         """
         async with self._progress_lock:
-            newest = 0 if rebuild or not self._progress_rows else max(self._progress_rows)
+            newest = (
+                0 if rebuild or not self._progress_rows else max(self._progress_rows)
+            )
             try:
                 fresh = await self._read_journal_since(newest)
             except asyncio.CancelledError:
                 raise
             except Exception as ex:  # noqa: BLE001
                 if not self._progress_failed:
-                    logger.warning("Could not read the Oracle journal for the counters: %s", ex)
+                    logger.warning(
+                        "Could not read the Oracle journal for the counters: %s", ex
+                    )
                 self._progress_failed = True
-                self.progress_error.value = f"Броячите не могат да се обновят: {error_detail(ex)}"
+                self.progress_error.value = (
+                    f"Броячите не могат да се обновят: {error_detail(ex)}"
+                )
                 self.progress_error.visible = True
                 safe_update(self, self.progress_error)
                 return
@@ -602,7 +632,7 @@ class OracleView(ft.Container):
     # ----------------------------------------------------------------- screen
     @staticmethod
     def _progress_row(label: str) -> tuple[ft.ProgressBar, ft.Text, ft.Row]:
-        bar = ft.ProgressBar(value=0, width=PROGRESS_BAR_WIDTH, color=ft.colors.BLUE)
+        bar = ft.ProgressBar(value=0, width=PROGRESS_BAR_WIDTH, color=ft.Colors.BLUE)
         value = ft.Text("", size=12)
         row = ft.Row(
             [ft.Text(label, width=PROGRESS_LABEL_WIDTH), bar, value],
@@ -617,18 +647,20 @@ class OracleView(ft.Container):
             (self.veto_bar, self.veto_value, progress.veto, VETO_TARGET),
         ):
             bar.value = min(count / target, 1)
-            bar.color = ft.colors.GREEN if count >= target else ft.colors.BLUE
+            bar.color = ft.Colors.GREEN if count >= target else ft.Colors.BLUE
             value.value = f"{count} / {target}"
 
         availability = progress.availability
         if availability is None:
             self.availability_bar.value = 0
-            self.availability_bar.color = ft.colors.BLUE
+            self.availability_bar.color = ft.Colors.BLUE
             self.availability_value.value = "още няма сигнали"
         else:
             self.availability_bar.value = availability
             self.availability_bar.color = (
-                ft.colors.GREEN if availability >= AVAILABILITY_TARGET else ft.colors.AMBER
+                ft.Colors.GREEN
+                if availability >= AVAILABILITY_TARGET
+                else ft.Colors.AMBER
             )
             self.availability_value.value = (
                 f"{availability * 100:.0f} % ({progress.answered} от {progress.asked} "
@@ -643,10 +675,15 @@ class OracleView(ft.Container):
         self.probes_note.visible = progress.probes_unmarked
         safe_update(
             self,
-            self.approve_bar, self.approve_value,
-            self.veto_bar, self.veto_value,
-            self.availability_bar, self.availability_value,
-            self.progress_status, self.probes_note, self.progress_error,
+            self.approve_bar,
+            self.approve_value,
+            self.veto_bar,
+            self.veto_value,
+            self.availability_bar,
+            self.availability_value,
+            self.progress_status,
+            self.probes_note,
+            self.progress_error,
         )
 
     def _show_first_page(self, page: OracleDecisionPage) -> None:
@@ -702,7 +739,7 @@ class OracleView(ft.Container):
             width=REASON_WIDTH,
             max_lines=2,
             overflow=ft.TextOverflow.ELLIPSIS,
-            color=ft.colors.ORANGE_200 if decision.status == STATUS_FAILED else None,
+            color=ft.Colors.ORANGE_200 if decision.status == STATUS_FAILED else None,
             tooltip=reason or None,
         )
         mode_label, mode_meaning = mode_cell(decision.mode)

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import flet as ft
 import pytest
+from helpers import mounted
 
 from views.chat import ChatView
 from views.emoji_picker import (
@@ -72,8 +73,7 @@ def test_selecting_a_category_swaps_the_grid_and_the_highlight(picker):
     assert shown(picker) == EMOJI_CATEGORIES["Жестове"][1]
     assert picker.category_buttons["Жестове"].bgcolor == SELECTED_CATEGORY_BGCOLOR
     assert (
-        picker.category_buttons[DEFAULT_CATEGORY].bgcolor
-        == UNSELECTED_CATEGORY_BGCOLOR
+        picker.category_buttons[DEFAULT_CATEGORY].bgcolor == UNSELECTED_CATEGORY_BGCOLOR
     )
 
 
@@ -146,17 +146,55 @@ def test_clicking_in_the_chat_picker_fills_the_input(chat_view):
     assert chat_view.input_field.value == cell.data
 
 
-def test_input_keeps_focus_after_picking_when_mounted(chat_view):
-    chat_view.input_field.focus = MagicMock()
-    with patch.object(
-        ft.TextField, "uid", new_callable=PropertyMock, return_value="uid-1"
-    ):
+def focus_requests(mock_page, chat_view):
+    return [
+        call
+        for call in mock_page.run_task.call_args_list
+        if call.args == (chat_view._request_input_focus,)
+    ]
+
+
+def test_input_keeps_focus_after_picking_when_mounted(chat_view, mock_page):
+    chat_view.input_field.update = MagicMock()
+    with mounted(ft.TextField), mounted(ChatView):
         chat_view.insert_emoji("👍")
-    chat_view.input_field.focus.assert_called_once_with()
+
+    # The new text is sent first: focus() no longer sends it along.
+    chat_view.input_field.update.assert_called_once_with()
+    assert len(focus_requests(mock_page, chat_view)) == 1
 
 
-def test_detached_input_is_not_focused(chat_view):
-    chat_view.input_field.focus = MagicMock()
+def test_detached_input_is_not_focused(chat_view, mock_page):
     chat_view.insert_emoji("👍")
-    chat_view.input_field.focus.assert_not_called()
+
+    assert focus_requests(mock_page, chat_view) == []
     assert chat_view.input_field.value == "👍"
+
+
+@pytest.mark.asyncio
+async def test_the_focus_request_reaches_the_field(chat_view):
+    chat_view.input_field.focus = AsyncMock()
+
+    with mounted(ft.TextField):
+        await chat_view._request_input_focus()
+
+    chat_view.input_field.focus.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_a_focus_the_client_did_not_do_is_not_an_error(chat_view):
+    chat_view.input_field.focus = AsyncMock(side_effect=RuntimeError("Session closed"))
+
+    with mounted(ft.TextField):
+        await chat_view._request_input_focus()
+
+    chat_view.input_field.focus.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_field_that_left_the_page_is_not_focused(chat_view):
+    chat_view.input_field.focus = AsyncMock()
+
+    await chat_view._request_input_focus()
+
+    chat_view.input_field.focus.assert_not_awaited()

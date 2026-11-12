@@ -34,18 +34,25 @@ from views.attachments import (
 )
 from views.chat_message import ChatMessage
 from views.emoji_picker import EmojiPicker
-from views.ui_utils import confirm_dialog, describe_error, safe_update, show_snackbar
+from views.ui_utils import (
+    confirm_dialog,
+    describe_error,
+    is_mounted,
+    safe_update,
+    show_snackbar,
+)
 
 logger = logging.getLogger(__name__)
 
-# Flet 0.24 ListView is not virtualised, so rendering a very long history means
-# building hundreds of markdown widgets. Only the tail is rendered.
+# The chat list builds every row at once (see ``build_controls_on_demand`` below),
+# so a very long history would mean hundreds of markdown widgets. Only the tail
+# is rendered.
 HISTORY_PAGE_SIZE = 100
 # One message more than is shown: its presence is how load_history knows that
 # older messages exist (the backend returns the newest N, oldest first).
 HISTORY_REQUEST_LIMIT = HISTORY_PAGE_SIZE + 1
 # Upper bound of control updates per second while a response is streaming.
-# Each flush is a tree walk plus a synchronous round trip to the Flutter client.
+# Each flush is a diff of the message plus a patch sent to the Flutter client.
 STREAM_FLUSH_INTERVAL = 0.12
 # How long the stream may stay silent before the "..." indicator is shown again.
 ACTIVITY_INDICATOR_DELAY = 1.0
@@ -71,7 +78,9 @@ class ChatView(ft.Container):
         on_session_changed: Callable[[str], None] | None = None,
     ):
         super().__init__()
-        self.page = page
+        # ``Control.page`` is read-only and raises until the view is on the page;
+        # the page the app was started with is kept under its own name.
+        self.page_ref = page
         self.api_client = api_client
         self.on_session_changed = on_session_changed
 
@@ -105,31 +114,34 @@ class ChatView(ft.Container):
             expand=True,
             spacing=10,
             auto_scroll=False,
-            padding=ft.padding.only(left=20, right=20),
+            # Rows built only when they scroll into view have an estimated height
+            # until then, and "scroll to the end" would stop short of the real end.
+            build_controls_on_demand=False,
+            padding=ft.Padding.only(left=20, right=20),
             on_scroll=self._on_chat_scroll,
-            on_scroll_interval=SCROLL_EVENT_INTERVAL,
+            scroll_interval=SCROLL_EVENT_INTERVAL,
         )
 
         self.new_chat_btn = ft.IconButton(
-            icon=ft.icons.ADD_COMMENT,
+            icon=ft.Icons.ADD_COMMENT,
             tooltip="Нов чат",
             on_click=self.on_new_chat_click,
         )
 
         self.delete_chat_btn = ft.IconButton(
-            icon=ft.icons.DELETE_OUTLINE,
+            icon=ft.Icons.DELETE_OUTLINE,
             tooltip="Изтрий разговора (чатът остава, празен)",
             on_click=self.on_delete_chat_click,
         )
 
         self.session_dropdown = ft.Dropdown(
             options=[
-                ft.dropdown.Option(key=session["id"], text=session["name"])
+                ft.DropdownOption(key=session["id"], text=session["name"])
                 for session in chat_sessions
             ],
             value=self.session_id,
             width=200,
-            on_change=self.on_session_change,
+            on_select=self.on_session_change,
         )
 
         self.top_row = ft.Row(
@@ -151,24 +163,27 @@ class ChatView(ft.Container):
             on_change=self.on_input_change,
         )
 
-        self.file_picker = ft.FilePicker(on_result=self.on_attach_result)
+        # A service, not a control: Flet registers it with the page by itself.
+        self.file_picker = ft.FilePicker()
         self.attach_btn = ft.IconButton(
-            icon=ft.icons.ATTACH_FILE,
+            icon=ft.Icons.ATTACH_FILE,
             tooltip="Прикачи файл към този разговор (код, лог, текст)",
             on_click=self.on_attach_click,
         )
         # The files of this conversation, with a cross to take one away.
-        self.attachments_row = ft.Row(wrap=True, spacing=6, run_spacing=4, visible=False)
+        self.attachments_row = ft.Row(
+            wrap=True, spacing=6, run_spacing=4, visible=False
+        )
 
         self.send_btn = ft.IconButton(
-            icon=ft.icons.SEND,
+            icon=ft.Icons.SEND,
             tooltip="Изпрати",
             on_click=self.send_message_click,
         )
 
         self.stop_btn = ft.IconButton(
-            icon=ft.icons.STOP,
-            icon_color=ft.colors.RED,
+            icon=ft.Icons.STOP,
+            icon_color=ft.Colors.RED,
             tooltip="Спри",
             visible=False,
             on_click=self.stop_generation_click,
@@ -176,13 +191,19 @@ class ChatView(ft.Container):
 
         self.emoji_picker = EmojiPicker(on_pick=self.insert_emoji)
         self.emoji_btn = ft.IconButton(
-            icon=ft.icons.EMOJI_EMOTIONS_OUTLINED,
+            icon=ft.Icons.EMOJI_EMOTIONS_OUTLINED,
             tooltip="Емоджита",
             on_click=self.toggle_emoji_picker,
         )
 
         input_row = ft.Row(
-            controls=[self.input_field, self.attach_btn, self.emoji_btn, self.stop_btn, self.send_btn],
+            controls=[
+                self.input_field,
+                self.attach_btn,
+                self.emoji_btn,
+                self.stop_btn,
+                self.send_btn,
+            ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             vertical_alignment=ft.CrossAxisAlignment.END,
         )
@@ -228,10 +249,12 @@ class ChatView(ft.Container):
         self.delete_chat_btn.disabled = streaming
         safe_update(self, self.send_btn, self.stop_btn, self.delete_chat_btn)
 
-    def _apply_session_options(self, chat_sessions: list[dict], selected_id: str | None) -> None:
+    def _apply_session_options(
+        self, chat_sessions: list[dict], selected_id: str | None
+    ) -> None:
         """Re-key the dropdown so every option points at a real session id."""
         self.session_dropdown.options = [
-            ft.dropdown.Option(key=session["id"], text=session["name"])
+            ft.DropdownOption(key=session["id"], text=session["name"])
             for session in chat_sessions
         ]
         self.session_dropdown.value = selected_id
@@ -251,10 +274,10 @@ class ChatView(ft.Container):
         self.session_id = session_id
         self._reset_conversation()
         self._cancel_running_tasks()
-        if reload_history and self.page is not None:
+        if reload_history and self.page_ref is not None:
             # The files first, the history last: the history is what the view waits for.
-            self._attachments_task = self.page.run_task(self.load_attachments)
-            self._load_task = self.page.run_task(self.load_history)
+            self._attachments_task = self.page_ref.run_task(self.load_attachments)
+            self._load_task = self.page_ref.run_task(self.load_history)
         self._notify_session_changed(session_id)
 
     async def on_session_change(self, e):
@@ -279,14 +302,17 @@ class ChatView(ft.Container):
             # A chat that was never persisted: the only legitimate new id.
             session_id = str(uuid.uuid4())
             chat_sessions.append(
-                {"id": session_id, "name": _unique_chat_name(str(selected), chat_sessions)}
+                {
+                    "id": session_id,
+                    "name": _unique_chat_name(str(selected), chat_sessions),
+                }
             )
 
         settings.chat_sessions = chat_sessions
         settings.session_id = session_id
         if not save_settings(settings):
             # The chat still opens, but after a restart the app would forget it.
-            show_snackbar(self.page, "Неуспешно запазване на настройките.")
+            show_snackbar(self.page_ref, "Неуспешно запазване на настройките.")
 
         # Re-sync the widget as well: it may have carried a chat name instead
         # of an id, and the options must stay keyed by the saved ids.
@@ -302,13 +328,15 @@ class ChatView(ft.Container):
         chat_sessions = _normalize_chat_sessions(settings)
 
         new_session = str(uuid.uuid4())
-        chat_sessions.append({"id": new_session, "name": _next_chat_name(chat_sessions)})
+        chat_sessions.append(
+            {"id": new_session, "name": _next_chat_name(chat_sessions)}
+        )
 
         settings.chat_sessions = chat_sessions
         settings.session_id = new_session
         if not save_settings(settings):
             # The chat still opens, but after a restart the app would forget it.
-            show_snackbar(self.page, "Неуспешно запазване на настройките.")
+            show_snackbar(self.page_ref, "Неуспешно запазване на настройките.")
         logger.info("New chat %s started.", new_session[:8])
 
         self._apply_session_options(chat_sessions, new_session)
@@ -325,15 +353,22 @@ class ChatView(ft.Container):
         session (see ``_restart_chat_session``).
         """
         if self._is_streaming:
-            show_snackbar(self.page, "Изчакай края на отговора или го спри, преди да изтриеш чата.")
+            show_snackbar(
+                self.page_ref,
+                "Изчакай края на отговора или го спри, преди да изтриеш чата.",
+            )
             return
 
         name = next(
-            (opt.text for opt in self.session_dropdown.options if opt.key == self.session_id),
+            (
+                opt.text
+                for opt in self.session_dropdown.options
+                if opt.key == self.session_id
+            ),
             "Този чат",
         )
         confirmed = await confirm_dialog(
-            self.page,
+            self.page_ref,
             "Изтриване на чата",
             f"Разговорът в „{name}“ ще бъде изтрит завинаги: съобщенията, "
             "резюмето и прикачените файлове. Чатът остава в списъка, но празен. "
@@ -350,7 +385,10 @@ class ChatView(ft.Container):
             raise
         except Exception as ex:  # noqa: BLE001
             logger.error("Failed to delete chat %s on the backend: %s", old_id[:8], ex)
-            show_snackbar(self.page, f"Разговорът не беше изтрит, чатът е непроменен. {describe_error(ex)}")
+            show_snackbar(
+                self.page_ref,
+                f"Разговорът не беше изтрит, чатът е непроменен. {describe_error(ex)}",
+            )
             return
 
         # Read after the dialog and the call: the settings may have been saved meanwhile.
@@ -360,15 +398,19 @@ class ChatView(ft.Container):
             return
 
         if not save_settings(settings):
-            show_snackbar(self.page, "Неуспешно запазване на настройките.")
+            show_snackbar(self.page_ref, "Неуспешно запазване на настройките.")
             return
-        logger.info("Chat %s was deleted on the backend, it continues as session %s.", old_id[:8], new_id[:8])
+        logger.info(
+            "Chat %s was deleted on the backend, it continues as session %s.",
+            old_id[:8],
+            new_id[:8],
+        )
 
         self._apply_session_options(settings.chat_sessions, new_id)
         # The new session has no history to fetch, so only the screen is cleared.
         self._activate_session(new_id, reload_history=False)
         show_snackbar(
-            self.page,
+            self.page_ref,
             "Разговорът е изтрит. Спомените са запазени.",
             success=True,
         )
@@ -376,10 +418,25 @@ class ChatView(ft.Container):
     def scroll_to_bottom(self):
         """Jump to the newest message and follow what is appended after it."""
         self._follow_bottom = True
-        if self.chat_list.uid is not None:
-            self.chat_list.scroll_to(offset=-1, duration=100)
+        if self.page_ref is not None and is_mounted(self.chat_list):
+            self.page_ref.run_task(self._scroll_to_end, 100)
         # New rows are laid out on the client's next frame, after this scroll.
         self._follow_stream()
+
+    async def _scroll_to_end(self, duration: int | None = None) -> None:
+        """Ask the client to show the end of the list.
+
+        The call waits for the client's answer; a list that left the page in the
+        meantime, or a window that was closed, is not worth more than a debug line.
+        """
+        if not is_mounted(self.chat_list):
+            return
+        try:
+            await self.chat_list.scroll_to(offset=-1, duration=duration)
+        except asyncio.CancelledError:
+            raise
+        except Exception as ex:  # noqa: BLE001
+            logger.debug("The chat was not scrolled: %s", ex)
 
     def _follow_stream(self):
         """Keep the end of a growing answer in view, unless the reader left it.
@@ -391,18 +448,18 @@ class ChatView(ft.Container):
         out of view. The scroll is deferred (see SCROLL_SETTLE_DELAY) and at most
         one is waiting at any time.
         """
-        if self._scroll_pending or not self._follow_bottom or self.page is None:
+        if self._scroll_pending or not self._follow_bottom or self.page_ref is None:
             return
         self._scroll_pending = True
-        self.page.run_task(self._scroll_after_layout)
+        self.page_ref.run_task(self._scroll_after_layout)
 
     async def _scroll_after_layout(self):
         try:
             await asyncio.sleep(SCROLL_SETTLE_DELAY)
         finally:
             self._scroll_pending = False
-        if self._follow_bottom and self.chat_list.uid is not None:
-            self.chat_list.scroll_to(offset=-1)
+        if self._follow_bottom:
+            await self._scroll_to_end()
 
     def _on_chat_scroll(self, e: ft.OnScrollEvent):
         """Track whether the reader is at the bottom of the conversation.
@@ -412,9 +469,10 @@ class ChatView(ft.Container):
         the reader went up to older text and the stream must stop pulling the
         view down. Arriving at the bottom again resumes following.
         """
-        scrolled_up = (e.event_type == "user" and e.direction == "forward") or (
-            e.event_type == "update" and (e.scroll_delta or 0) < 0
-        )
+        scrolled_up = (
+            e.event_type == ft.ScrollType.USER
+            and e.direction == ft.ScrollDirection.FORWARD
+        ) or (e.event_type == ft.ScrollType.UPDATE and (e.scroll_delta or 0) < 0)
         if scrolled_up:
             self._follow_bottom = False
         elif (e.max_scroll_extent or 0) - (e.pixels or 0) <= BOTTOM_FOLLOW_THRESHOLD:
@@ -424,7 +482,9 @@ class ChatView(ft.Container):
         picker = self.emoji_picker
         picker.visible = not picker.visible
         self.emoji_btn.icon = (
-            ft.icons.EMOJI_EMOTIONS if picker.visible else ft.icons.EMOJI_EMOTIONS_OUTLINED
+            ft.Icons.EMOJI_EMOTIONS
+            if picker.visible
+            else ft.Icons.EMOJI_EMOTIONS_OUTLINED
         )
         safe_update(self, picker, self.emoji_btn)
         # The list got shorter or taller; keep its end in view.
@@ -437,22 +497,34 @@ class ChatView(ft.Container):
         goes at the end of the text.
         """
         self._set_input((self.input_field.value or "") + emoji)
-        if self.input_field.uid is not None:
-            # focus() also sends the new value, and keeps the keyboard in the field.
-            self.input_field.focus()
+        safe_update(self, self.input_field)
+        self._focus_input()
+
+    def _focus_input(self) -> None:
+        """Put the caret back into the message field (a click on a button took it)."""
+        if self.page_ref is not None and is_mounted(self.input_field):
+            self.page_ref.run_task(self._request_input_focus)
+
+    async def _request_input_focus(self) -> None:
+        # Its own task: the call waits for the client's answer, and nothing that
+        # matters (sending a message) may wait for that.
+        if not is_mounted(self.input_field):
+            return
+        try:
+            await self.input_field.focus()
+        except asyncio.CancelledError:
+            raise
+        except Exception as ex:  # noqa: BLE001
+            logger.debug("The message field was not focused: %s", ex)
 
     def did_mount(self):
-        if self.page is not None:
-            if self.file_picker not in self.page.overlay:
-                self.page.overlay.append(self.file_picker)
+        if self.page_ref is not None:
             # The files first, the history last: the history is what the view waits for.
-            self._attachments_task = self.page.run_task(self.load_attachments)
-            self._load_task = self.page.run_task(self.load_history)
+            self._attachments_task = self.page_ref.run_task(self.load_attachments)
+            self._load_task = self.page_ref.run_task(self.load_history)
 
     def will_unmount(self):
         self._cancel_running_tasks()
-        if self.page is not None and self.file_picker in self.page.overlay:
-            self.page.overlay.remove(self.file_picker)
 
     # ------------------------------------------------------------ attached files
     def _set_input(self, text: str) -> None:
@@ -486,7 +558,7 @@ class ChatView(ft.Container):
         self.attachments_row.controls = [
             ft.Chip(
                 label=ft.Text(f"{a.name} · {a.lines} реда", size=12),
-                leading=ft.Icon(ft.icons.ATTACH_FILE, size=16),
+                leading=ft.Icon(ft.Icons.ATTACH_FILE, size=16),
                 tooltip=(
                     f"~{a.tokens} токена, версия {a.version}. Лили вижда файла само в този разговор; "
                     "кръстчето го маха."
@@ -512,30 +584,45 @@ class ChatView(ft.Container):
                 logger.info("Attachment %s was already gone.", attachment_id)
             else:
                 logger.error("Failed to remove attachment %s: %s", attachment_id, ex)
-                show_snackbar(self.page, f"Файлът не беше махнат. {describe_error(ex)}")
+                show_snackbar(
+                    self.page_ref, f"Файлът не беше махнат. {describe_error(ex)}"
+                )
                 return
         await self.load_attachments()
 
-    def on_attach_click(self, e) -> None:
-        self.file_picker.pick_files(
-            dialog_title="Прикачи файл към този разговор",
-            allow_multiple=True,
-            file_type=ft.FilePickerFileType.ANY,
-        )
+    async def on_attach_click(self, e) -> None:
+        """Open the system dialog and attach what the user chose in it."""
+        try:
+            files = await self.file_picker.pick_files(
+                dialog_title="Прикачи файл към този разговор",
+                allow_multiple=True,
+                file_type=ft.FilePickerFileType.ANY,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as ex:  # noqa: BLE001
+            logger.error("The file dialog failed: %s", ex)
+            show_snackbar(self.page_ref, "Диалогът за избор на файл не се отвори.")
+            return
+        await self.attach_files(files)
 
-    async def on_attach_result(self, e: ft.FilePickerResultEvent) -> None:
+    async def attach_files(self, files: list[ft.FilePickerFile] | None) -> None:
         """Attach the chosen files; what cannot be attached is reported together at the end."""
-        if not e.files:
+        if not files:
             return
         attached: list[str] = []
         problems: list[str] = []
-        for picked in e.files:
+        for picked in files:
             if not picked.path:
                 continue
             try:
-                size = await asyncio.to_thread(lambda p=picked.path: Path(p).stat().st_size)
+                size = await asyncio.to_thread(
+                    lambda p=picked.path: Path(p).stat().st_size
+                )
                 if size > MAX_FILE_BYTES:
-                    raise NotAttachable(f"{picked.name}: файлът е по-голям от {MAX_FILE_BYTES // 1024} KB")
+                    raise NotAttachable(
+                        f"{picked.name}: файлът е по-голям от {MAX_FILE_BYTES // 1024} KB"
+                    )
                 raw = await asyncio.to_thread(Path(picked.path).read_bytes)
                 text = read_text_file(raw, picked.name)
                 await self._store_attachment(picked.name, text)
@@ -554,9 +641,13 @@ class ChatView(ft.Container):
                 attached.append(picked.name)
         await self.load_attachments()
         if attached:
-            show_snackbar(self.page, "Прикачено към разговора: " + ", ".join(attached), success=True)
+            show_snackbar(
+                self.page_ref,
+                "Прикачено към разговора: " + ", ".join(attached),
+                success=True,
+            )
         if problems:
-            show_snackbar(self.page, "Не са прикачени — " + "; ".join(problems))
+            show_snackbar(self.page_ref, "Не са прикачени — " + "; ".join(problems))
 
     async def _store_attachment(self, name: str, text: str) -> ChatAttachment:
         """Send one file to the backend for the open conversation."""
@@ -591,7 +682,7 @@ class ChatView(ft.Container):
         self._offering = True
         try:
             accepted = await confirm_dialog(
-                self.page,
+                self.page_ref,
                 "Дълъг текст",
                 f"Поставеният текст е голям (около {tokens} токена). Да го прикача като файл към разговора? "
                 "Така Лили го чете по-добре и не се брои в дължината на съобщението.",
@@ -616,10 +707,13 @@ class ChatView(ft.Container):
             raise
         except Exception as ex:  # noqa: BLE001
             logger.error("Failed to attach the pasted text: %s", ex)
-            show_snackbar(self.page, f"Текстът не беше прикачен — {self._attach_error_text(ex)}")
+            show_snackbar(
+                self.page_ref,
+                f"Текстът не беше прикачен — {self._attach_error_text(ex)}",
+            )
             return None
         await self.load_attachments()
-        show_snackbar(self.page, f"Прикачено като {name}", success=True)
+        show_snackbar(self.page_ref, f"Прикачено като {name}", success=True)
         return name
 
     async def _offer_file_instead_of_message(self, text: str) -> None:
@@ -633,7 +727,7 @@ class ChatView(ft.Container):
         self._offering = True
         try:
             accepted = await confirm_dialog(
-                self.page,
+                self.page_ref,
                 "Съобщението е твърде дълго",
                 f"Съобщението е около {estimate_message_tokens(text)} токена, а най-много се пращат {MESSAGE_TOKEN_LIMIT}. "
                 "Да го прикача като файл към разговора и в полето да остане кратка бележка?",
@@ -663,7 +757,10 @@ class ChatView(ft.Container):
             logger.error("Failed to load the history of chat %s: %s", session_id[:8], e)
             # Not when the user already moved to another chat: the failure is not theirs to see.
             if session_id == self.session_id:
-                show_snackbar(self.page, f"Историята на чата не се зареди. {describe_error(e)}")
+                show_snackbar(
+                    self.page_ref,
+                    f"Историята на чата не се зареди. {describe_error(e)}",
+                )
             return
 
         # The user switched sessions while the request was in flight.
@@ -681,7 +778,7 @@ class ChatView(ft.Container):
                 ft.Text(
                     f"Показани са последните {HISTORY_PAGE_SIZE} съобщения.",
                     size=11,
-                    color=ft.colors.GREY_500,
+                    color=ft.Colors.GREY_500,
                 )
             )
 
@@ -717,21 +814,35 @@ class ChatView(ft.Container):
         if changed:
             safe_update(self, *changed)
 
-    def add_message(self, role: str, text: str, sources: list | None = None, notify: bool = True) -> ChatMessage:
+    def add_message(
+        self, role: str, text: str, sources: list | None = None, notify: bool = True
+    ) -> ChatMessage:
         is_user = role == "user"
         on_regenerate = self.regenerate_last if not is_user else None
-        chat_message = ChatMessage(role=role, text=text, sources=sources, page=self.page, on_regenerate=on_regenerate, api_client=self.api_client, user_name=self.display_name)
+        chat_message = ChatMessage(
+            role=role,
+            text=text,
+            sources=sources,
+            page=self.page_ref,
+            on_regenerate=on_regenerate,
+            api_client=self.api_client,
+            user_name=self.display_name,
+        )
 
         container_wrapper = ft.Container(
             content=chat_message,
-            margin=ft.margin.only(left=50 if is_user else 0, right=0 if is_user else 50),
+            margin=ft.Margin.only(
+                left=50 if is_user else 0, right=0 if is_user else 50
+            ),
             expand=True,
-            alignment=ft.alignment.top_right if is_user else ft.alignment.top_left,
+            alignment=ft.Alignment.TOP_RIGHT if is_user else ft.Alignment.TOP_LEFT,
         )
 
         row = ft.Row(
             controls=[container_wrapper],
-            alignment=ft.MainAxisAlignment.END if is_user else ft.MainAxisAlignment.START,
+            alignment=ft.MainAxisAlignment.END
+            if is_user
+            else ft.MainAxisAlignment.START,
         )
 
         self.chat_list.controls.append(row)
@@ -760,14 +871,17 @@ class ChatView(ft.Container):
             try:
                 while stream_open:
                     await asyncio.sleep(0.25)
-                    if stream_open and (time.time() - last_chunk_time) >= ACTIVITY_INDICATOR_DELAY:
+                    if (
+                        stream_open
+                        and (time.time() - last_chunk_time) >= ACTIVITY_INDICATOR_DELAY
+                    ):
                         chat_message.show_activity_indicator()
             except asyncio.CancelledError:
                 pass
 
         activity_task = None
-        if self.page is not None:
-            activity_task = self.page.run_task(show_activity_after_delay)
+        if self.page_ref is not None:
+            activity_task = self.page_ref.run_task(show_activity_after_delay)
 
         pending_text = ""
 
@@ -846,8 +960,8 @@ class ChatView(ft.Container):
                 activity_task.cancel()
             # Exactly one full-view update for the finished message.
             safe_update(self)
-            if self.page is not None:
-                self.page.run_task(self._scroll_after_layout)
+            if self.page_ref is not None:
+                self.page_ref.run_task(self._scroll_after_layout)
         return error_text
 
     async def send_message_click(self, e):
@@ -870,9 +984,8 @@ class ChatView(ft.Container):
         logger.info("Chat %s: message sent (%d characters).", session_id[:8], len(text))
 
         self._set_input("")
-        if self.input_field.uid is not None:
-            # focus() calls update() internally, so skip it for a detached field.
-            self.input_field.focus()
+        safe_update(self, self.input_field)
+        self._focus_input()
         self._set_streaming_ui(True)
 
         if self._last_assistant_msg:
@@ -948,10 +1061,10 @@ class ChatView(ft.Container):
                         chat_message, previous_msg, previous_row, position
                     )
                     if error is not None:
-                        show_snackbar(self.page, error)
+                        show_snackbar(self.page_ref, error)
                     elif stopped:
                         show_snackbar(
-                            self.page,
+                            self.page_ref,
                             "Регенерацията е спряна — предишният отговор е запазен.",
                             success=True,
                         )
@@ -960,13 +1073,18 @@ class ChatView(ft.Container):
                     self._last_assistant_row = chat_message._row
                     chat_message.set_regenerate_visible(True)
 
-    def _restore_previous_answer(self, failed_message, previous_msg, previous_row, position):
+    def _restore_previous_answer(
+        self, failed_message, previous_msg, previous_row, position
+    ):
         """Put the replaced answer back after a failed regeneration.
 
         The backend swaps the stored answer only once a complete new one exists,
         so after a failure the previous reply is still the one in the history.
         """
-        if failed_message is not None and failed_message._row in self.chat_list.controls:
+        if (
+            failed_message is not None
+            and failed_message._row in self.chat_list.controls
+        ):
             self.chat_list.controls.remove(failed_message._row)
         if previous_row not in self.chat_list.controls:
             self.chat_list.controls.insert(
@@ -983,5 +1101,3 @@ class ChatView(ft.Container):
         self.api_client.cancel_stream()
         self.stop_btn.disabled = True
         safe_update(self, self.stop_btn)
-
-

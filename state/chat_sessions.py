@@ -4,6 +4,7 @@ A chat is an entry ``{"id", "name"}`` of ``Settings.chat_sessions``. These are p
 functions over ``Settings`` (the only side effect is ``save_settings`` in
 ``_ensure_chat_session``); the chat screen only calls them.
 """
+
 from __future__ import annotations
 
 import uuid

@@ -2,9 +2,9 @@
 name = "flet-client"
 version = "0.1.0"
 description = "Flet client for AI agent"
-requires-python = ">=3.11"
+requires-python = ">=3.15"
 dependencies = [
-    "flet==0.24.0",
+    "flet[desktop]==1.1.2",
     # Bounds: from the version the code is tested with up to, not including, the
     # next breaking release (for a 0.x package that is the next minor). What is
     # really installed is fixed in requirements-lock.txt.
@@ -30,13 +30,12 @@ dev = [
 testpaths = ["tests"]
 # pytest-asyncio warns when this is unset, and from pytest 9.2 on that warning is
 # raised at start-up under `-W error::DeprecationWarning` (CI), so no test runs.
-# Flet 0.24 holds pytest at 9.1 (packaging<24); Flet 1.x would not. "function" is
-# pytest-asyncio's documented default.
+# "function" is pytest-asyncio's documented default.
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 88
-target-version = "py311"
+target-version = "py315"
 
 [tool.hatch.build.targets.wheel]
 packages = ["api", "state", "views"]

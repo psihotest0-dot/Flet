@@ -126,7 +126,9 @@ async def test_the_next_message_goes_to_the_new_session(mock_page, mock_api_clie
     async def stream(**_kwargs):
         yield {"content": "здрасти"}
 
-    mock_api_client.stream_chat = MagicMock(side_effect=lambda **kwargs: stream(**kwargs))
+    mock_api_client.stream_chat = MagicMock(
+        side_effect=lambda **kwargs: stream(**kwargs)
+    )
     view.input_field.value = "здравей"
     await view.send_message_click(None)
 
@@ -182,7 +184,9 @@ async def test_a_renamed_chat_keeps_its_name(mock_page, mock_api_client):
 
 
 @pytest.mark.asyncio
-async def test_the_old_conversation_is_deleted_on_the_backend(mock_page, mock_api_client):
+async def test_the_old_conversation_is_deleted_on_the_backend(
+    mock_page, mock_api_client
+):
     seed(CHAT_1)
     view = make_view(mock_page, mock_api_client)
 
@@ -205,13 +209,18 @@ async def test_deleting_twice_deletes_both_old_sessions(mock_page, mock_api_clie
     with confirming(True):
         await view.on_delete_chat_click(None)
 
-    assert [c.args for c in mock_api_client.delete_session.await_args_list] == [(CHAT_1,), (second,)]
+    assert [c.args for c in mock_api_client.delete_session.await_args_list] == [
+        (CHAT_1,),
+        (second,),
+    ]
     assert load_settings().archived_chats == []
     assert dropdown_names(view) == ["Чат 1", "Чат 2"]
 
 
 @pytest.mark.asyncio
-async def test_only_the_open_chat_is_deleted_and_nothing_else_is_called(mock_page, mock_api_client):
+async def test_only_the_open_chat_is_deleted_and_nothing_else_is_called(
+    mock_page, mock_api_client
+):
     seed(CHAT_2)
     view = make_view(mock_page, mock_api_client)
 
@@ -230,7 +239,9 @@ async def test_only_the_open_chat_is_deleted_and_nothing_else_is_called(mock_pag
     [APIError(500, "internal error"), httpx.ConnectError("backend is down")],
     ids=["backend error", "backend not reachable"],
 )
-async def test_a_failed_delete_on_the_backend_changes_nothing(mock_page, mock_api_client, failure):
+async def test_a_failed_delete_on_the_backend_changes_nothing(
+    mock_page, mock_api_client, failure
+):
     seed(CHAT_1)
     before = load_settings()
     view = make_view(mock_page, mock_api_client)
@@ -250,7 +261,9 @@ async def test_a_failed_delete_on_the_backend_changes_nothing(mock_page, mock_ap
 
 
 @pytest.mark.asyncio
-async def test_a_chat_the_backend_no_longer_has_is_deleted_without_error(mock_page, mock_api_client):
+async def test_a_chat_the_backend_no_longer_has_is_deleted_without_error(
+    mock_page, mock_api_client
+):
     # The backend answers 204 for a session it does not have (after a first attempt
     # whose settings were not saved, for example), so asking again just works.
     seed(CHAT_1)
@@ -264,7 +277,9 @@ async def test_a_chat_the_backend_no_longer_has_is_deleted_without_error(mock_pa
 
 
 @pytest.mark.asyncio
-async def test_an_emptied_chat_stays_empty_on_the_next_start(mock_page, mock_api_client):
+async def test_an_emptied_chat_stays_empty_on_the_next_start(
+    mock_page, mock_api_client
+):
     seed(CHAT_1)
     view = make_view(mock_page, mock_api_client)
     with confirming(True):
@@ -296,7 +311,9 @@ async def test_declining_the_dialog_changes_nothing(mock_page, mock_api_client):
 
 
 @pytest.mark.asyncio
-async def test_a_chat_that_is_still_answering_is_not_deleted(mock_page, mock_api_client):
+async def test_a_chat_that_is_still_answering_is_not_deleted(
+    mock_page, mock_api_client
+):
     seed(CHAT_1)
     before = load_settings()
     view = make_view(mock_page, mock_api_client)
@@ -347,7 +364,10 @@ def test_restarting_a_chat_that_is_not_listed_changes_nothing():
 def test_restarting_a_chat_gives_it_a_new_id_and_archives_nothing():
     settings = Settings(
         session_id=CHAT_1,
-        chat_sessions=[{"id": CHAT_1, "name": "Чат 1"}, {"id": CHAT_2, "name": "Чат 2"}],
+        chat_sessions=[
+            {"id": CHAT_1, "name": "Чат 1"},
+            {"id": CHAT_2, "name": "Чат 2"},
+        ],
     )
 
     new_id = _restart_chat_session(settings, CHAT_1)
@@ -364,7 +384,10 @@ def test_restarting_a_chat_gives_it_a_new_id_and_archives_nothing():
 def test_entries_written_by_earlier_versions_are_left_alone():
     settings = Settings(
         session_id=CHAT_1,
-        chat_sessions=[{"id": CHAT_1, "name": "Чат 1"}, {"id": CHAT_2, "name": "Чат 2"}],
+        chat_sessions=[
+            {"id": CHAT_1, "name": "Чат 1"},
+            {"id": CHAT_2, "name": "Чат 2"},
+        ],
         archived_chats=[{"id": CHAT_3, "name": "Стар чат"}],
     )
 

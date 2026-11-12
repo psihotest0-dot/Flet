@@ -4,6 +4,7 @@
 feeds it the streamed text. What the model wrote passes ``disarm_images`` before it
 is drawn (P20); the sources panel gets its strings from ``views.sources``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -15,7 +16,14 @@ from state.settings import DEFAULT_DISPLAY_NAME
 from views.markdown_safety import disarm_images
 from views.proposals import ProposalCard
 from views.sources import source_details
-from views.ui_utils import safe_update
+from views.ui_utils import (
+    close_dialog,
+    copy_text,
+    is_mounted,
+    open_dialog,
+    open_url,
+    safe_update,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +31,16 @@ logger = logging.getLogger(__name__)
 class ChatMessage(ft.Column):
     """A component representing a single chat message in the UI."""
 
-    def __init__(self, role: str, text: str, sources: list | None = None, page: ft.Page | None = None, on_regenerate: callable | None = None, api_client: APIClient | None = None, user_name: str = DEFAULT_DISPLAY_NAME):
+    def __init__(
+        self,
+        role: str,
+        text: str,
+        sources: list | None = None,
+        page: ft.Page | None = None,
+        on_regenerate: callable | None = None,
+        api_client: APIClient | None = None,
+        user_name: str = DEFAULT_DISPLAY_NAME,
+    ):
         super().__init__()
         self.role = role
         self.api_client = api_client
@@ -32,21 +49,27 @@ class ChatMessage(ft.Column):
         self.page_ref = page
         self.on_regenerate = on_regenerate
         self.spacing = 2
-        self.horizontal_alignment = ft.CrossAxisAlignment.END if role == "user" else ft.CrossAxisAlignment.START
+        self.horizontal_alignment = (
+            ft.CrossAxisAlignment.END if role == "user" else ft.CrossAxisAlignment.START
+        )
 
-        self.text_color = ft.colors.LIGHT_BLUE_200 if role == "user" else ft.colors.PINK_200
+        self.text_color = (
+            ft.Colors.LIGHT_BLUE_200 if role == "user" else ft.Colors.PINK_200
+        )
         self.sender_name = user_name if role == "user" else "Лили"
-        self.bgcolor = ft.colors.BLUE_GREY_800 if role == "user" else ft.colors.BLUE_GREY_900
+        self.bgcolor = (
+            ft.Colors.BLUE_GREY_800 if role == "user" else ft.Colors.BLUE_GREY_900
+        )
 
         self.md = ft.Markdown(
             value=self._shown(self.text_value),
             selectable=True,
             extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
-            code_theme="atom-one-dark",
+            code_theme=ft.MarkdownCodeTheme.ATOM_ONE_DARK,
             on_tap_link=self._open_link,
             md_style_sheet=ft.MarkdownStyleSheet(
                 p_text_style=ft.TextStyle(color=self.text_color),
-            )
+            ),
         )
 
         self.msg_container = ft.Container(
@@ -59,11 +82,11 @@ class ChatMessage(ft.Column):
         self.sender_label = ft.Text(
             value=self.sender_name,
             size=12,
-            color=ft.colors.GREY_500,
+            color=ft.Colors.GREY_500,
         )
 
         self.copy_btn = ft.IconButton(
-            icon=ft.icons.COPY,
+            icon=ft.Icons.COPY,
             icon_size=14,
             tooltip="Копирай",
             on_click=self.copy_to_clipboard,
@@ -71,7 +94,13 @@ class ChatMessage(ft.Column):
 
         top_controls = [self.sender_label, self.copy_btn]
         if role != "user":
-            self.regenerate_btn = ft.IconButton(icon=ft.icons.REFRESH, icon_size=14, tooltip="Опитай отново", on_click=self._handle_regenerate, visible=False)
+            self.regenerate_btn = ft.IconButton(
+                icon=ft.Icons.REFRESH,
+                icon_size=14,
+                tooltip="Опитай отново",
+                on_click=self._handle_regenerate,
+                visible=False,
+            )
             top_controls.append(self.regenerate_btn)
 
         self.top_row = ft.Row(
@@ -84,8 +113,12 @@ class ChatMessage(ft.Column):
         self.proposals_column = ft.Column(spacing=4, visible=False)
         self._proposal_ids: set[int] = set()
         self.bottom_sheet = None
-        self.activity_indicator = ft.Text("...", size=20, color=ft.colors.GREY_500, visible=False)
-        self.error_text = ft.Text("", color=ft.colors.RED, selectable=True, visible=False)
+        self.activity_indicator = ft.Text(
+            "...", size=20, color=ft.Colors.GREY_500, visible=False
+        )
+        self.error_text = ft.Text(
+            "", color=ft.Colors.RED, selectable=True, visible=False
+        )
 
         self.controls = [
             self.top_row,
@@ -95,23 +128,21 @@ class ChatMessage(ft.Column):
             self.sources_row,
             self.proposals_column,
         ]
-
-    def did_mount(self):
-        if self.sources:
-            self.add_sources(self.sources)
+        # The sources a stored message came with are drawn with the message: the
+        # row goes out in the patch that adds it, without an update of its own.
+        self._render_sources()
 
     def _shown(self, text: str) -> str:
         """What the Markdown control draws: Lili's images only as links."""
         return text if self.role == "user" else disarm_images(text)
 
-    def _open_link(self, e):
+    async def _open_link(self, e):
         """Open only web/mail links, never arbitrary URL schemes."""
         url = (getattr(e, "data", None) or "").strip()
         if not url.lower().startswith(("http://", "https://", "mailto:")):
             logger.warning("Blocked non-http link: %s", url)
             return
-        if self.page_ref is not None:
-            self.page_ref.launch_url(url)
+        await open_url(self.page_ref, url)
 
     async def _handle_regenerate(self, e):
         if self.on_regenerate and self.page_ref:
@@ -173,14 +204,14 @@ class ChatMessage(ft.Column):
             safe_update(self, self.proposals_column)
 
     async def copy_to_clipboard(self, e):
-        if self.page_ref:
-            # The text as it was written, images included.
-            self.page_ref.set_clipboard(self.text_value)
-            self.page_ref.open(
+        # The text as it was written, images included.
+        if await copy_text(self.page_ref, self.text_value):
+            open_dialog(
+                self.page_ref,
                 ft.SnackBar(
                     content=ft.Text("Копирано"),
                     duration=2000,
-                )
+                ),
             )
 
     def append_text(self, text: str):
@@ -217,8 +248,21 @@ class ChatMessage(ft.Column):
                 return
             self.sources.extend(new_sources)
 
+        self._render_sources()
+        if is_mounted(self.sources_row):
+            safe_update(self, self.sources_row)
+        else:
+            # The message is not on screen yet: its own first update sends the row.
+            safe_update(self)
+
+    def _render_sources(self) -> None:
+        """Build one chip for every file among ``self.sources``; no update is sent."""
+        if not self.sources:
+            return
         self.sources_row.controls.clear()
-        self.sources_row.controls.append(ft.Text("Източници:", size=12, color=ft.colors.GREY_400))
+        self.sources_row.controls.append(
+            ft.Text("Източници:", size=12, color=ft.Colors.GREY_400)
+        )
 
         # Group sources by filename
         grouped_sources = {}
@@ -232,55 +276,73 @@ class ChatMessage(ft.Column):
         for title, file_sources in grouped_sources.items():
             count = len(file_sources)
             label_text = f"{title} ({count})" if count > 1 else title
-            short_label = (label_text[:20] + "..") if len(label_text) > 20 else label_text
+            short_label = (
+                (label_text[:20] + "..") if len(label_text) > 20 else label_text
+            )
 
             chip = ft.Chip(
                 label=ft.Text(short_label, size=12),
-                leading=ft.Icon(ft.icons.INSERT_DRIVE_FILE, size=14),
-                on_click=lambda e, file_sources=file_sources: self.open_sources_panel(file_sources),
+                leading=ft.Icon(ft.Icons.INSERT_DRIVE_FILE, size=14),
+                on_click=lambda e, file_sources=file_sources: self.open_sources_panel(
+                    file_sources
+                ),
             )
             self.sources_row.controls.append(chip)
 
         self.sources_row.visible = True
-        if self.sources_row.uid is not None:
-            safe_update(self, self.sources_row)
-        else:
-            # First paint (e.g. called from did_mount): send the whole message.
-            safe_update(self)
 
     def open_sources_panel(self, sources_to_display: list | None = None):
         if not self.page_ref:
             return
 
-        display_list = sources_to_display if sources_to_display is not None else self.sources
+        display_list = (
+            sources_to_display if sources_to_display is not None else self.sources
+        )
 
         list_view = ft.ListView(expand=True, spacing=10, padding=20)
 
-        list_view.controls.append(ft.Text("Източници (RAG)", size=20, weight=ft.FontWeight.BOLD))
+        list_view.controls.append(
+            ft.Text("Източници (RAG)", size=20, weight=ft.FontWeight.BOLD)
+        )
 
         for src in display_list:
             if not isinstance(src, dict):
                 src = {"title": str(src)}
             title = src.get("title") or src.get("file_name") or "Unknown"
-            snippet = src.get("content_snippet") or src.get("text_snippet") or src.get("text") or ""
+            snippet = (
+                src.get("content_snippet")
+                or src.get("text_snippet")
+                or src.get("text")
+                or ""
+            )
 
             item = ft.Container(
-                content=ft.Column([
-                    ft.Row([
-                        ft.Text(title, weight=ft.FontWeight.BOLD, size=16),
-                        ft.Text(source_details(src), size=12, color=ft.colors.GREY_400)
-                    ]),
-                    ft.Text(snippet, selectable=True, size=14, color=ft.colors.GREY_300)
-                ]),
-                bgcolor=ft.colors.BLUE_GREY_900,
+                content=ft.Column(
+                    [
+                        ft.Row(
+                            [
+                                ft.Text(title, weight=ft.FontWeight.BOLD, size=16),
+                                ft.Text(
+                                    source_details(src),
+                                    size=12,
+                                    color=ft.Colors.GREY_400,
+                                ),
+                            ]
+                        ),
+                        ft.Text(
+                            snippet, selectable=True, size=14, color=ft.Colors.GREY_300
+                        ),
+                    ]
+                ),
+                bgcolor=ft.Colors.BLUE_GREY_900,
                 padding=15,
                 border_radius=10,
-                border=ft.border.all(1, ft.colors.BLUE_GREY_700)
+                border=ft.Border.all(1, ft.Colors.BLUE_GREY_700),
             )
             list_view.controls.append(item)
 
         if self.bottom_sheet is not None:
-            self.page_ref.close(self.bottom_sheet)
+            close_dialog(self.bottom_sheet)
 
         self.bottom_sheet = ft.BottomSheet(
             content=ft.Container(
@@ -288,6 +350,5 @@ class ChatMessage(ft.Column):
                 padding=10,
                 height=400,
             ),
-            open=True
         )
-        self.page_ref.open(self.bottom_sheet)
+        open_dialog(self.page_ref, self.bottom_sheet)

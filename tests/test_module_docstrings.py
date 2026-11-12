@@ -4,6 +4,7 @@
 plain string that nobody can read through ``module.__doc__`` (it happened in 8
 files, and ``ruff`` with the rules in use does not see it).
 """
+
 from __future__ import annotations
 
 import ast
@@ -24,8 +25,12 @@ def test_the_modules_were_found():
     assert len(MODULES) >= 10
 
 
-@pytest.mark.parametrize("path", MODULES, ids=lambda path: f"{path.parent.name}/{path.name}")
+@pytest.mark.parametrize(
+    "path", MODULES, ids=lambda path: f"{path.parent.name}/{path.name}"
+)
 def test_the_module_description_is_the_docstring(path):
     tree = ast.parse(path.read_text(encoding="utf-8"))
 
-    assert ast.get_docstring(tree), f"{path.name}: the description must be the first statement"
+    assert ast.get_docstring(tree), (
+        f"{path.name}: the description must be the first statement"
+    )

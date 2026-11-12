@@ -23,7 +23,7 @@ def texts_in(control) -> list[str]:
 
 
 def opened_panel_texts(mock_page) -> list[str]:
-    sheet = mock_page.open.call_args.args[0]
+    sheet = mock_page.show_dialog.call_args.args[0]
     assert isinstance(sheet, ft.BottomSheet)
     return texts_in(sheet.content)
 
@@ -111,7 +111,9 @@ def test_details_line_still_understands_the_old_type_key():
 def test_details_line_shows_the_distance_of_a_summary():
     src = {"source_type": "concept", "score": 0.152, "score_type": "distance"}
 
-    assert source_details(src) == "• Концепция • Разстояние: 0.152 (по-малко = по-близо)"
+    assert (
+        source_details(src) == "• Концепция • Разстояние: 0.152 (по-малко = по-близо)"
+    )
 
 
 def test_details_line_shows_no_score_for_a_memory_that_has_no_measure():
@@ -155,9 +157,19 @@ def test_panel_shows_label_page_and_score_type_for_every_source(mock_page):
 def test_panel_shows_the_distance_of_a_summary_and_nothing_for_a_memory(mock_page):
     message = ChatMessage("assistant", "отговор", page=mock_page)
     sources = [
-        {"file_name": "Принципи.epub", "source_type": "concept", "content_snippet": "Резюме",
-         "score": 0.152, "score_type": "distance"},
-        {"file_name": "Памет (Memory)", "source_type": "memory", "content_snippet": "Обича кафе", "score": 0},
+        {
+            "file_name": "Принципи.epub",
+            "source_type": "concept",
+            "content_snippet": "Резюме",
+            "score": 0.152,
+            "score_type": "distance",
+        },
+        {
+            "file_name": "Памет (Memory)",
+            "source_type": "memory",
+            "content_snippet": "Обича кафе",
+            "score": 0,
+        },
     ]
 
     message.open_sources_panel(sources)
