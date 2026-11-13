@@ -258,7 +258,7 @@ class FilesView(ft.Container):
                 *(self.api_client.get_file_status(file.id) for file in pending_files),
                 return_exceptions=True,
             )
-            for file, result in zip(pending_files, results):
+            for file, result in zip(pending_files, results, strict=True):
                 if isinstance(result, asyncio.CancelledError):
                     raise result
                 if isinstance(result, BaseException):

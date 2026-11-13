@@ -309,7 +309,7 @@ def load_settings() -> Settings:
         text = SETTINGS_FILE.read_text(encoding="utf-8-sig")
     except (OSError, ValueError) as e:
         # ValueError covers a file that is not UTF-8 decodable at all.
-        logger.error(f"Failed to read settings file: {e}")
+        logger.error("Failed to read settings file: %s", e)
         restored = _settings_from_backup()
         if restored is None:
             return Settings()
@@ -351,7 +351,7 @@ def load_settings() -> Settings:
     except (TypeError, ValueError) as e:
         # The JSON itself is readable, so the file is kept for the user to fix;
         # only the offending values fall back to their defaults.
-        logger.error(f"Failed to parse settings values, using defaults: {e}")
+        logger.error("Failed to parse settings values, using defaults: %s", e)
         restored = _settings_from_backup()
         if restored is None:
             return Settings()
@@ -390,13 +390,13 @@ def _write_atomically(path: Path, text: str) -> bool:
             os.replace(temp_file, path)
             return True
         except (OSError, ValueError) as e:
-            logger.error(f"Failed to save {path.name}: {e}")
+            logger.error("Failed to save %s: %s", path.name, e)
             try:
                 if temp_file is not None and temp_file.exists():
                     temp_file.unlink()
             except OSError as unlink_error:
                 logger.warning(
-                    f"Failed to remove temporary file {temp_file}: {unlink_error}"
+                    "Failed to remove temporary file %s: %s", temp_file, unlink_error
                 )
             return False
 
@@ -406,6 +406,6 @@ def save_settings(settings: Settings) -> bool:
     try:
         text = settings.model_dump_json(indent=4)
     except ValueError as e:
-        logger.error(f"Failed to save settings to file: {e}")
+        logger.error("Failed to save settings to file: %s", e)
         return False
     return _write_atomically(SETTINGS_FILE, text)

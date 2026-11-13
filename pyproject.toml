@@ -37,5 +37,11 @@ asyncio_default_fixture_loop_scope = "function"
 line-length = 88
 target-version = "py315"
 
+[tool.ruff.lint]
+# The default rules (E4, E7, E9, F) plus: import order (I), likely bugs (B),
+# outdated syntax (UP), asyncio traps (ASYNC) and eager formatting in
+# logging calls (G).
+select = ["E4", "E7", "E9", "F", "I", "B", "UP", "ASYNC", "G"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["api", "state", "views"]

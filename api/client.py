@@ -369,7 +369,7 @@ class APIClient:
             return response.status_code == 200
         except (httpx.HTTPError, httpx.TimeoutException) as e:
             # Polled every few seconds - keep it out of the error log.
-            logger.debug(f"Health check failed: {e}")
+            logger.debug("Health check failed: %s", e)
             return False
 
     async def upload_file(

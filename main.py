@@ -128,7 +128,7 @@ async def run_health_checks(probe, on_change, interval: float = HEALTH_CHECK_INT
         except asyncio.CancelledError:
             raise
         except Exception as ex:  # noqa: BLE001
-            logger.warning(f"Health check failed: {ex}")
+            logger.warning("Health check failed: %s", ex)
             is_healthy = False
 
         if is_healthy != healthy:
