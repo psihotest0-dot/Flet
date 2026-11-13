@@ -2,7 +2,7 @@
 
 1. Всички HTTP заявки към бекенда задължително минават през `api/client.py`.
 2. Тестовете не правят реални мрежови повиквания (използвайте мокове или responses).
-3. Преди всеки Pull Request, `ruff` и `pytest` трябва да минават без грешки. CI ги пуска на Python 3.15, на Linux и на Windows, с `pytest -W error::DeprecationWarning`.
+3. Преди всеки Pull Request, `ruff` и `pytest` трябва да минават без грешки. CI ги пуска на Python 3.15, на Linux и на Windows, с `pytest -W error::DeprecationWarning --cov --cov-report=term`; покритието не бива да пада под `fail_under` в `pyproject.toml` (вдигай прага, когато числото порасне).
 4. Flet е фиксиран на `1.1.2` (Python 3.15). Какво е различно от старите версии и не се вижда от пръв поглед:
    - Диалог, долен панел и `SnackBar` се отварят с `open_dialog()` и се затварят с `close_dialog()` от `views/ui_utils.py`. Не `page.pop_dialog()`: то затваря най-горния, а снекбар над диалог е над него.
    - `Control.page` е само за четене и хвърля, докато контролата не е на страницата. Изгледите пазят страницата в `page_ref`; дали контрола е на екрана пита `is_mounted()`, а обновяването минава през `safe_update()`.

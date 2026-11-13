@@ -22,6 +22,7 @@ build-backend = "hatchling.build"
 dev = [
     "pytest>=9.1,<10",
     "pytest-asyncio>=1.4,<2",
+    "pytest-cov>=7.1,<8",
     "ruff>=0.17,<0.18",
     "respx>=0.23,<0.24"
 ]
@@ -32,6 +33,16 @@ testpaths = ["tests"]
 # raised at start-up under `-W error::DeprecationWarning` (CI), so no test runs.
 # "function" is pytest-asyncio's documented default.
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+source = ["api", "state", "views", "main"]
+branch = true
+
+[tool.coverage.report]
+# Measured 89 % (statements and branches) on 2026-11-13; one point of room so
+# a small refactor does not turn CI red. Raise it when the number goes up.
+fail_under = 88
+skip_covered = true
 
 [tool.ruff]
 line-length = 88

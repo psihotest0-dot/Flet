@@ -114,8 +114,9 @@
 5. **Проверка на кода:**
    ```bash
    ruff check .
-   python -m pytest -W error::DeprecationWarning
+   python -m pytest -W error::DeprecationWarning --cov --cov-report=term
    ```
+   `--cov` мери покритието (редове и клонове на `api/`, `state/`, `views/` и `main.py`); под прага `fail_under` от `pyproject.toml` (88 %) командата пада. Без `--cov` тестовете вървят както преди.
 
 ## Правила за разработка
 

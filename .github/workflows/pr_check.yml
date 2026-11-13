@@ -37,6 +37,7 @@ jobs:
       run: |
         ruff check .
 
+    # --cov takes its sources and the minimum (fail_under) from pyproject.toml.
     - name: Test with pytest
       run: |
-        pytest -W error::DeprecationWarning
+        pytest -W error::DeprecationWarning --cov --cov-report=term
