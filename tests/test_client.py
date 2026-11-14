@@ -795,7 +795,7 @@ def no_retry_delay(monkeypatch):
 async def test_get_does_not_repeat_a_rejected_request(client, no_retry_delay):
     route = respx.get("http://localhost:8080/memories").mock(
         return_value=httpx.Response(
-            400, text="status must be one of: candidate, active, superseded\n"
+            400, text="status must be one of: candidate, active\n"
         )
     )
 
@@ -806,7 +806,7 @@ async def test_get_does_not_repeat_a_rejected_request(client, no_retry_delay):
     assert route.call_count == 1
     assert exc_info.value.status == 400
     assert (
-        exc_info.value.message == "status must be one of: candidate, active, superseded"
+        exc_info.value.message == "status must be one of: candidate, active"
     )
 
 

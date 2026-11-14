@@ -354,7 +354,6 @@ class MemoryView(ft.Container):
                 ft.DropdownOption(FILTER_ALL),
                 ft.DropdownOption("active"),
                 ft.DropdownOption("candidate"),
-                ft.DropdownOption("superseded"),
             ],
             value=FILTER_ALL,
             on_select=self.on_filter_change,
