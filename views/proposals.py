@@ -19,28 +19,47 @@ from views.ui_utils import describe_error, safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
 
+# The button that shows the whole text of a file write, and takes it away again.
+SHOW_TEXT = "Покажи целия текст"
+HIDE_TEXT = "Скрий текста"
+
 # Where the text a proposal may rest on came from (the ``external_sources`` of the
-# backend): the web tools, or the user's own documents.
+# backend): the web tools, the files (an attached file, or one of the files the
+# assistant keeps), or the user's own documents.
 WEB_SOURCES = {"web_search", "web_fetch"}
+FILE_SOURCES = {"attachments", "user_files"}
 
 # 404: no such proposal (any more); 409: it was decided already. 422: approving
-# it would exceed the limit of global rules - the proposal stays open.
+# it cannot be done as it stands - the user has too many global rules, or a file
+# write finds the folder changed - and the proposal stays open.
 CLOSED_STATUSES = (404, 409)
-TOO_MANY_RULES_STATUS = 422
+CANNOT_APPLY_STATUS = 422
+
+# What a write to a file does, by the ``file_mode`` of the proposal.
+FILE_MODE_HINTS = {
+    "create": "Ще се направи нов файл.",
+    "replace": "Старият текст ще се пази като предишна версия.",
+    "append": "Текстът ще се добави в края на файла.",
+}
 
 
 def origin_warning(external_sources: list[str] | None) -> str | None:
     """Warning for a proposal made after the assistant read text from outside."""
     if not external_sources:
         return None
-    web = any(source in WEB_SOURCES for source in external_sources)
-    docs = any(source not in WEB_SOURCES for source in external_sources)
-    if web and docs:
-        where = "интернет и документи"
-    elif web:
-        where = "интернет"
-    else:
-        where = "документи"
+    places = []
+    if any(source in WEB_SOURCES for source in external_sources):
+        places.append("интернет")
+    if any(
+        source not in WEB_SOURCES and source not in FILE_SOURCES
+        for source in external_sources
+    ):
+        places.append("документи")
+    if any(source in FILE_SOURCES for source in external_sources):
+        places.append("файлове")
+    where = (
+        places[0] if len(places) == 1 else ", ".join(places[:-1]) + " и " + places[-1]
+    )
     return f"Предложено след четене на {where} — провери го."
 
 
@@ -49,6 +68,8 @@ def kind_label(proposal: Proposal) -> str:
         return "Правило"
     if proposal.kind == "save_style_note":
         return "Как говорим"
+    if proposal.kind == "write_file":
+        return "Запис на файл"
     return "Спомен"
 
 
@@ -89,6 +110,30 @@ class ProposalCard(ft.Container):
             warning or "", size=12, color=ft.Colors.ORANGE_300, visible=bool(warning)
         )
 
+        # A write to a file shows what it does, and the whole text on request: the
+        # line above has only the beginning, and the user decides on the text.
+        self.is_file_write = proposal.kind == "write_file"
+        self.hint = ft.Text(
+            FILE_MODE_HINTS.get(proposal.file_mode or "", ""),
+            size=12,
+            color=ft.Colors.GREY_400,
+            visible=self.is_file_write and proposal.file_mode in FILE_MODE_HINTS,
+        )
+        self.full_text = ft.Container(
+            content=ft.Column(
+                [ft.Text(proposal.content or "", selectable=True, size=12)],
+                scroll=ft.ScrollMode.AUTO,
+            ),
+            height=160,
+            padding=8,
+            border_radius=6,
+            border=ft.Border.all(1, ft.Colors.GREY_700),
+            visible=False,
+        )
+        self.show_text_btn = ft.TextButton(
+            SHOW_TEXT, on_click=self._toggle_text, visible=self.is_file_write
+        )
+
         self.approve_btn = ft.Button(
             "Запази", icon=ft.Icons.CHECK, on_click=self._approve
         )
@@ -97,10 +142,24 @@ class ProposalCard(ft.Container):
         self.result = ft.Text("", size=12, color=ft.Colors.GREY_400, visible=False)
 
         self.content = ft.Column(
-            [self.title, self.body, self.warning, self.buttons, self.result],
+            [
+                self.title,
+                self.body,
+                self.hint,
+                self.warning,
+                self.show_text_btn,
+                self.full_text,
+                self.buttons,
+                self.result,
+            ],
             spacing=4,
             tight=True,
         )
+
+    async def _toggle_text(self, e):
+        self.full_text.visible = not self.full_text.visible
+        self.show_text_btn.content = HIDE_TEXT if self.full_text.visible else SHOW_TEXT
+        safe_update(self, self.full_text, self.show_text_btn)
 
     async def _approve(self, e):
         await self._decide(True)
@@ -140,7 +199,7 @@ class ProposalCard(ft.Container):
                 return
             logger.error("Failed to decide proposal %s: %s", self.proposal.id, ex)
             self._set_busy(False)
-            show_snackbar(self.page_ref, _api_error_text(ex))
+            show_snackbar(self.page_ref, _api_error_text(ex, self.proposal))
             return
         except Exception as ex:  # noqa: BLE001
             logger.error("Failed to decide proposal %s: %s", self.proposal.id, ex)
@@ -157,8 +216,15 @@ class ProposalCard(ft.Container):
             self.on_decided(self.proposal, approve)
 
 
-def _api_error_text(error: APIError) -> str:
-    """The backend refuses an approval (422) when the user already has too many rules."""
-    if error.status == TOO_MANY_RULES_STATUS:
+def _api_error_text(error: APIError, proposal: Proposal | None = None) -> str:
+    """The backend refuses an approval (422) that cannot be done as it stands.
+
+    For a rule it is the limit of global rules. For a file write the backend says
+    why in Bulgarian (the file is there now, it is gone, there is no room): that
+    text is the answer.
+    """
+    if error.status == CANNOT_APPLY_STATUS:
+        if proposal is not None and proposal.kind == "write_file":
+            return error.message
         return "Вече има твърде много глобални правила — първо изтрий някое от таба „Памет“."
     return describe_error(error)

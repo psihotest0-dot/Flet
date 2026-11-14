@@ -1599,7 +1599,13 @@ def select_tab(tabs: ft.Tabs, index: int) -> None:
 def test_the_bot_is_the_fourth_tab_and_is_built_when_first_opened(start_app):
     tabs = start_app()
 
-    assert tab_labels(tabs) == ["Чат", "Памет", "Файлове", "Бот"]
+    assert tab_labels(tabs) == [
+        "Чат",
+        "Памет",
+        "Файлове",
+        "Бот",
+        "Файлове на Лили",
+    ]
     # Until it is opened, an empty container holds its place.
     assert not isinstance(tab_view(tabs, 3), OracleView)
 

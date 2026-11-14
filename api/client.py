@@ -103,11 +103,16 @@ class Memory(BaseModel):
 
 
 class Proposal(BaseModel):
-    """A write the assistant asked for (a global rule, a note on how to talk, or a memory) that waits for the user.
+    """A write the assistant asked for that waits for the user.
+
+    It is a global rule, a note on how to talk, a memory, or a write to one of the
+    user's own text files (``write_file``: ``file_name``, ``file_mode`` and the
+    text in ``content``).
 
     ``external_sources`` names where untrusted text came from in the turn that
     made it (``web_search``, ``web_fetch``, ``search_documents``,
-    ``retrieved_documents``); empty means the turn read only the conversation.
+    ``retrieved_documents``, ``attachments``, ``user_files``); empty means the
+    turn read only the conversation.
     """
 
     id: int
@@ -119,8 +124,43 @@ class Proposal(BaseModel):
     value: str | None = None
     content: str | None = None
     importance: int | None = None
+    # A file write only: the name, and ``create``, ``replace`` or ``append``.
+    file_name: str | None = None
+    file_mode: str | None = None
     external_sources: list[str] = []
     created_at: datetime | None = None
+
+
+class UserFileInfo(BaseModel):
+    """One of the text files the assistant keeps for the user (notes, lists, drafts)."""
+
+    name: str
+    size: int = 0
+    modified: datetime | None = None
+
+
+class UserFileList(BaseModel):
+    """The files with what they take and the limits (``GET /workspace/files``)."""
+
+    files: list[UserFileInfo] = []
+    total_bytes: int = 0
+    max_files: int = 0
+    max_file_bytes: int = 0
+    max_total_bytes: int = 0
+
+
+class UserFile(BaseModel):
+    """The text of one file: ``version`` is ``current`` or ``previous``.
+
+    The previous version is the text a replacement took the place of; it has no
+    size and no date.
+    """
+
+    name: str
+    version: str = "current"
+    content: str = ""
+    size: int | None = None
+    modified: datetime | None = None
 
 
 class Rule(BaseModel):
@@ -603,6 +643,30 @@ class APIClient:
         _raise_for_status(response)
         logger.info("Proposal %s: %s.", proposal_id, verb)
         return Proposal(**response.json())
+
+    async def list_user_files(self) -> UserFileList:
+        """The files the assistant keeps for the user.
+
+        A backend without the file tools (``FILES_ENABLED`` off, or an older one) answers
+        404, as for any unknown path: the caller treats that as "not turned on".
+        """
+        response = await self._get("/workspace/files")
+        return UserFileList(**response.json())
+
+    async def get_user_file(self, name: str, previous: bool = False) -> UserFile:
+        """The whole text of a file, or of the version a replacement took the place of."""
+        params = {"version": "previous"} if previous else None
+        response = await self._get(
+            f"/workspace/files/{quote(name, safe='')}", params=params
+        )
+        return UserFile(**response.json())
+
+    async def delete_user_file(self, name: str) -> None:
+        """Remove a file and its previous version. Only the user can; the assistant cannot."""
+        response = await self.client.delete(f"/workspace/files/{quote(name, safe='')}")
+        _raise_for_status(response)
+        # The name is the user's own text; the log keeps the fact only.
+        logger.info("A file of the assistant was deleted.")
 
     async def list_rules(self) -> list[Rule]:
         """The global rules of the user, newest first."""

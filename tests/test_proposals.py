@@ -657,3 +657,133 @@ async def test_deleting_a_note_says_note(mock_page):
     api_client.delete_rule.assert_awaited_once_with(5)
     assert "бележката „humour“" in confirm.call_args.args[2]
     assert view.style_tile.visible is False, "the list is read again after the delete"
+
+
+# ------------------------------------------------------- writes to files (P44)
+FILE_WRITE = {
+    "id": 31,
+    "kind": "write_file",
+    "status": "pending",
+    "session_id": "s1",
+    "summary": "Замяна на файла „списък.txt“ (12 знака): мляко и хляб",
+    "content": "мляко и хляб",
+    "file_name": "списък.txt",
+    "file_mode": "replace",
+    "external_sources": ["web_fetch", "user_files"],
+    "created_at": "2026-11-14T20:00:00Z",
+}
+
+
+def test_a_file_write_is_labelled_as_one():
+    assert kind_label(Proposal(**FILE_WRITE)) == "Запис на файл"
+
+
+def test_the_proposal_keeps_the_name_and_the_mode_of_a_file_write():
+    proposal = Proposal(**FILE_WRITE)
+
+    assert proposal.file_name == "списък.txt"
+    assert proposal.file_mode == "replace"
+    assert proposal.content == "мляко и хляб"
+    assert Proposal(**RULE).file_name is None
+
+
+@pytest.mark.parametrize(
+    ("sources", "expected"),
+    [
+        (["user_files"], "файлове"),
+        (["attachments"], "файлове"),
+        (["web_fetch", "user_files"], "интернет и файлове"),
+        (["search_documents", "attachments"], "документи и файлове"),
+        (
+            ["web_search", "search_documents", "user_files"],
+            "интернет, документи и файлове",
+        ),
+    ],
+)
+def test_origin_warning_names_the_files_too(sources, expected):
+    warning = origin_warning(sources)
+
+    assert warning is not None
+    assert f"след четене на {expected} —" in warning
+
+
+def test_the_card_of_a_file_write_says_what_it_does():
+    card = make_card(card_api(), Proposal(**FILE_WRITE))
+
+    assert "Запис на файл" in card.title.value
+    assert card.body.value == FILE_WRITE["summary"]
+    assert card.hint.visible is True
+    assert "предишна версия" in card.hint.value
+    assert card.show_text_btn.visible is True
+    assert card.full_text.visible is False
+    assert "интернет и файлове" in card.warning.value
+
+
+@pytest.mark.parametrize(
+    ("mode", "word"),
+    [("create", "нов файл"), ("replace", "предишна версия"), ("append", "в края")],
+)
+def test_every_way_of_writing_has_its_hint(mode, word):
+    card = make_card(card_api(), Proposal(**{**FILE_WRITE, "file_mode": mode}))
+
+    assert word in card.hint.value
+
+
+def test_a_rule_and_a_memory_have_no_file_controls():
+    for raw in (RULE, MEMORY):
+        card = make_card(card_api(), Proposal(**raw))
+
+        assert card.hint.visible is False
+        assert card.show_text_btn.visible is False
+        assert card.full_text.visible is False
+
+
+@pytest.mark.asyncio
+async def test_the_whole_text_can_be_shown_and_hidden():
+    card = make_card(card_api(), Proposal(**FILE_WRITE))
+    shown = card.full_text.content.controls[0]
+    assert shown.value == "мляко и хляб"
+
+    await card._toggle_text(None)
+    assert card.full_text.visible is True
+    assert card.show_text_btn.content == "Скрий текста"
+
+    await card._toggle_text(None)
+    assert card.full_text.visible is False
+    assert card.show_text_btn.content == "Покажи целия текст"
+
+
+@pytest.mark.asyncio
+async def test_a_file_write_that_cannot_be_done_shows_the_reason_and_stays_open(
+    mock_page,
+):
+    reason = (
+        "Файлът „списък.txt“ вече съществува. Отхвърли предложението и поискай замяна."
+    )
+    api_client = card_api()
+    api_client.approve_proposal = AsyncMock(side_effect=APIError(422, reason))
+    card = make_card(api_client, Proposal(**FILE_WRITE), page=mock_page)
+
+    await card._approve(None)
+
+    assert card.buttons.visible is True, "the user can still reject it"
+    assert card.approve_btn.disabled is False
+    snackbar = mock_page.show_dialog.call_args.args[0]
+    assert snackbar.content.value == reason, "the backend's reason, not a rules message"
+
+
+@pytest.mark.asyncio
+async def test_a_file_write_can_be_approved_and_rejected():
+    for approve in (True, False):
+        api_client = card_api()
+        decided = []
+        card = make_card(
+            api_client,
+            Proposal(**FILE_WRITE),
+            on_decided=lambda p, approved, d=decided: d.append((p.id, approved)),
+        )
+
+        await (card._approve if approve else card._reject)(None)
+
+        assert decided == [(31, approve)]
+        assert card.result.visible is True

@@ -702,6 +702,88 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+  /workspace/files:
+    get:
+      summary: The files the assistant keeps for the user
+      description: >-
+        The user's own text files - notes, lists, drafts the assistant writes down
+        when asked (plan item P44). The routes exist only when the backend runs
+        with `FILES_ENABLED=true`; otherwise they answer `404`, as an unknown
+        path does. The folder is flat (no subfolders), one per user, and the
+        assistant has no way to delete: that is `DELETE /workspace/files/{name}`,
+        for the user. Only `.txt .md .csv .json .yaml .yml .log` files with plain
+        names are listed. Limits: 64 KB a file, 200 files, 20 MB together with
+        the previous versions.
+      parameters:
+      - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: The files by name and what they take
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserFileList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /workspace/files/{name}:
+    get:
+      summary: The text of a file
+      description: >-
+        The whole text. `version=previous` is the text a replacement took the
+        place of (one generation is kept); it has no size and no date. The text of
+        a file may have been saved from a web page or a book: the assistant
+        treats it as text from outside.
+      parameters:
+      - $ref: '#/components/parameters/UserFileName'
+      - name: version
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: [current, previous]
+      - $ref: '#/components/parameters/UserId'
+      responses:
+        '200':
+          description: The text
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserFile'
+        '400':
+          description: The name is not a plain name with an allowed extension; the body says why
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      summary: Remove a file
+      description: Removes the file and its previous version.
+      parameters:
+      - $ref: '#/components/parameters/UserFileName'
+      - $ref: '#/components/parameters/UserId'
+      responses:
+        '204':
+          description: Removed
+        '400':
+          description: The name is not a plain name with an allowed extension
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /proposals:
     get:
       summary: Proposals that wait for the user
@@ -755,9 +837,11 @@ paths:
                 type: string
         '422':
           description: >-
-            The user has 20 global rules (or 8 notes on how to talk) already.
-            The proposal stays open; delete one (`DELETE /rules/{id}`) and
-            approve again.
+            The user has 20 global rules (or 8 notes on how to talk) already, or
+            a file write cannot be done as it stands (the new file's name is
+            taken, the file to change is gone, there is no room). The proposal
+            stays open; the body says what is wrong. Delete one rule
+            (`DELETE /rules/{id}`) and approve again, or reject the proposal.
           content:
             text/plain:
               schema:
@@ -1051,6 +1135,16 @@ components:
         type: integer
         format: int64
         minimum: 1
+    UserFileName:
+      name: name
+      in: path
+      required: true
+      description: >-
+        A plain file name, percent-encoded: letters of any alphabet, digits,
+        spaces, `-`, `_`, `.` and brackets, at most 100 characters, with one of
+        the extensions `.txt .md .csv .json .yaml .yml .log`.
+      schema:
+        type: string
   responses:
     BadRequest:
       description: Bad request (a malformed id or body, or a value out of range)
@@ -1454,6 +1548,59 @@ components:
             - completed
             - failed
             - empty
+    UserFileList:
+      type: object
+      required: [files, total_bytes, max_files, max_file_bytes, max_total_bytes]
+      properties:
+        files:
+          type: array
+          description: By name; `[]` when there are none.
+          items:
+            $ref: '#/components/schemas/UserFileInfo'
+        total_bytes:
+          type: integer
+          format: int64
+          description: What the files and their previous versions take.
+        max_files:
+          type: integer
+        max_file_bytes:
+          type: integer
+        max_total_bytes:
+          type: integer
+          format: int64
+    UserFileInfo:
+      type: object
+      required: [name, size, modified]
+      properties:
+        name:
+          type: string
+        size:
+          type: integer
+          format: int64
+          description: Bytes.
+        modified:
+          type: string
+          format: date-time
+    UserFile:
+      type: object
+      required: [name, version, content]
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+          enum: [current, previous]
+        content:
+          type: string
+          description: The whole text (UTF-8; a byte order mark is dropped).
+        size:
+          type: integer
+          format: int64
+          description: Only for the current version.
+        modified:
+          type: string
+          format: date-time
+          description: Only for the current version.
     ChatAttachment:
       type: object
       properties:
@@ -1496,14 +1643,18 @@ components:
         (`save_style_note`) have `key` and `value`. The `create_memory` kind,
         with `content` and `importance`, is what proposals made before the owner
         decided that memories are saved at once look like; none is created now,
-        but a stored one can still be approved or rejected.
+        but a stored one can still be approved or rejected. A write to one of
+        the user's own text files (`write_file`, only when the file tools are
+        turned on) has `file_name`, `file_mode` and the text in `content`: the
+        model asks for it when it would replace a file that exists, or when the
+        turn had read text from outside (see `external_sources`).
       properties:
         id:
           type: integer
           format: int64
         kind:
           type: string
-          enum: [save_global_rule, save_style_note, create_memory]
+          enum: [save_global_rule, save_style_note, create_memory, write_file]
         status:
           type: string
           enum: [pending, approved, rejected]
@@ -1520,12 +1671,24 @@ components:
           description: Rules and notes only (at most 400 characters).
         content:
           type: string
-          description: Memories only (at most 1000 characters).
+          description: >-
+            Memories (at most 1000 characters) and file writes (the text to
+            write or to add, at most 65 536 bytes).
         importance:
           type: integer
           minimum: 1
           maximum: 10
           description: Memories only.
+        file_name:
+          type: string
+          description: File writes only - a plain name in the user's folder, such as `list.txt`.
+        file_mode:
+          type: string
+          enum: [create, replace, append]
+          description: >-
+            File writes only. `create` makes a new file, `replace` puts the text
+            in place of a file that exists (the old text is kept as the previous
+            version), `append` adds it to the end.
         external_sources:
           type: array
           description: >-

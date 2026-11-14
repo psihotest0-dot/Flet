@@ -17,6 +17,7 @@ from views.memory import MemoryView
 from views.oracle import OracleView
 from views.settings_dialog import SettingsDialog
 from views.ui_utils import safe_update, show_snackbar
+from views.user_files import UserFilesView
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +25,9 @@ LOG_FILE = Path(__file__).with_name("app.log")
 HEALTH_CHECK_INTERVAL = 10
 # How long closing the window waits for the HTTP client; then the window goes anyway.
 CLOSE_TIMEOUT = 5.0
-TAB_LABELS = ("Чат", "Памет", "Файлове", "Бот")
+TAB_LABELS = ("Чат", "Памет", "Файлове", "Бот", "Файлове на Лили")
 # Tab index -> the view method that re-reads its data when the tab is opened again.
-RELOADED_ON_VISIT = {1: "load_memories", 3: "refresh"}
+RELOADED_ON_VISIT = {1: "load_memories", 3: "refresh", 4: "refresh"}
 # Libraries that log every single request on INFO.
 NOISY_LOGGERS = ("httpx", "httpcore")
 UNEXPECTED_ERROR_TEXT = "Възникна неочаквана грешка. Подробностите са в app.log."
@@ -308,8 +309,16 @@ def main(page: ft.Page):
     def create_oracle() -> OracleView:
         return OracleView(page, api_client)
 
+    def create_user_files() -> UserFilesView:
+        return UserFilesView(page, api_client)
+
     # The chat tab is built at once (below); the others on their first visit.
-    factories = {1: create_memory, 2: create_files, 3: create_oracle}
+    factories = {
+        1: create_memory,
+        2: create_files,
+        3: create_oracle,
+        4: create_user_files,
+    }
 
     chat_view = ChatView(page, api_client, on_session_changed=on_chat_session_changed)
     views[0] = chat_view
