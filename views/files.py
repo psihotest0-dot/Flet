@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from pathlib import Path
 
 import flet as ft
@@ -18,6 +19,31 @@ logger = logging.getLogger(__name__)
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024
 POLL_INTERVAL = 3.0
 FINAL_STATUSES = ("completed", "failed")
+# Above this many unfinished files one GET /v1/files replaces one GET per file:
+# after a batch upload of 30 books that was 10 requests a second.
+BULK_POLL_THRESHOLD = 5
+
+# The categories the backend accepts, in its order (config.FileCategories in
+# go-monolith, internal/config/config.go). Kept by hand: a new category there needs
+# a line here.
+CATEGORIES = (
+    ("medicine", "Медицина"),
+    ("economics", "Икономика"),
+    ("programming", "Програмиране"),
+    ("law", "Право"),
+    ("psychology", "Психология"),
+    ("literature", "Литература"),
+    ("philosophy", "Философия"),
+    ("self_help", "Личностно развитие"),
+    ("history", "История и биографии"),
+    ("general", "Общи"),
+)
+
+# The value of "no filter" in the filter dropdowns.
+FILTER_ALL = "all"
+
+# The sortable columns, by their index in the table.
+SORT_NAME, SORT_SIZE, SORT_UPLOADED = 0, 1, 2
 
 # Backend `embedding_status` values (see internal/api/dto.go) mapped to the label
 # and colour shown in the "Вектори" column. A file can finish ingestion with no
@@ -55,8 +81,8 @@ def chunk_label(count: int | None) -> str:
     return f"{count} части"
 
 
-def embedding_state(file: IngestedFile) -> tuple[str, str, str]:
-    """Return ``(label, color, tooltip)`` describing the file's vectors.
+def embedding_key(file: IngestedFile) -> str:
+    """The key of the file's vector state in :data:`EMBEDDING_STATES`.
 
     The backend derives ``embedding_status`` from the ingest status plus the
     stored chunk count. Payloads from an older backend only carry ``status``,
@@ -66,7 +92,12 @@ def embedding_state(file: IngestedFile) -> tuple[str, str, str]:
     if status == "completed" and file.has_embeddings is False:
         # Completed, but nothing was stored to search through.
         status = "empty"
+    return status
 
+
+def embedding_state(file: IngestedFile) -> tuple[str, str, str]:
+    """Return ``(label, color, tooltip)`` describing the file's vectors."""
+    status = embedding_key(file)
     label, color = EMBEDDING_STATES.get(
         status, (status or "Неизвестно", ft.Colors.GREY)
     )
@@ -75,6 +106,65 @@ def embedding_state(file: IngestedFile) -> tuple[str, str, str]:
     if status == "completed" and file.chunk_count:
         return f"{label} · {chunk_label(file.chunk_count)}", color, tooltip
     return label, color, tooltip
+
+
+def size_label(size: int | None) -> str:
+    """A file size the way the table shows it: "820 B", "14 KB", "2,4 MB"."""
+    if size is None or size < 0:
+        return ""
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{round(size / 1024)} KB"
+    return f"{size / (1024 * 1024):.1f} MB".replace(".", ",")
+
+
+def uploaded_label(created_at: datetime | None) -> str:
+    """The upload date in local time, day first: "14.11.2026"."""
+    if created_at is None:
+        return ""
+    return created_at.astimezone().strftime("%d.%m.%Y")
+
+
+def visible_files(
+    files: list[IngestedFile],
+    query: str = "",
+    category: str = FILTER_ALL,
+    state: str = FILTER_ALL,
+    sort_column: int | None = SORT_UPLOADED,
+    ascending: bool = False,
+) -> list[IngestedFile]:
+    """The files the table shows: filtered by name, category and vector state, sorted.
+
+    The name matches anywhere and without regard to case. A file without the field
+    a sort uses (no size, no date) goes last whatever the direction.
+    """
+    needle = query.strip().casefold()
+    shown = [
+        f
+        for f in files
+        if (not needle or needle in (f.file_name or "").casefold())
+        and (category == FILTER_ALL or (f.category or "general") == category)
+        and (state == FILTER_ALL or embedding_key(f) == state)
+    ]
+    if sort_column == SORT_NAME:
+        shown.sort(key=lambda f: (f.file_name or "").casefold(), reverse=not ascending)
+        return shown
+    if sort_column not in (SORT_SIZE, SORT_UPLOADED):
+        return shown
+
+    def value(f: IngestedFile) -> float | None:
+        if sort_column == SORT_SIZE:
+            return None if f.file_size is None else float(f.file_size)
+        return None if f.created_at is None else f.created_at.timestamp()
+
+    keyed = [(value(f), f) for f in shown]
+    known = sorted(
+        ((v, f) for v, f in keyed if v is not None),
+        key=lambda pair: pair[0],
+        reverse=not ascending,
+    )
+    return [f for _v, f in known] + [f for v, f in keyed if v is None]
 
 
 class FilesView(ft.Container):
@@ -110,9 +200,45 @@ class FilesView(ft.Container):
             on_click=self.on_refresh_click,
         )
 
+        # Search and filters work on the list already loaded: no request per key.
+        self.search_field = ft.TextField(
+            label="Търси по име",
+            prefix_icon=ft.Icons.SEARCH,
+            width=260,
+            dense=True,
+            on_change=self._on_filter_change,
+        )
+        self.category_filter = ft.Dropdown(
+            label="Категория",
+            value=FILTER_ALL,
+            options=[ft.DropdownOption(FILTER_ALL, "Всички")]
+            + [ft.DropdownOption(key, label) for key, label in CATEGORIES],
+            width=220,
+            dense=True,
+            on_select=self._on_filter_change,
+        )
+        self.state_filter = ft.Dropdown(
+            label="Вектори",
+            value=FILTER_ALL,
+            options=[ft.DropdownOption(FILTER_ALL, "Всички")]
+            + [
+                ft.DropdownOption(key, label)
+                for key, (label, _c) in EMBEDDING_STATES.items()
+            ],
+            width=180,
+            dense=True,
+            on_select=self._on_filter_change,
+        )
+        self.count_text = ft.Text("", size=12, color=ft.Colors.GREY)
+
         self.data_table = ft.DataTable(
+            # Newest first, as the backend sends them.
+            sort_column_index=SORT_UPLOADED,
+            sort_ascending=False,
             columns=[
-                ft.DataColumn(ft.Text("Име на файл")),
+                ft.DataColumn(ft.Text("Име на файл"), on_sort=self._on_sort),
+                ft.DataColumn(ft.Text("Размер"), numeric=True, on_sort=self._on_sort),
+                ft.DataColumn(ft.Text("Качен"), on_sort=self._on_sort),
                 ft.DataColumn(ft.Text("Статус")),
                 ft.DataColumn(
                     ft.Text(
@@ -132,6 +258,17 @@ class FilesView(ft.Container):
                     [self.upload_btn, self.upload_progress, self.refresh_btn],
                     alignment=ft.MainAxisAlignment.CENTER,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                ft.Row(
+                    [
+                        self.search_field,
+                        self.category_filter,
+                        self.state_filter,
+                        self.count_text,
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    wrap=True,
                 ),
                 ft.Column(
                     [
@@ -160,6 +297,8 @@ class FilesView(ft.Container):
         self._status_cells: dict[str, ft.Text] = {}
         self._embedding_cells: dict[str, ft.Text] = {}
         self._rows: dict[str, ft.DataRow] = {}
+        self._sort_column: int | None = SORT_UPLOADED
+        self._sort_ascending = False
 
     # -------------------------------------------------------------- lifecycle
     def did_mount(self):
@@ -207,12 +346,58 @@ class FilesView(ft.Container):
         self.files = files
         self.update_table()
 
+    # ---------------------------------------------------------- filter, sort
+    def _shown(self) -> list[IngestedFile]:
+        return visible_files(
+            self.files,
+            self.search_field.value or "",
+            self.category_filter.value or FILTER_ALL,
+            self.state_filter.value or FILTER_ALL,
+            self._sort_column,
+            self._sort_ascending,
+        )
+
+    def _filtering(self) -> bool:
+        return bool(
+            (self.search_field.value or "").strip()
+            or (self.category_filter.value or FILTER_ALL) != FILTER_ALL
+            or (self.state_filter.value or FILTER_ALL) != FILTER_ALL
+        )
+
+    def _count_label(self, shown: int) -> str:
+        total = len(self.files)
+        if self._filtering():
+            return f"Показани {shown} от {total}"
+        return f"{total} файла" if total != 1 else "1 файл"
+
+    def _on_filter_change(self, _e=None):
+        self.update_table()
+
+    def _on_sort(self, e):
+        self._sort_column = e.column_index
+        self._sort_ascending = e.ascending
+        self.data_table.sort_column_index = e.column_index
+        self.data_table.sort_ascending = e.ascending
+        self.update_table()
+
     def _apply_status(self, file_id: str, updated) -> None:
         """Refresh the cells of a single row after a polled status response."""
+        previous = None
         for i, file in enumerate(self.files):
             if file.id == file_id:
+                previous = file
                 self.files[i] = updated
                 break
+
+        # Under a "Вектори" filter a file whose state changed may no longer belong
+        # in the table (or now does): show the filter's answer, not a stale row.
+        if (
+            (self.state_filter.value or FILTER_ALL) != FILTER_ALL
+            and previous is not None
+            and embedding_key(previous) != embedding_key(updated)
+        ):
+            self.update_table()
+            return
 
         dirty: list[ft.Control] = []
 
@@ -253,6 +438,10 @@ class FilesView(ft.Container):
             if not pending_files:
                 continue
 
+            if len(pending_files) > BULK_POLL_THRESHOLD:
+                await self._poll_with_one_list(pending_files)
+                continue
+
             # Sequential requests used to block the loop for len(pending) * RTT.
             results = await asyncio.gather(
                 *(self.api_client.get_file_status(file.id) for file in pending_files),
@@ -267,6 +456,25 @@ class FilesView(ft.Container):
                     )
                     continue
                 self._apply_status(file.id, result)
+
+    async def _poll_with_one_list(self, pending_files: list[IngestedFile]) -> None:
+        """Refresh many unfinished files with one GET /v1/files."""
+        try:
+            fresh = await self.api_client.list_files()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "Failed to refresh %d file statuses: %s", len(pending_files), e
+            )
+            return
+        by_id = {f.id: f for f in fresh if f.id}
+        for file in pending_files:
+            updated = by_id.get(file.id)
+            # A file missing from the list was deleted elsewhere; the next full
+            # load drops its row.
+            if updated is not None:
+                self._apply_status(file.id, updated)
 
     async def on_upload_click(self, e):
         """Open the system dialog and upload what the user chose in it."""
@@ -354,7 +562,8 @@ class FilesView(ft.Container):
         self._embedding_cells.clear()
         self._rows.clear()
 
-        for file in self.files:
+        shown = self._shown()
+        for file in shown:
             status_text = ft.Text(file.status or "Unknown")
             label, color, tooltip = embedding_state(file)
             embedding_text = ft.Text(label, size=12, color=color, tooltip=tooltip)
@@ -365,18 +574,7 @@ class FilesView(ft.Container):
             )
             category_dropdown = ft.Dropdown(
                 value=file.category,
-                options=[
-                    ft.DropdownOption("medicine", "Медицина"),
-                    ft.DropdownOption("economics", "Икономика"),
-                    ft.DropdownOption("programming", "Програмиране"),
-                    ft.DropdownOption("law", "Право"),
-                    ft.DropdownOption("psychology", "Психология"),
-                    ft.DropdownOption("literature", "Литература"),
-                    ft.DropdownOption("philosophy", "Философия"),
-                    ft.DropdownOption("self_help", "Личностно развитие"),
-                    ft.DropdownOption("history", "История и биографии"),
-                    ft.DropdownOption("general", "Общи"),
-                ],
+                options=[ft.DropdownOption(key, label) for key, label in CATEGORIES],
                 # Wide enough for the longest name ("История и биографии"): the
                 # menu cuts a label that does not fit instead of letting it spill.
                 width=240,
@@ -386,6 +584,8 @@ class FilesView(ft.Container):
             row = ft.DataRow(
                 cells=[
                     ft.DataCell(ft.Text(file.file_name or "Unknown")),
+                    ft.DataCell(ft.Text(size_label(file.file_size), size=12)),
+                    ft.DataCell(ft.Text(uploaded_label(file.created_at), size=12)),
                     ft.DataCell(status_text),
                     ft.DataCell(embedding_text),
                     ft.DataCell(category_dropdown),
@@ -398,8 +598,9 @@ class FilesView(ft.Container):
                 self._embedding_cells[file.id] = embedding_text
                 self._rows[file.id] = row
 
-        # Only the table is re-sent, not the whole view.
-        safe_update(self, self.data_table)
+        self.count_text.value = self._count_label(len(shown))
+        # Only the table and the count are re-sent, not the whole view.
+        safe_update(self, self.data_table, self.count_text)
 
     def remove_file_row(self, file_id: str):
         self.files = [file for file in self.files if file.id != file_id]
@@ -411,7 +612,8 @@ class FilesView(ft.Container):
                 self.data_table.rows.remove(row)
             except ValueError:
                 pass
-            safe_update(self, self.data_table)
+        self.count_text.value = self._count_label(len(self.data_table.rows))
+        safe_update(self, self.data_table, self.count_text)
 
     def create_category_change_handler(self, file_id: str | None):
         async def handler(e):

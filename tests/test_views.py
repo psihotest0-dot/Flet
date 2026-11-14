@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -26,7 +27,18 @@ from views.chat import (
     HISTORY_REQUEST_LIMIT,
     ChatView,
 )
-from views.files import FilesView, embedding_state
+from views.files import (
+    BULK_POLL_THRESHOLD,
+    FILTER_ALL,
+    SORT_NAME,
+    SORT_SIZE,
+    SORT_UPLOADED,
+    FilesView,
+    embedding_state,
+    size_label,
+    uploaded_label,
+    visible_files,
+)
 from views.memory import MemoryView
 
 
@@ -955,6 +967,8 @@ def test_update_table_renders_embedding_column(mock_page, mock_api_client):
 
     assert [column.label.value for column in view.data_table.columns] == [
         "Име на файл",
+        "Размер",
+        "Качен",
         "Статус",
         "Вектори",
         "Категория",
@@ -1149,6 +1163,238 @@ async def test_file_picker_offers_only_supported_extensions(mock_page, mock_api_
         assert ext in kwargs["allowed_extensions"]
     for ext in ("doc", "rtf", "zip"):
         assert ext not in kwargs["allowed_extensions"]
+
+
+def _library():
+    """Four files with every field the filters and sorts look at."""
+    return [
+        IngestedFile(
+            id="a",
+            file_name="Марк Аврелий - Към себе си.pdf",
+            category="philosophy",
+            status="completed",
+            embedding_status="completed",
+            has_embeddings=True,
+            chunk_count=800,
+            file_size=2_500_000,
+            created_at=datetime(2026, 11, 1, 10, tzinfo=UTC),
+        ),
+        IngestedFile(
+            id="b",
+            file_name="питър пан.epub",
+            category="literature",
+            status="completed",
+            embedding_status="completed",
+            has_embeddings=True,
+            chunk_count=369,
+            file_size=300_000,
+            created_at=datetime(2026, 11, 14, 7, tzinfo=UTC),
+        ),
+        IngestedFile(
+            id="c",
+            file_name="scan.pdf",
+            category="general",
+            status="completed",
+            embedding_status="empty",
+            has_embeddings=False,
+            chunk_count=0,
+            file_size=900,
+            created_at=datetime(2026, 11, 5, 9, tzinfo=UTC),
+        ),
+        # An old payload: no size, no date, no category.
+        IngestedFile(id="d", file_name="Notes.TXT", status="processing"),
+    ]
+
+
+def test_visible_files_filters_by_name_category_and_vectors():
+    files = _library()
+    ids = lambda shown: [f.id for f in shown]  # noqa: E731
+
+    assert ids(visible_files(files, query="ПИТЪР")) == ["b"], "the name, any case"
+    assert ids(visible_files(files, query="  notes ")) == ["d"]
+    assert ids(visible_files(files, category="philosophy")) == ["a"]
+    assert ids(visible_files(files, category="general")) == ["c", "d"], (
+        "a file without a category is general"
+    )
+    assert ids(visible_files(files, state="empty")) == ["c"]
+    assert ids(visible_files(files, state="processing")) == ["d"]
+    assert ids(visible_files(files, query="pdf", state="completed")) == ["a"]
+    assert visible_files(files, query="няма такъв") == []
+
+
+def test_visible_files_sorts_and_keeps_unknown_values_last():
+    files = _library()
+    ids = lambda shown: [f.id for f in shown]  # noqa: E731
+
+    # Newest first by default, as the backend sends them; no date goes last.
+    assert ids(visible_files(files)) == ["b", "c", "a", "d"]
+    assert ids(visible_files(files, sort_column=SORT_UPLOADED, ascending=True)) == [
+        "a",
+        "c",
+        "b",
+        "d",
+    ]
+    assert ids(visible_files(files, sort_column=SORT_SIZE, ascending=False)) == [
+        "a",
+        "b",
+        "c",
+        "d",
+    ]
+    assert ids(visible_files(files, sort_column=SORT_SIZE, ascending=True)) == [
+        "c",
+        "b",
+        "a",
+        "d",
+    ]
+    assert ids(visible_files(files, sort_column=SORT_NAME, ascending=True)) == [
+        "d",
+        "c",
+        "a",
+        "b",
+    ], "Latin before Cyrillic, without regard to case"
+
+
+@pytest.mark.parametrize(
+    ("size", "label"),
+    [(None, ""), (0, "0 B"), (900, "900 B"), (14_000, "14 KB"), (2_500_000, "2,4 MB")],
+)
+def test_size_label(size, label):
+    assert size_label(size) == label
+
+
+def test_uploaded_label_is_the_local_date():
+    stamp = datetime(2026, 11, 14, 7, tzinfo=UTC)
+    assert uploaded_label(stamp) == stamp.astimezone().strftime("%d.%m.%Y")
+    assert uploaded_label(None) == ""
+
+
+def test_filters_and_sort_rebuild_the_table_and_the_count(mock_page, mock_api_client):
+    view = _files_view(mock_page, mock_api_client, _library())
+    assert len(view.data_table.rows) == 4
+    assert view.count_text.value == "4 файла"
+
+    view.search_field.value = "pdf"
+    view._on_filter_change()
+    assert sorted(view._rows) == ["a", "c"]
+    assert view.count_text.value == "Показани 2 от 4"
+
+    view.category_filter.value = "philosophy"
+    view._on_filter_change()
+    assert list(view._rows) == ["a"]
+
+    view.search_field.value = ""
+    view.category_filter.value = FILTER_ALL
+    view._on_sort(SimpleNamespace(column_index=SORT_SIZE, ascending=True))
+    assert list(view._rows) == ["c", "b", "a", "d"]
+    assert view.data_table.sort_column_index == SORT_SIZE
+    assert view.data_table.sort_ascending is True
+    assert view.count_text.value == "4 файла"
+
+    # Each row has the new size and date cells, aligned with the headers.
+    first = view.data_table.rows[0]
+    assert len(first.cells) == len(view.data_table.columns)
+    assert first.cells[1].content.value == "900 B"
+
+
+def test_a_state_change_under_the_vectors_filter_drops_the_row(
+    mock_page, mock_api_client
+):
+    view = _files_view(mock_page, mock_api_client, _library())
+    view.state_filter.value = "processing"
+    view._on_filter_change()
+    assert list(view._rows) == ["d"]
+
+    view._apply_status(
+        "d",
+        IngestedFile(
+            id="d",
+            file_name="Notes.TXT",
+            status="completed",
+            embedding_status="completed",
+            has_embeddings=True,
+            chunk_count=3,
+        ),
+    )
+    # The file is no longer processing, so the filtered table no longer shows it.
+    assert list(view._rows) == []
+    assert view.count_text.value == "Показани 0 от 4"
+
+
+def test_deleting_a_row_updates_the_count(mock_page, mock_api_client):
+    view = _files_view(mock_page, mock_api_client, _library())
+    view.remove_file_row("b")
+    assert "b" not in view._rows
+    assert view.count_text.value == "3 файла"
+
+
+def _pending(n):
+    return [
+        IngestedFile(id=f"p{i}", file_name=f"book{i}.pdf", status="processing")
+        for i in range(n)
+    ]
+
+
+async def _one_poll(view):
+    """Run poll_statuses for exactly one round."""
+    rounds = 0
+
+    async def fake_sleep(_seconds):
+        nonlocal rounds
+        rounds += 1
+        if rounds > 1:
+            view._polling = False
+
+    view._polling = True
+    with patch("views.files.asyncio.sleep", fake_sleep):
+        await view.poll_statuses()
+
+
+@pytest.mark.asyncio
+async def test_many_unfinished_files_are_polled_with_one_list(
+    mock_page, mock_api_client
+):
+    files = _pending(BULK_POLL_THRESHOLD + 1)
+    view = _files_view(mock_page, mock_api_client, files)
+    done = [f.model_copy(update={"status": "completed"}) for f in files]
+    mock_api_client.list_files = AsyncMock(return_value=done[:-1])  # one was deleted
+    mock_api_client.get_file_status = AsyncMock()
+
+    await _one_poll(view)
+
+    mock_api_client.list_files.assert_awaited_once()
+    mock_api_client.get_file_status.assert_not_called()
+    assert [f.status for f in view.files] == ["completed"] * len(done[:-1]) + [
+        "processing"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_few_unfinished_files_are_polled_one_by_one(mock_page, mock_api_client):
+    files = _pending(BULK_POLL_THRESHOLD)
+    view = _files_view(mock_page, mock_api_client, files)
+    mock_api_client.list_files = AsyncMock()
+
+    async def status(file_id):
+        return IngestedFile(id=file_id, file_name="x", status="completed")
+
+    mock_api_client.get_file_status = AsyncMock(side_effect=status)
+
+    await _one_poll(view)
+
+    assert mock_api_client.get_file_status.await_count == BULK_POLL_THRESHOLD
+    mock_api_client.list_files.assert_not_called()
+    assert all(f.status == "completed" for f in view.files)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_list_poll_keeps_the_rows(mock_page, mock_api_client):
+    files = _pending(BULK_POLL_THRESHOLD + 2)
+    view = _files_view(mock_page, mock_api_client, files)
+    mock_api_client.list_files = AsyncMock(side_effect=APIError(500, "boom"))
+
+    await _one_poll(view)
+
+    assert [f.status for f in view.files] == ["processing"] * len(files)
 
 
 def test_embedding_state_explains_an_empty_file():
