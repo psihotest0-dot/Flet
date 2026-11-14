@@ -103,6 +103,12 @@ class ChatMessage(ft.Column):
             )
             top_controls.append(self.regenerate_btn)
 
+        # Who answered, as the backend said at the end of the stream; empty until then
+        # (the backend says nothing while it has no paid model).
+        self.model_label = ft.Text("", size=11, color=ft.Colors.GREY_600, visible=False)
+        if role != "user":
+            top_controls.append(self.model_label)
+
         self.top_row = ft.Row(
             controls=top_controls,
             alignment=ft.MainAxisAlignment.START,
@@ -174,6 +180,24 @@ class ChatMessage(ft.Column):
         self.error_text.visible = True
         self.hide_activity_indicator()
         safe_update(self, self.error_text)
+
+    def set_model(self, who: dict) -> None:
+        """Show who gave this answer: the cloud (with the model) or this computer."""
+        if self.role == "user" or not isinstance(who, dict):
+            return
+        provider = who.get("provider")
+        if provider == "local":
+            text, tip = "🏠 на този компютър", "Отговори локалният модел"
+        elif isinstance(provider, str) and provider:
+            model = who.get("model")
+            name = model if isinstance(model, str) and model else provider
+            text, tip = f"☁ {name}", "Отговори платеният модел в облака"
+        else:
+            return
+        self.model_label.value = text
+        self.model_label.tooltip = tip
+        self.model_label.visible = True
+        safe_update(self, self.model_label)
 
     def add_proposals(self, proposals: list):
         """Show a card for each write the assistant proposed in this turn.

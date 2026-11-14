@@ -699,15 +699,31 @@ class APIClient:
         response = await self._get("/oracle/decisions", params=params)
         return OracleDecisionPage(**response.json())
 
-    def regenerate_chat(self, session_id: str) -> AsyncIterator[Any]:
-        """Stream a regenerated chat response from the backend using Server-Sent Events (SSE)."""
-        return self._stream_sse("/chat/regenerate", {"session_id": session_id})
+    def regenerate_chat(
+        self, session_id: str, use_paid: bool | None = None
+    ) -> AsyncIterator[Any]:
+        """Stream a regenerated chat response from the backend using Server-Sent Events (SSE).
 
-    def stream_chat(self, session_id: str, content: str) -> AsyncIterator[Any]:
-        """Stream a chat response from the backend using Server-Sent Events (SSE)."""
-        return self._stream_sse(
-            "/chat/stream", {"session_id": session_id, "content": content}
-        )
+        ``use_paid`` is the choice of the model, as for :meth:`stream_chat`.
+        """
+        payload: dict[str, Any] = {"session_id": session_id}
+        if use_paid is not None:
+            payload["use_paid"] = use_paid
+        return self._stream_sse("/chat/regenerate", payload)
+
+    def stream_chat(
+        self, session_id: str, content: str, use_paid: bool | None = None
+    ) -> AsyncIterator[Any]:
+        """Stream a chat response from the backend using Server-Sent Events (SSE).
+
+        ``use_paid`` is the choice of the model for this turn: ``True`` - the paid
+        one, ``False`` - the local one only, ``None`` (left out of the request) - what
+        the backend is set to do.
+        """
+        payload: dict[str, Any] = {"session_id": session_id, "content": content}
+        if use_paid is not None:
+            payload["use_paid"] = use_paid
+        return self._stream_sse("/chat/stream", payload)
 
     async def _stream_sse(
         self, path: str, payload: dict[str, Any]
@@ -715,9 +731,9 @@ class APIClient:
         """POST ``payload`` to ``path`` and yield what the backend streams back.
 
         Both chat endpoints write the same events (``sources``, text chunks,
-        ``proposals``, ``[DONE]``, ``error``), so one reader serves them. It yields
-        ``{"type": "sources" | "proposals", "data": ...}`` for those two events and
-        the decoded chunk for the rest. An ``error`` event raises
+        ``proposals``, ``model``, ``[DONE]``, ``error``), so one reader serves them. It
+        yields ``{"type": "sources" | "proposals" | "model", "data": ...}`` for those
+        three events and the decoded chunk for the rest. An ``error`` event raises
         :class:`StreamError`, a refused request :class:`APIError`.
 
         What the model wrote and what the documents say never reach the log: an
@@ -756,6 +772,14 @@ class APIClient:
                                 e,
                             )
                             yield {"type": "sources", "data": sse.data}
+                    elif sse.event == "model":
+                        # Who answered; a frame this client cannot read is not worth a failure.
+                        try:
+                            who = json.loads(sse.data)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(who, dict):
+                            yield {"type": "model", "data": who}
                     elif sse.event == "proposals":
                         try:
                             proposals = json.loads(sse.data)

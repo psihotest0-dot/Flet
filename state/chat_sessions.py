@@ -128,6 +128,10 @@ def _restart_chat_session(settings: Settings, session_id: str) -> str | None:
     chat_sessions[index] = {"id": new_id, "name": old["name"]}
     settings.chat_sessions = chat_sessions
     settings.session_id = new_id
+    # The chat keeps its place in the list, so it keeps the model it was sent to.
+    mode = settings.cloud_modes.pop(session_id, None)
+    if mode is not None:
+        settings.cloud_modes[new_id] = mode
     return new_id
 
 

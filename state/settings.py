@@ -98,6 +98,12 @@ def _coerce_chat_sessions(value: Any) -> list[dict]:
     return chat_sessions
 
 
+# The model a conversation is sent to besides the default: "cloud" - the paid model for the
+# whole conversation, "home" - only the local one, nothing goes to the cloud. A conversation
+# that is not in ``Settings.cloud_modes`` follows the backend's default ("auto").
+CLOUD_MODES = ("cloud", "home")
+
+
 class Settings(BaseModel):
     """Application settings, loaded from and saved to a local JSON file."""
 
@@ -113,6 +119,19 @@ class Settings(BaseModel):
     # stays so that old entries survive saving the settings.
     archived_chats: list[dict] = []
     display_name: str = DEFAULT_DISPLAY_NAME
+    # session id -> "cloud" | "home"; see CLOUD_MODES.
+    cloud_modes: dict[str, str] = {}
+
+    @field_validator("cloud_modes", mode="before")
+    @classmethod
+    def _validate_cloud_modes(cls, value: Any) -> dict[str, str]:
+        if not isinstance(value, dict):
+            return {}
+        return {
+            key: mode
+            for key, mode in value.items()
+            if isinstance(key, str) and key and mode in CLOUD_MODES
+        }
 
     @field_validator("base_url", mode="before")
     @classmethod

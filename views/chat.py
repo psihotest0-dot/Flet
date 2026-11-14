@@ -68,6 +68,33 @@ SCROLL_EVENT_INTERVAL = 50
 SCROLL_SETTLE_DELAY = 0.15
 
 
+# The model a conversation is sent to: what the button shows and what the backend is told.
+# "auto" leaves the choice to the backend (use_paid is left out of the request), "cloud"
+# sends the whole conversation to the paid model (use_paid true), "home" keeps it on this
+# computer even for a question to the library (use_paid false). The button goes round them.
+CLOUD_MODE_ORDER = ("auto", "cloud", "home")
+CLOUD_MODE_VIEW = {
+    "auto": (
+        ft.Icons.CLOUD_OUTLINED,
+        ft.Colors.GREY_500,
+        "Модел: както е настроено (въпросите към библиотеката могат да отиват в облака). "
+        "Натисни, за да пращаш целия разговор в облака.",
+    ),
+    "cloud": (
+        ft.Icons.CLOUD,
+        ft.Colors.LIGHT_BLUE_300,
+        "Целият разговор отива в облака (платеният модел). "
+        "Натисни за „само на този компютър“.",
+    ),
+    "home": (
+        ft.Icons.HOME,
+        ft.Colors.GREEN_300,
+        "Само на този компютър: нищо не отива в облака. Натисни за автоматичния избор.",
+    ),
+}
+CLOUD_MODE_USE_PAID = {"auto": None, "cloud": True, "home": False}
+
+
 class ChatView(ft.Container):
     """The main view for the chat interface."""
 
@@ -170,6 +197,9 @@ class ChatView(ft.Container):
             tooltip="Прикачи файл към този разговор (код, лог, текст)",
             on_click=self.on_attach_click,
         )
+        # Which model the conversation is sent to; see CLOUD_MODE_VIEW.
+        self.cloud_btn = ft.IconButton(on_click=self.on_cloud_click)
+        self._show_cloud_mode()
         # The files of this conversation, with a cross to take one away.
         self.attachments_row = ft.Row(
             wrap=True, spacing=6, run_spacing=4, visible=False
@@ -200,6 +230,7 @@ class ChatView(ft.Container):
             controls=[
                 self.input_field,
                 self.attach_btn,
+                self.cloud_btn,
                 self.emoji_btn,
                 self.stop_btn,
                 self.send_btn,
@@ -260,6 +291,48 @@ class ChatView(ft.Container):
         self.session_dropdown.value = selected_id
         safe_update(self, self.session_dropdown)
 
+    def _cloud_mode(self) -> str:
+        """The model the open conversation is sent to: "auto", "cloud" or "home"."""
+        return load_settings().cloud_modes.get(self.session_id, "auto")
+
+    def _use_paid(self) -> bool | None:
+        """The ``use_paid`` of a request for the open conversation (``None``: left out)."""
+        return CLOUD_MODE_USE_PAID[self._cloud_mode()]
+
+    def _chat_options(self) -> dict:
+        """The extra arguments of a chat request: ``use_paid`` only when it is chosen."""
+        use_paid = self._use_paid()
+        return {} if use_paid is None else {"use_paid": use_paid}
+
+    def _show_cloud_mode(self) -> None:
+        """Draw the button for the mode of the open conversation (no update is sent)."""
+        icon, color, tooltip = CLOUD_MODE_VIEW[self._cloud_mode()]
+        self.cloud_btn.icon = icon
+        self.cloud_btn.icon_color = color
+        self.cloud_btn.tooltip = tooltip
+
+    async def on_cloud_click(self, e):
+        """Go to the next model for this conversation: auto, cloud, home, auto."""
+        settings = load_settings()
+        current = settings.cloud_modes.get(self.session_id, "auto")
+        following = CLOUD_MODE_ORDER[
+            (CLOUD_MODE_ORDER.index(current) + 1) % len(CLOUD_MODE_ORDER)
+        ]
+        if following == "auto":
+            settings.cloud_modes.pop(self.session_id, None)
+        else:
+            settings.cloud_modes[self.session_id] = following
+        if not save_settings(settings):
+            show_snackbar(self.page_ref, "Неуспешно запазване на настройките.")
+            return
+        logger.info(
+            "Chat %s: the model of the conversation is %s.",
+            self.session_id[:8],
+            following,
+        )
+        self._show_cloud_mode()
+        safe_update(self, self.cloud_btn)
+
     def _notify_session_changed(self, session_id: str) -> None:
         """Tell the hosting app to reload the views tied to the active chat."""
         if self.on_session_changed is None:
@@ -272,6 +345,7 @@ class ChatView(ft.Container):
     def _activate_session(self, session_id: str, reload_history: bool = True) -> None:
         """Point the view at ``session_id`` and reload what belongs to it."""
         self.session_id = session_id
+        self._show_cloud_mode()
         self._reset_conversation()
         self._cancel_running_tasks()
         if reload_history and self.page_ref is not None:
@@ -917,6 +991,10 @@ class ChatView(ft.Container):
                         chat_message.add_proposals(chunk.get("data") or [])
                         continue
 
+                    if chunk.get("type") == "model":
+                        chat_message.set_model(chunk.get("data") or {})
+                        continue
+
                     for key in ("text", "content"):
                         value = chunk.get(key)
                         if isinstance(value, str):
@@ -999,7 +1077,9 @@ class ChatView(ft.Container):
         try:
             await self._stream_response(
                 chat_message,
-                self.api_client.stream_chat(session_id=session_id, content=text),
+                self.api_client.stream_chat(
+                    session_id=session_id, content=text, **self._chat_options()
+                ),
                 text,
             )
         except asyncio.CancelledError:
@@ -1043,7 +1123,10 @@ class ChatView(ft.Container):
             safe_update(self)
             self.scroll_to_bottom()
             error = await self._stream_response(
-                chat_message, self.api_client.regenerate_chat(session_id=session_id)
+                chat_message,
+                self.api_client.regenerate_chat(
+                    session_id=session_id, **self._chat_options()
+                ),
             )
         except asyncio.CancelledError:
             pass

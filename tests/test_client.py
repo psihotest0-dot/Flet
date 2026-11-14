@@ -805,9 +805,7 @@ async def test_get_does_not_repeat_a_rejected_request(client, no_retry_delay):
     # A 4xx is final: one request, and the backend's text instead of a RetryError.
     assert route.call_count == 1
     assert exc_info.value.status == 400
-    assert (
-        exc_info.value.message == "status must be one of: candidate, active"
-    )
+    assert exc_info.value.message == "status must be one of: candidate, active"
 
 
 @respx.mock
