@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 
 FILTER_ALL = "Всички"
 FILTER_DEBOUNCE = 0.2
+# The list of the notes on how to talk (kind "style" of a rule).
+STYLE_TITLE = "Как говорим ние двамата"
+
 # Width of the proposal cards and the rule list above the table.
 SECTION_WIDTH = 680
 
@@ -403,11 +406,18 @@ class MemoryView(ft.Container):
             visible=False,
         )
 
-        # Global rules: always in the prompt, so the user can see and delete them.
+        # Global rules and the notes on how to talk: always in the prompt, so the
+        # user can see and delete them. Each kind has its own list.
         self.rules_column = ft.Column(spacing=0)
         self.rules_tile = ft.ExpansionTile(
             title=ft.Text("Глобални правила"),
             controls=[self.rules_column],
+            visible=False,
+        )
+        self.style_column = ft.Column(spacing=0)
+        self.style_tile = ft.ExpansionTile(
+            title=ft.Text(STYLE_TITLE),
+            controls=[self.style_column],
             visible=False,
         )
 
@@ -425,6 +435,7 @@ class MemoryView(ft.Container):
                 ),
                 self.proposals_section,
                 ft.Container(content=self.rules_tile, width=SECTION_WIDTH),
+                ft.Container(content=self.style_tile, width=SECTION_WIDTH),
                 self.empty_hint,
                 ft.Column(
                     [
@@ -588,10 +599,16 @@ class MemoryView(ft.Container):
             logger.warning("Failed to load global rules: %s", ex)
             return
 
+        notes = [rule for rule in rules if rule.kind == "style"]
+        rules = [rule for rule in rules if rule.kind != "style"]
         self.rules_column.controls = [self._rule_tile(rule) for rule in rules]
         self.rules_tile.title = ft.Text(f"Глобални правила ({len(rules)})")
         self.rules_tile.visible = bool(rules)
+        self.style_column.controls = [self._rule_tile(note) for note in notes]
+        self.style_tile.title = ft.Text(f"{STYLE_TITLE} ({len(notes)})")
+        self.style_tile.visible = bool(notes)
         safe_update(self, self.rules_tile)
+        safe_update(self, self.style_tile)
 
     def _rule_tile(self, rule) -> ft.ListTile:
         return ft.ListTile(
@@ -599,7 +616,9 @@ class MemoryView(ft.Container):
             subtitle=ft.Text(rule.value, selectable=True),
             trailing=ft.IconButton(
                 icon=ft.Icons.DELETE_OUTLINE,
-                tooltip="Изтрий правилото",
+                tooltip="Изтрий бележката"
+                if rule.kind == "style"
+                else "Изтрий правилото",
                 on_click=lambda e, rule=rule: self.page_ref.run_task(
                     self.delete_rule, rule
                 ),
@@ -607,10 +626,17 @@ class MemoryView(ft.Container):
         )
 
     async def delete_rule(self, rule):
+        note = rule.kind == "style"
+        what = "бележката" if note else "правилото"
         confirmed = await confirm_dialog(
             self.page_ref,
-            "Изтриване на правило",
-            f"Да изтрия ли правилото „{rule.key}“? Лили вече няма да го спазва.",
+            "Изтриване на бележка" if note else "Изтриване на правило",
+            f"Да изтрия ли {what} „{rule.key}“? "
+            + (
+                "Лили вече няма да я следва."
+                if note
+                else "Лили вече няма да го спазва."
+            ),
         )
         if not confirmed:
             return
@@ -622,17 +648,21 @@ class MemoryView(ft.Container):
         except APIError as ex:
             if ex.status != 404:  # 404: already gone, the reload below shows it
                 logger.error("Failed to delete rule: %s", ex)
-                show_snackbar(self.page_ref, f"Грешка при изтриване на правилото: {ex}")
+                show_snackbar(self.page_ref, f"Грешка при изтриване на {what}: {ex}")
                 return
             logger.info("Rule %s was already deleted on the backend.", rule.id)
         except Exception as ex:  # noqa: BLE001
             logger.error("Failed to delete rule: %s", ex)
             show_snackbar(
-                self.page_ref, f"Неуспешно изтриване на правилото: {error_detail(ex)}"
+                self.page_ref, f"Неуспешно изтриване на {what}: {error_detail(ex)}"
             )
             return
 
-        show_snackbar(self.page_ref, "Правилото е изтрито.", success=True)
+        show_snackbar(
+            self.page_ref,
+            "Бележката е изтрита." if note else "Правилото е изтрито.",
+            success=True,
+        )
         await self.load_rules()
 
     # ------------------------------------------------------------ new memory

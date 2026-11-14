@@ -103,7 +103,7 @@ class Memory(BaseModel):
 
 
 class Proposal(BaseModel):
-    """A write the assistant asked for (a global rule or a memory) that waits for the user.
+    """A write the assistant asked for (a global rule, a note on how to talk, or a memory) that waits for the user.
 
     ``external_sources`` names where untrusted text came from in the turn that
     made it (``web_search``, ``web_fetch``, ``search_documents``,
@@ -124,9 +124,15 @@ class Proposal(BaseModel):
 
 
 class Rule(BaseModel):
-    """A global rule: the first thing in the system prompt of every session."""
+    """A global rule or a note on how to talk: both are in the system prompt of every session.
+
+    ``kind`` is ``rule`` for an instruction of the user and ``style`` for a note on how
+    he likes to be talked to (the backend's plan item P42); an older backend sends no
+    kind, and everything it has is a rule.
+    """
 
     id: int
+    kind: str = "rule"
     key: str
     value: str
     enabled: bool = True

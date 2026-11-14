@@ -454,7 +454,10 @@ def memory_view(mock_page, proposals=None, rules=None, **overrides):
         return_value=[Proposal(**p) for p in (proposals or [])], **overrides
     )
     api_client.list_rules = AsyncMock(
-        return_value=[Rule(id=r[0], key=r[1], value=r[2]) for r in (rules or [])]
+        return_value=[
+            Rule(id=r[0], key=r[1], value=r[2], kind=r[3] if len(r) > 3 else "rule")
+            for r in (rules or [])
+        ]
     )
     api_client.delete_rule = AsyncMock()
     return MemoryView(mock_page, api_client), api_client
@@ -596,3 +599,61 @@ async def test_memory_tab_loads_the_sections_on_mount(mock_page):
 
     mock_page.run_task.assert_any_call(view.load_memories)
     mock_page.run_task.assert_any_call(view.load_proposals_and_rules)
+
+
+# ------------------------------------------------- notes on how to talk (P42)
+def test_a_style_note_proposal_has_its_own_label():
+    note = dict(RULE, kind="save_style_note", summary="Как говорим: Шегува се")
+    assert kind_label(Proposal(**note)) == "Как говорим"
+    assert kind_label(Proposal(**RULE)) == "Правило"
+
+
+def test_a_rule_from_an_older_backend_is_a_rule():
+    assert Rule(id=1, key="tone", value="Бъди кратка").kind == "rule"
+
+
+@pytest.mark.asyncio
+async def test_memory_tab_lists_the_notes_apart_from_the_rules(mock_page):
+    view, _ = memory_view(
+        mock_page,
+        rules=[
+            (3, "tone", "Бъди кратка"),
+            (5, "humour", "Шегува се — отговаряй с шега", "style"),
+        ],
+    )
+
+    await view.load_proposals_and_rules()
+
+    assert view.rules_tile.title.value == "Глобални правила (1)"
+    assert [tile.title.value for tile in view.rules_column.controls] == ["tone"]
+    assert view.style_tile.visible is True
+    assert view.style_tile.title.value == "Как говорим ние двамата (1)"
+    assert [tile.title.value for tile in view.style_column.controls] == ["humour"]
+
+
+@pytest.mark.asyncio
+async def test_memory_tab_hides_the_notes_when_there_are_none(mock_page):
+    view, _ = memory_view(mock_page, rules=[(3, "tone", "Бъди кратка")])
+    view.style_tile.visible = True
+
+    await view.load_proposals_and_rules()
+
+    assert view.style_tile.visible is False
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_note_says_note(mock_page):
+    note = Rule(id=5, key="humour", value="Шегува се", kind="style")
+    view, api_client = memory_view(
+        mock_page, rules=[(5, "humour", "Шегува се", "style")]
+    )
+    await view.load_proposals_and_rules()
+    api_client.list_rules = AsyncMock(return_value=[])
+    confirm = AsyncMock(return_value=True)
+
+    with patch("views.memory.confirm_dialog", confirm):
+        await view.delete_rule(note)
+
+    api_client.delete_rule.assert_awaited_once_with(5)
+    assert "бележката „humour“" in confirm.call_args.args[2]
+    assert view.style_tile.visible is False, "the list is read again after the delete"

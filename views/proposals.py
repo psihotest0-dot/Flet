@@ -45,7 +45,11 @@ def origin_warning(external_sources: list[str] | None) -> str | None:
 
 
 def kind_label(proposal: Proposal) -> str:
-    return "Правило" if proposal.kind == "save_global_rule" else "Спомен"
+    if proposal.kind == "save_global_rule":
+        return "Правило"
+    if proposal.kind == "save_style_note":
+        return "Как говорим"
+    return "Спомен"
 
 
 class ProposalCard(ft.Container):
