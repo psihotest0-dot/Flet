@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
+import flet as ft
 import httpx
 import pytest
 import respx
@@ -76,15 +77,20 @@ async def test_the_button_goes_round_auto_cloud_home_auto(mock_page, mock_api_cl
 async def test_the_button_shows_the_mode_it_is_in(mock_page, mock_api_client):
     seed()
     view = make_view(mock_page, mock_api_client)
-    icons = {view.cloud_btn.icon}
+    shown = [(view.cloud_btn.content, view.cloud_btn.icon)]
+    auto_tip = view.cloud_btn.tooltip
 
     await view.on_cloud_click(None)
-    icons.add(view.cloud_btn.icon)
+    shown.append((view.cloud_btn.content, view.cloud_btn.icon))
     cloud_tip = view.cloud_btn.tooltip
     await view.on_cloud_click(None)
-    icons.add(view.cloud_btn.icon)
+    shown.append((view.cloud_btn.content, view.cloud_btn.icon))
 
-    assert len(icons) == 3, "three modes, three pictures"
+    assert len(set(shown)) == 3, "three modes, three pictures"
+    assert shown[0] == ("auto", None), "auto says auto, not an empty cloud"
+    assert shown[1] == (None, ft.Icons.CLOUD), "the cloud is a cloud"
+    assert shown[2] == (None, ft.Icons.HOME)
+    assert "автоматичния" not in auto_tip and "както е настроено" in auto_tip
     assert "облака" in cloud_tip
     assert "компютър" in view.cloud_btn.tooltip
 

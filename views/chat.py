@@ -71,22 +71,27 @@ SCROLL_SETTLE_DELAY = 0.15
 # The model a conversation is sent to: what the button shows and what the backend is told.
 # "auto" leaves the choice to the backend (use_paid is left out of the request), "cloud"
 # sends the whole conversation to the paid model (use_paid true), "home" keeps it on this
-# computer even for a question to the library (use_paid false). The button goes round them.
+# computer even for a question to the library (use_paid false). The button goes round them:
+# the word "auto" in the first mode (an empty cloud there looked like "cloud, off"), a cloud
+# in the second, a house in the third. Each entry is (label, icon, colour, tooltip).
 CLOUD_MODE_ORDER = ("auto", "cloud", "home")
 CLOUD_MODE_VIEW = {
     "auto": (
-        ft.Icons.CLOUD_OUTLINED,
+        "auto",
+        None,
         ft.Colors.GREY_500,
         "Модел: както е настроено (въпросите към библиотеката могат да отиват в облака). "
         "Натисни, за да пращаш целия разговор в облака.",
     ),
     "cloud": (
+        None,
         ft.Icons.CLOUD,
         ft.Colors.LIGHT_BLUE_300,
         "Целият разговор отива в облака (платеният модел). "
         "Натисни за „само на този компютър“.",
     ),
     "home": (
+        None,
         ft.Icons.HOME,
         ft.Colors.GREEN_300,
         "Само на този компютър: нищо не отива в облака. Натисни за автоматичния избор.",
@@ -198,7 +203,7 @@ class ChatView(ft.Container):
             on_click=self.on_attach_click,
         )
         # Which model the conversation is sent to; see CLOUD_MODE_VIEW.
-        self.cloud_btn = ft.IconButton(on_click=self.on_cloud_click)
+        self.cloud_btn = ft.TextButton(on_click=self.on_cloud_click)
         self._show_cloud_mode()
         # The files of this conversation, with a cross to take one away.
         self.attachments_row = ft.Row(
@@ -306,9 +311,11 @@ class ChatView(ft.Container):
 
     def _show_cloud_mode(self) -> None:
         """Draw the button for the mode of the open conversation (no update is sent)."""
-        icon, color, tooltip = CLOUD_MODE_VIEW[self._cloud_mode()]
+        label, icon, color, tooltip = CLOUD_MODE_VIEW[self._cloud_mode()]
+        self.cloud_btn.content = label
         self.cloud_btn.icon = icon
         self.cloud_btn.icon_color = color
+        self.cloud_btn.style = ft.ButtonStyle(color=color)
         self.cloud_btn.tooltip = tooltip
 
     async def on_cloud_click(self, e):
