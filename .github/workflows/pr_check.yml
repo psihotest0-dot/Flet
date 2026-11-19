@@ -6,6 +6,16 @@ on:
   pull_request:
     branches: [ "main" ]
 
+# The workflow only reads the code; the token it gets needs nothing else.
+permissions:
+  contents: read
+
+# A new push to a pull request makes the run for the old one pointless. Runs on
+# main are left alone: each of them says whether that very commit is green.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     # The client lives on Windows, where os.replace, paths and the default text
@@ -15,6 +25,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # The tests take seconds; a hung step must not hold a runner for six hours.
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v7
 
@@ -37,7 +49,15 @@ jobs:
       run: |
         ruff check .
 
+    # The code is formatted by ruff; a diff that is not says so here instead of
+    # in the next pull request that touches the same lines.
+    - name: Check the formatting with ruff
+      run: |
+        ruff format --check .
+
     # --cov takes its sources and the minimum (fail_under) from pyproject.toml.
+    # -W error: any warning (a deprecation, a coroutine that was never awaited, an
+    # unclosed resource) fails the run instead of scrolling by.
     - name: Test with pytest
       run: |
-        pytest -W error::DeprecationWarning --cov --cov-report=term
+        pytest -W error --cov --cov-report=term

@@ -1,0 +1,16 @@
+# Dependabot keeps the versions of the actions in .github/workflows current
+# (actions/checkout@v7 and the like).
+#
+# The Python packages are left out on purpose: requirements-lock.txt is made
+# with `uv pip compile` (AGENTS.md rule 9), and Dependabot would bump single
+# pins of a file that is meant to be regenerated as a whole (pydantic and
+# pydantic-core, for one, must move together). They are updated by hand once a
+# month, and the Audit workflow reports a known vulnerability in the meantime.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "CI"
