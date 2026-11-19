@@ -21,6 +21,7 @@ from views.oracle import (
     EVALUATION_START,
     PAGE_SIZE,
     PROGRESS_PAGE_SIZE,
+    PROGRESS_POLL_PAGE_SIZE,
     OracleView,
     Progress,
     count_progress,
@@ -99,7 +100,8 @@ class FakeJournal:
         return OracleDecisionPage(decisions=shown, next_before_id=next_id)
 
     def progress_calls(self) -> list[dict]:
-        return [call for call in self.calls if call["limit"] == PROGRESS_PAGE_SIZE]
+        sizes = (PROGRESS_PAGE_SIZE, PROGRESS_POLL_PAGE_SIZE)
+        return [call for call in self.calls if call["limit"] in sizes]
 
 
 def page(*decisions: OracleDecision, next_before_id: int = 0) -> OracleDecisionPage:
@@ -1521,6 +1523,180 @@ async def test_the_block_shows_no_trade_outcome(mock_page, mock_api_client):
         "резултат на сдел",
     ):
         assert word not in joined
+
+
+# ------------------------------------------------------- what a poll asks for
+async def run_poll(view: OracleView, monkeypatch, rounds: int = 1) -> None:
+    """Run ``rounds`` rounds of ``view.poll`` with no waiting between them."""
+    sleeps = 0
+
+    async def fake_sleep(_seconds):
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps > rounds:
+            view._polling = False
+
+    monkeypatch.setattr(oracle_module.asyncio, "sleep", fake_sleep)
+    view._polling = True
+    await view.poll()
+
+
+def evaluation_rows(first: int, last: int) -> list[OracleDecision]:
+    return [signal(i, "VETO", signal_version="1.0.0") for i in range(first, last + 1)]
+
+
+@pytest.mark.asyncio
+async def test_a_poll_with_nothing_new_asks_the_backend_once(
+    mock_page, mock_api_client, monkeypatch
+):
+    journal = FakeJournal(*evaluation_rows(1, 5))
+    mock_api_client.list_oracle_decisions = journal
+    view = OracleView(mock_page, mock_api_client)
+    await view.refresh()
+    journal.calls.clear()
+
+    await run_poll(view, monkeypatch, rounds=3)
+
+    # The table shows the journal the counters count: nothing new in one means
+    # nothing new in the other, so each round is the table's request alone.
+    assert (
+        journal.calls == [{"limit": PAGE_SIZE, "before_id": None, "symbol": None}] * 3
+    )
+    assert journal.progress_calls() == []
+
+
+@pytest.mark.asyncio
+async def test_a_poll_that_sees_new_rows_brings_the_counters_up_with_a_small_page(
+    mock_page, mock_api_client, monkeypatch
+):
+    journal = FakeJournal(*evaluation_rows(1, 5))
+    mock_api_client.list_oracle_decisions = journal
+    view = OracleView(mock_page, mock_api_client)
+    await view.refresh()
+    assert view.veto_value.value == "5 / 30"
+    journal.rows = sorted(
+        [*journal.rows, *evaluation_rows(6, 7)], key=lambda row: -row.id
+    )
+    journal.calls.clear()
+
+    await run_poll(view, monkeypatch)
+
+    assert ids(view)[:2] == [7, 6]
+    assert [call["limit"] for call in journal.calls] == [
+        PAGE_SIZE,
+        PROGRESS_POLL_PAGE_SIZE,
+    ]
+    # Not the 200 rows of building them: a few are new at most.
+    assert PROGRESS_POLL_PAGE_SIZE < PROGRESS_PAGE_SIZE
+    assert view.veto_value.value == "7 / 30"
+
+
+@pytest.mark.asyncio
+async def test_with_a_symbol_every_poll_asks_for_the_counters_too(
+    mock_page, mock_api_client, monkeypatch
+):
+    journal = FakeJournal(
+        *evaluation_rows(1, 4), signal(5, "VETO", signal_version="1.0.0", symbol="NVDA")
+    )
+    mock_api_client.list_oracle_decisions = journal
+    view = OracleView(mock_page, mock_api_client)
+    await view.refresh()
+    view.symbol_field.value = "NVDA"
+    await view.on_filter_submit(None)
+    journal.calls.clear()
+
+    await run_poll(view, monkeypatch)
+
+    # A filter hides the rows of the other symbols, so the table cannot tell
+    # whether the journal moved: the counters are asked, over every symbol.
+    assert journal.calls == [
+        {"limit": PAGE_SIZE, "before_id": None, "symbol": "NVDA"},
+        {"limit": PROGRESS_POLL_PAGE_SIZE, "before_id": None, "symbol": None},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_counters_that_failed_are_tried_again_by_a_poll_with_nothing_new(
+    mock_page, mock_api_client, monkeypatch
+):
+    journal = FakeJournal(*evaluation_rows(1, 5))
+    failing = {"now": True}
+
+    async def flaky(limit=50, before_id=None, symbol=None):
+        if failing["now"] and limit in (PROGRESS_PAGE_SIZE, PROGRESS_POLL_PAGE_SIZE):
+            raise APIError(500, "boom")
+        return await journal(limit=limit, before_id=before_id, symbol=symbol)
+
+    mock_api_client.list_oracle_decisions = flaky
+    view = OracleView(mock_page, mock_api_client)
+    await view.refresh()
+    assert view.progress_error.visible is True
+    failing["now"] = False
+
+    await run_poll(view, monkeypatch)
+
+    assert view.progress_error.visible is False
+    assert view.veto_value.value == "5 / 30"
+
+
+@pytest.mark.asyncio
+async def test_counters_that_nothing_built_yet_are_built_by_the_first_poll(
+    mock_page, mock_api_client, monkeypatch
+):
+    journal = FakeJournal(*evaluation_rows(1, 5))
+    mock_api_client.list_oracle_decisions = journal
+    view = OracleView(mock_page, mock_api_client)
+    await view.load()
+    journal.calls.clear()
+
+    await run_poll(view, monkeypatch)
+
+    # Nothing is new in the table, yet the counters are read: in full, back to
+    # the start of the evaluation.
+    assert [call["limit"] for call in journal.calls] == [PAGE_SIZE, PROGRESS_PAGE_SIZE]
+    assert view.veto_value.value == "5 / 30"
+
+
+@pytest.mark.asyncio
+async def test_an_empty_evaluation_does_not_make_every_poll_read_the_journal(
+    mock_page, mock_api_client, monkeypatch
+):
+    # Rows from before the evaluation: the counters stay empty, and still they
+    # are known; a poll with nothing new must not read 200 rows for them again.
+    old = [
+        decision(i, created_at=EVALUATION_START - timedelta(days=1)) for i in (1, 2, 3)
+    ]
+    journal = FakeJournal(*old)
+    mock_api_client.list_oracle_decisions = journal
+    view = OracleView(mock_page, mock_api_client)
+    await view.refresh()
+    journal.calls.clear()
+
+    await run_poll(view, monkeypatch, rounds=2)
+
+    assert [call["limit"] for call in journal.calls] == [PAGE_SIZE, PAGE_SIZE]
+
+
+@pytest.mark.asyncio
+async def test_the_small_page_goes_on_to_older_rows_while_all_of_it_is_new(
+    mock_page, mock_api_client
+):
+    journal = FakeJournal(*evaluation_rows(1, 5))
+    mock_api_client.list_oracle_decisions = journal
+    view = OracleView(mock_page, mock_api_client)
+    await view.refresh_progress(rebuild=True)
+    # 45 rows arrive between two looks: more than two pages of 20.
+    journal.rows = sorted(
+        [*journal.rows, *evaluation_rows(100, 144)], key=lambda row: -row.id
+    )
+    journal.calls.clear()
+
+    await view.refresh_progress()
+
+    calls = journal.progress_calls()
+    assert [call["limit"] for call in calls] == [PROGRESS_POLL_PAGE_SIZE] * 3
+    assert [call["before_id"] for call in calls] == [None, 125, 105]
+    assert view.veto_value.value == "50 / 30"
 
 
 # ------------------------------------------------------------------- lifecycle

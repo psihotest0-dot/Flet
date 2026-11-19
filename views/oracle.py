@@ -46,6 +46,9 @@ AVAILABILITY_TARGET = 0.8
 # The most the backend sends in one page; the progress block reads the journal
 # from the newest row back to EVALUATION_START.
 PROGRESS_PAGE_SIZE = 200
+# What a poll asks for once the counters are built: a few rows are new at most, and
+# the read goes on to older pages by itself if all of them are.
+PROGRESS_POLL_PAGE_SIZE = 20
 PROGRESS_LABEL_WIDTH = 90
 PROGRESS_BAR_WIDTH = 260
 
@@ -247,6 +250,8 @@ class OracleView(ft.Container):
         self._active = False
         self._poll_failed = False
         self._progress_failed = False
+        # True once the counters were read; until then a poll has to build them.
+        self._progress_ready = False
         self._load_task = None
         self._poll_task = None
         # Every journal row since EVALUATION_START, by id: the evaluation counts
@@ -536,8 +541,18 @@ class OracleView(ft.Container):
             if not self._polling:
                 break
             try:
-                await self.refresh_newest()
-                await self.refresh_progress()
+                saw_new_rows = await self.refresh_newest()
+                # With no symbol the table shows the very journal the counters
+                # count, so a table with nothing new says the counters have nothing
+                # new either: that poll is one request, not two. A symbol filter
+                # hides the rows of the others, so there the counters are asked.
+                if (
+                    saw_new_rows
+                    or self._symbol is not None
+                    or self._progress_failed
+                    or not self._progress_ready
+                ):
+                    await self.refresh_progress()
             except asyncio.CancelledError:
                 raise
             except Exception as ex:
@@ -554,19 +569,22 @@ class OracleView(ft.Container):
             else:
                 self._poll_failed = False
 
-    async def refresh_newest(self):
+    async def refresh_newest(self) -> bool:
         """Put the decisions that arrived since the last look on top of the list.
 
         Older pages the reader has opened stay where they are. If a whole page of
         new decisions arrived, the list would have a hole between them and the
         old ones, so it starts over from the newest page instead.
+
+        Returns whether there were new decisions (``False`` also for an answer
+        that belongs to a list that is gone).
         """
         generation = self._generation
         page = await self.api_client.list_oracle_decisions(
             limit=PAGE_SIZE, symbol=self._symbol
         )
         if generation != self._generation:
-            return
+            return False
 
         newest = self.decisions[0].id if self.decisions else 0
         fresh = [d for d in page.decisions if d.id > newest]
@@ -574,16 +592,17 @@ class OracleView(ft.Container):
             # Nothing new, but the backend answered: the tab is not stale any more.
             self._set_error(None)
             self._touch()
-            return
+            return False
 
         if not self.decisions or (
             len(fresh) == len(page.decisions) and page.next_before_id
         ):
             self._show_first_page(page)
-            return
+            return True
 
         self.decisions = fresh + self.decisions
         self._show_loaded()
+        return True
 
     async def refresh_progress(self, rebuild: bool = False):
         """Bring the evaluation counters up to date.
@@ -597,8 +616,11 @@ class OracleView(ft.Container):
             newest = (
                 0 if rebuild or not self._progress_rows else max(self._progress_rows)
             )
+            # Building the counters reads back to EVALUATION_START in big pages;
+            # keeping them up to date asks for a few rows.
+            page_size = PROGRESS_PAGE_SIZE if newest == 0 else PROGRESS_POLL_PAGE_SIZE
             try:
-                fresh = await self._read_journal_since(newest)
+                fresh = await self._read_journal_since(newest, page_size)
             except asyncio.CancelledError:
                 raise
             except Exception as ex:
@@ -616,19 +638,26 @@ class OracleView(ft.Container):
                 safe_update(self, self.progress_error)
                 return
             self._progress_failed = False
+            self._progress_ready = True
             if rebuild:
                 self._progress_rows = {}
             self._progress_rows.update({decision.id: decision for decision in fresh})
             self.progress_error.visible = False
             self._show_progress(count_progress(self._progress_rows.values()))
 
-    async def _read_journal_since(self, newest_known_id: int) -> list[OracleDecision]:
-        """The journal rows after ``newest_known_id`` and not before ``EVALUATION_START``."""
+    async def _read_journal_since(
+        self, newest_known_id: int, page_size: int = PROGRESS_PAGE_SIZE
+    ) -> list[OracleDecision]:
+        """The journal rows after ``newest_known_id`` and not before ``EVALUATION_START``.
+
+        Pages of ``page_size`` rows; the read goes on to the older page while every
+        row of the last one was still new.
+        """
         rows: list[OracleDecision] = []
         before_id: int | None = None
         while True:
             page = await self.api_client.list_oracle_decisions(
-                limit=PROGRESS_PAGE_SIZE, before_id=before_id
+                limit=page_size, before_id=before_id
             )
             for decision in page.decisions:
                 if decision.id <= newest_known_id or (
