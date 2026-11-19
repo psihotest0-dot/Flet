@@ -122,6 +122,19 @@ class Settings(BaseModel):
     # session id -> "cloud" | "home"; see CLOUD_MODES.
     cloud_modes: dict[str, str] = {}
 
+    def snapshot(self) -> Settings:
+        """A copy of the settings, for ``restore`` after a change that was not saved."""
+        return self.model_copy(deep=True)
+
+    def restore(self, snapshot: Settings) -> None:
+        """Put the fields of ``snapshot`` back into this very object.
+
+        The object is shared (``main`` and the chat view hold the same one), so it is
+        changed in place and not replaced.
+        """
+        for name in type(self).model_fields:
+            setattr(self, name, getattr(snapshot, name))
+
     @field_validator("cloud_modes", mode="before")
     @classmethod
     def _validate_cloud_modes(cls, value: Any) -> dict[str, str]:

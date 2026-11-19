@@ -7,7 +7,7 @@ import sys
 import threading
 import traceback
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import flet as ft
 import httpx
@@ -206,6 +206,71 @@ def test_saving_settings_keeps_the_identity_and_repoints_the_same_client(
     assert chat_view.api_client is previous_client
     assert previous_client.base_url == "http://127.0.0.1:9000"
     assert previous_client.user_id == USER_ID
+
+
+@pytest.mark.asyncio
+async def test_saving_the_address_keeps_a_chat_opened_after_the_start(
+    start_app, settings_dialog_spy
+):
+    save_settings(
+        Settings(
+            user_id=USER_ID,
+            session_id="session-1",
+            chat_sessions=[{"id": "session-1", "name": "Чат 1"}],
+        )
+    )
+    tabs = start_app()
+    chat_view = tab_view(tabs, 0)
+    await chat_view.on_new_chat_click(None)
+    opened = chat_view.session_id
+
+    settings_dialog_spy["on_save"]("http://127.0.0.1:9000", "Ти")
+
+    # The chat saved its new session in the settings main works on; saving the
+    # address must not take it back to the one the app started with.
+    saved = load_settings()
+    assert saved.base_url == "http://127.0.0.1:9000"
+    assert saved.session_id == opened
+    assert [chat["id"] for chat in saved.chat_sessions] == ["session-1", opened]
+    assert saved.user_id == USER_ID
+
+
+def test_main_and_the_chat_work_on_the_same_settings(start_app):
+    save_settings(Settings(user_id=USER_ID))
+
+    tabs = start_app()
+
+    chat_view = tab_view(tabs, 0)
+    # The first chat the view made is already in what main holds.
+    assert chat_view.settings.user_id == USER_ID
+    assert chat_view.settings.session_id == chat_view.session_id
+    assert [chat["id"] for chat in chat_view.settings.chat_sessions] == [
+        chat_view.session_id
+    ]
+
+
+def test_a_failed_save_leaves_the_address_and_the_name_as_they_were(
+    start_app, settings_dialog_spy, monkeypatch
+):
+    save_settings(
+        Settings(user_id=USER_ID, base_url="http://localhost:8080", display_name="Иван")
+    )
+    tabs = start_app()
+    chat_view = tab_view(tabs, 0)
+    monkeypatch.setattr(main_module, "save_settings", lambda _settings: False)
+
+    with patch.object(main_module, "show_snackbar") as snackbar:
+        settings_dialog_spy["on_save"]("http://127.0.0.1:9000", "Мария")
+
+    snackbar.assert_called_once()
+    assert "Неуспешно" in snackbar.call_args.args[1]
+    # What the app holds is what is on the disk, and the client still goes to
+    # the old address.
+    assert chat_view.settings.base_url == "http://localhost:8080"
+    assert chat_view.settings.display_name == "Иван"
+    assert chat_view.api_client.base_url == "http://localhost:8080"
+    assert chat_view.display_name == "Иван"
+    assert load_settings().base_url == "http://localhost:8080"
 
 
 @pytest.mark.parametrize(

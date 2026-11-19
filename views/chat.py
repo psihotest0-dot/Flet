@@ -21,7 +21,7 @@ from state.chat_sessions import (
     _restart_chat_session,
     _unique_chat_name,
 )
-from state.settings import load_settings, save_settings
+from state.settings import Settings, load_settings, save_settings
 from views.attachments import (
     MAX_FILE_BYTES,
     MESSAGE_TOKEN_LIMIT,
@@ -109,6 +109,7 @@ class ChatView(ft.Container):
         page: ft.Page,
         api_client: APIClient,
         on_session_changed: Callable[[str], None] | None = None,
+        settings: Settings | None = None,
     ):
         super().__init__()
         # ``Control.page`` is read-only and raises until the view is on the page;
@@ -119,10 +120,12 @@ class ChatView(ft.Container):
 
         # Never mint a new id while a saved chat exists: the dropdown has to
         # keep pointing at the session ids stored in settings.json.
-        settings = load_settings()
-        self.session_id, chat_sessions = _ensure_chat_session(settings)
+        # One object for the whole app (``main`` hands over its own): what a handler
+        # changes is what every other one reads, with no file read in between.
+        self.settings = settings if settings is not None else load_settings()
+        self.session_id, chat_sessions = _ensure_chat_session(self.settings)
         # How the user's own messages are labelled (the ``display_name`` setting).
-        self.display_name = settings.display_name
+        self.display_name = self.settings.display_name
 
         self._stop_generation = False
         self._is_streaming = False
@@ -307,7 +310,7 @@ class ChatView(ft.Container):
 
     def _cloud_mode(self) -> str:
         """The model the open conversation is sent to: "auto", "cloud" or "home"."""
-        return load_settings().cloud_modes.get(self.session_id, "auto")
+        return self.settings.cloud_modes.get(self.session_id, "auto")
 
     def _use_paid(self) -> bool | None:
         """The ``use_paid`` of a request for the open conversation (``None``: left out)."""
@@ -329,16 +332,19 @@ class ChatView(ft.Container):
 
     async def on_cloud_click(self, e):
         """Go to the next model for this conversation: auto, cloud, home, auto."""
-        settings = load_settings()
+        settings = self.settings
         current = settings.cloud_modes.get(self.session_id, "auto")
         following = CLOUD_MODE_ORDER[
             (CLOUD_MODE_ORDER.index(current) + 1) % len(CLOUD_MODE_ORDER)
         ]
+        snapshot = settings.snapshot()
         if following == "auto":
             settings.cloud_modes.pop(self.session_id, None)
         else:
             settings.cloud_modes[self.session_id] = following
         if not save_settings(settings):
+            # The button keeps showing the old mode, so the settings keep it too.
+            settings.restore(snapshot)
             show_snackbar(self.page_ref, "Неуспешно запазване на настройките.")
             return
         logger.info(
@@ -386,7 +392,7 @@ class ChatView(ft.Container):
         if not selected:
             return
 
-        settings = load_settings()
+        settings = self.settings
         chat_sessions = _normalize_chat_sessions(settings)
         session_id = _resolve_session_id(chat_sessions, selected)
 
@@ -416,7 +422,7 @@ class ChatView(ft.Container):
         self._activate_session(session_id)
 
     async def on_new_chat_click(self, e):
-        settings = load_settings()
+        settings = self.settings
         chat_sessions = _normalize_chat_sessions(settings)
 
         new_session = str(uuid.uuid4())
@@ -488,13 +494,15 @@ class ChatView(ft.Container):
             )
             return
 
-        # Read after the dialog and the call: the settings may have been saved meanwhile.
-        settings = load_settings()
+        settings = self.settings
+        snapshot = settings.snapshot()
         new_id = _restart_chat_session(settings, old_id)
         if new_id is None:
             return
 
         if not save_settings(settings):
+            # The screen stays as it is, so the settings stay as they were.
+            settings.restore(snapshot)
             show_snackbar(self.page_ref, "Неуспешно запазване на настройките.")
             return
         logger.info(

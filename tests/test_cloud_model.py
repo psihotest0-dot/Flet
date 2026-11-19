@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import flet as ft
 import httpx
@@ -34,8 +34,8 @@ def seed(session_id: str = CHAT_1, modes: dict | None = None) -> None:
     )
 
 
-def make_view(mock_page, mock_api_client) -> ChatView:
-    view = ChatView(mock_page, mock_api_client)
+def make_view(mock_page, mock_api_client, **kwargs) -> ChatView:
+    view = ChatView(mock_page, mock_api_client, **kwargs)
     view.update = MagicMock()
     view.scroll_to_bottom = MagicMock()
     return view
@@ -93,6 +93,58 @@ async def test_the_button_shows_the_mode_it_is_in(mock_page, mock_api_client):
     assert "автоматичния" not in auto_tip and "както е настроено" in auto_tip
     assert "облака" in cloud_tip
     assert "компютър" in view.cloud_btn.tooltip
+
+
+@pytest.mark.asyncio
+async def test_a_failed_save_leaves_the_mode_as_it_was(mock_page, mock_api_client):
+    seed(modes={CHAT_1: "cloud"})
+    view = make_view(mock_page, mock_api_client)
+
+    with (
+        patch("views.chat.save_settings", return_value=False),
+        patch("views.chat.show_snackbar") as snackbar,
+    ):
+        await view.on_cloud_click(None)
+
+    snackbar.assert_called_once()
+    # The button still says "cloud", and so do the settings in memory.
+    assert view._cloud_mode() == "cloud"
+    assert view.settings.cloud_modes == {CHAT_1: "cloud"}
+    assert load_settings().cloud_modes == {CHAT_1: "cloud"}
+
+
+@pytest.mark.asyncio
+async def test_the_view_works_on_the_settings_it_is_given(mock_page, mock_api_client):
+    seed()
+    shared = load_settings()
+    view = make_view(mock_page, mock_api_client, settings=shared)
+
+    await view.on_cloud_click(None)
+
+    assert view.settings is shared
+    # What the chat changed is seen by whoever else holds the object (main).
+    assert shared.cloud_modes == {CHAT_1: "cloud"}
+
+
+@pytest.mark.asyncio
+async def test_no_handler_reads_the_settings_file_once_the_view_is_built(
+    mock_page, mock_api_client, monkeypatch
+):
+    seed()
+    view = make_view(mock_page, mock_api_client)
+
+    def read_the_file():
+        raise AssertionError("the settings file was read again")
+
+    monkeypatch.setattr("views.chat.load_settings", read_the_file)
+
+    await view.on_cloud_click(None)
+    await view.on_new_chat_click(None)
+    view.session_dropdown.value = CHAT_2
+    await view.on_session_change(None)
+
+    assert view.session_id == CHAT_2
+    assert view._cloud_mode() == "auto"
 
 
 @pytest.mark.asyncio

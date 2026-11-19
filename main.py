@@ -179,28 +179,20 @@ def main(page: ft.Page):
 
     def apply_settings(new_url: str, display_name: str = DEFAULT_DISPLAY_NAME):
         """Persist the validated Base URL and chat name; point the client at the URL."""
-        # Re-read the file before writing: the chat view stores its session_id
-        # and chat_sessions there, and saving the snapshot loaded at startup
-        # would silently revert them to an older session.
-        current = load_settings()
-        current.base_url = new_url
-        current.display_name = display_name
-        if not current.user_id:
-            current.user_id = settings.user_id
-        success = save_settings(current)
+        # The chat view works on this very object (it keeps its session_id and
+        # chat_sessions in it), so nothing is read back from the file: what is
+        # saved is what every part of the app has seen, user_id included.
+        snapshot = settings.snapshot()
+        settings.base_url = new_url
+        settings.display_name = display_name
 
-        if not success:
+        if not save_settings(settings):
+            settings.restore(snapshot)
             # save_settings has logged the reason; this line says what was lost.
             logger.error("The new settings (Base URL %s) were not saved.", new_url)
             show_snackbar(page, "Неуспешно запазване на настройките.")
             return
         logger.info("Settings saved: Base URL %s.", new_url)
-
-        settings.base_url = current.base_url
-        settings.user_id = current.user_id
-        settings.session_id = current.session_id
-        settings.chat_sessions = current.chat_sessions
-        settings.display_name = current.display_name
 
         # The one client is kept and only pointed at the new address. Replacing
         # and closing it cut off an answer that was being streamed, broke the
@@ -324,7 +316,9 @@ def main(page: ft.Page):
         4: create_user_files,
     }
 
-    chat_view = ChatView(page, api_client, on_session_changed=on_chat_session_changed)
+    chat_view = ChatView(
+        page, api_client, on_session_changed=on_chat_session_changed, settings=settings
+    )
     views[0] = chat_view
 
     # One slot for every tab; an empty container stands in for a view that has

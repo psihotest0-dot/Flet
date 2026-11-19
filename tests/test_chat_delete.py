@@ -348,6 +348,27 @@ async def test_failed_save_leaves_the_screen_as_it_was(mock_page, mock_api_clien
     assert load_settings() == before
 
 
+@pytest.mark.asyncio
+async def test_failed_save_leaves_the_settings_in_memory_as_they_were(
+    mock_page, mock_api_client
+):
+    seed(CHAT_1)
+    view = make_view(mock_page, mock_api_client)
+    before = view.settings.snapshot()
+
+    with (
+        confirming(True),
+        patch("views.chat.save_settings", return_value=False),
+        patch("views.chat.show_snackbar"),
+    ):
+        await view.on_delete_chat_click(None)
+
+    # The restart of the chat was half done in the shared object; it is undone,
+    # or the next save would write a chat the screen never switched to.
+    assert view.settings == before
+    assert view.settings.session_id == CHAT_1
+
+
 # ------------------------------------------------------- the settings side
 def test_restarting_a_chat_that_is_not_listed_changes_nothing():
     settings = Settings(

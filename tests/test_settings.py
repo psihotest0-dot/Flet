@@ -453,3 +453,41 @@ def test_recovering_broken_settings_logs_only_the_start_of_the_ids(
     assert user_id[:8] in caplog.text
     assert user_id not in caplog.text
     assert session_id not in caplog.text
+
+
+# --------------------------------------------------- snapshot and restore
+def test_restore_puts_every_field_back_into_the_same_object():
+    settings = Settings(
+        user_id="user-1",
+        session_id="s1",
+        chat_sessions=[{"id": "s1", "name": "Чат 1"}],
+        cloud_modes={"s1": "cloud"},
+        display_name="Иван",
+    )
+    same_object = settings
+    snapshot = settings.snapshot()
+
+    settings.base_url = "http://127.0.0.1:9000"
+    settings.display_name = "Мария"
+    settings.chat_sessions.append({"id": "s2", "name": "Чат 2"})
+    settings.cloud_modes.clear()
+    settings.restore(snapshot)
+
+    # In place: the chat view and main hold this very object.
+    assert settings is same_object
+    assert settings == snapshot
+    assert settings.chat_sessions == [{"id": "s1", "name": "Чат 1"}]
+    assert settings.cloud_modes == {"s1": "cloud"}
+    assert settings.base_url == "http://localhost:8080"
+    assert settings.display_name == "Иван"
+
+
+def test_a_snapshot_does_not_follow_the_settings_it_was_taken_from():
+    settings = Settings(user_id="user-1", cloud_modes={"s1": "home"})
+    snapshot = settings.snapshot()
+
+    settings.cloud_modes["s1"] = "cloud"
+    settings.cloud_modes["s2"] = "home"
+
+    assert snapshot.cloud_modes == {"s1": "home"}
+    assert snapshot is not settings
