@@ -15,7 +15,7 @@ from views.chat import ChatView
 from views.files import FilesView
 from views.memory import MemoryView
 from views.oracle import OracleView
-from views.settings_dialog import SettingsDialog
+from views.settings_dialog import SettingsDialog, is_plain_http_to_another_computer
 from views.ui_utils import is_unexpected, safe_update, show_snackbar
 from views.user_files import UserFilesView
 
@@ -173,6 +173,12 @@ def main(page: ft.Page):
             )
 
     logger.info("Starting the client for the backend at %s", settings.base_url)
+    if is_plain_http_to_another_computer(settings.base_url):
+        logger.warning(
+            "The backend at %s is reached over plain http: the user_id and the "
+            "chats are not encrypted on the way.",
+            settings.base_url,
+        )
     api_client = APIClient(base_url=settings.base_url, user_id=settings.user_id)
     # index -> view; tabs are created on first activation (see ensure_view below).
     views: dict[int, ft.Control] = {}

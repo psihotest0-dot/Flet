@@ -235,6 +235,25 @@ async def test_saving_the_address_keeps_a_chat_opened_after_the_start(
     assert saved.user_id == USER_ID
 
 
+def test_a_backend_reached_over_plain_http_is_noted_in_the_log(start_app, caplog):
+    save_settings(Settings(user_id=USER_ID, base_url="http://192.168.1.20:8080"))
+
+    with caplog.at_level(logging.WARNING, logger="main"):
+        start_app()
+
+    assert "reached over plain http" in caplog.text
+    assert "192.168.1.20" in caplog.text
+
+
+def test_a_local_backend_is_not_noted(start_app, caplog):
+    save_settings(Settings(user_id=USER_ID, base_url="http://127.0.0.1:8080"))
+
+    with caplog.at_level(logging.WARNING, logger="main"):
+        start_app()
+
+    assert "plain http" not in caplog.text
+
+
 def test_main_and_the_chat_work_on_the_same_settings(start_app):
     save_settings(Settings(user_id=USER_ID))
 

@@ -5,7 +5,13 @@ import httpx
 import pytest
 import respx
 
-from views.settings_dialog import SettingsDialog, clean_display_name, validate_base_url
+from views.settings_dialog import (
+    INSECURE_URL_NOTE,
+    SettingsDialog,
+    clean_display_name,
+    is_plain_http_to_another_computer,
+    validate_base_url,
+)
 
 USER_ID = "123e4567-e89b-12d3-a456-426614174000"
 SAVED_URL = "http://127.0.0.1:8080"
@@ -277,3 +283,76 @@ def test_dialog_shows_the_saved_chat_name_and_limits_its_length(mock_page):
     assert dialog.display_name_field.value == "Иван"
     assert dialog.display_name_field.max_length == 40
     assert dialog.display_name_field in dialog.dialog.content.controls
+
+
+# ----------------------------------------------- plain http to another computer
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://192.168.1.20:8080",
+        "http://10.0.0.5",
+        "http://example.com",
+        "HTTP://Backend.Example.COM:8080",
+        "http://my-server:8080",
+        "http://[2001:db8::1]:8080",
+    ],
+)
+def test_http_to_another_computer_is_flagged(url):
+    assert is_plain_http_to_another_computer(url) is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost:8080",
+        "http://LOCALHOST",
+        "http://api.localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://127.1.2.3",
+        "http://[::1]:8080",
+        "https://example.com",
+        "https://192.168.1.20",
+        "",
+        None,
+        "not a url",
+        "http://",
+        "http://[::1",
+    ],
+)
+def test_this_computer_https_and_nonsense_are_not_flagged(url):
+    assert is_plain_http_to_another_computer(url) is False
+
+
+def test_the_warning_is_hidden_for_a_saved_local_address(dialog):
+    dialog.open("http://127.0.0.1:8080")
+
+    assert dialog.base_url_warning.visible is False
+
+
+def test_the_warning_shows_when_the_dialog_opens_on_a_remote_http_address(dialog):
+    dialog.open("http://192.168.1.20:8080")
+
+    assert dialog.base_url_warning.visible is True
+    assert dialog.base_url_warning.value == INSECURE_URL_NOTE
+    assert "https://" in INSECURE_URL_NOTE
+
+
+def test_the_warning_follows_the_address_as_it_is_typed(dialog):
+    dialog.open(SAVED_URL)
+
+    dialog.base_url_field.value = "http://backend.example"
+    dialog._on_url_change(None)
+    assert dialog.base_url_warning.visible is True
+
+    dialog.base_url_field.value = "https://backend.example"
+    dialog._on_url_change(None)
+    assert dialog.base_url_warning.visible is False
+
+
+def test_the_warning_is_not_an_error_and_the_address_is_saved(dialog, saved):
+    dialog.open("http://192.168.1.20:8080")
+
+    dialog._save(None)
+
+    assert saved == [("http://192.168.1.20:8080", "Ти")]
+    assert not dialog.base_url_field.error

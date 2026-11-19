@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 from collections.abc import Callable
 from urllib.parse import urlsplit
@@ -20,6 +21,11 @@ from views.ui_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+INSECURE_URL_NOTE = (
+    "Адресът е с http:// към друг компютър: user_id (ключът към историята ти) и "
+    "разговорите минават по мрежата без шифроване. Ползвай https://."
+)
 
 USER_ID_NOTE = (
     "Това е ключът към историята ти - запази settings.json. "
@@ -51,6 +57,30 @@ def validate_base_url(value: str | None) -> str:
     if parts.query or parts.fragment:
         raise ValueError("Адресът не може да съдържа ? или #.")
     return url.rstrip("/")
+
+
+def is_plain_http_to_another_computer(url: str | None) -> bool:
+    """Whether ``url`` is ``http://`` to a host that is not this computer.
+
+    Everything the client sends carries the ``user_id`` (the key to the history, the
+    memories and the files) and the chats; over plain http to another computer they
+    travel readable by anyone on the way. ``https://`` and an address of this very
+    computer (``localhost``, ``127.0.0.1``, ``::1``) are fine.
+    """
+    try:
+        parts = urlsplit((url or "").strip())
+        host = parts.hostname
+    except ValueError:
+        return False
+    if parts.scheme.lower() != "http" or not host:
+        return False
+    if host == "localhost" or host.endswith(".localhost"):
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        # A name, not an address: it may be any computer.
+        return True
 
 
 def clean_display_name(value: str | None) -> str:
@@ -86,6 +116,11 @@ class SettingsDialog:
             label="Base URL",
             value=base_url,
             on_submit=self._save,
+            on_change=self._on_url_change,
+        )
+        # Not an error: the address is saved all the same, but the user is told.
+        self.base_url_warning = ft.Text(
+            INSECURE_URL_NOTE, size=12, color=ft.Colors.AMBER_300, visible=False
         )
         self.check_btn = ft.OutlinedButton(
             "Провери връзката",
@@ -124,6 +159,7 @@ class SettingsDialog:
             content=ft.Column(
                 [
                     self.base_url_field,
+                    self.base_url_warning,
                     ft.Row(
                         [self.check_btn, self.check_progress],
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -149,12 +185,20 @@ class SettingsDialog:
         """Show the dialog with the currently saved values and a clean state."""
         self.base_url_field.value = base_url
         self.base_url_field.error = None
+        self.base_url_warning.visible = is_plain_http_to_another_computer(base_url)
         self.display_name_field.value = display_name
         self.check_result.visible = False
         self.copy_btn.icon = ft.Icons.COPY
         self.copy_btn.icon_color = None
         self.copy_btn.tooltip = "Копирай"
         open_dialog(self.page, self.dialog)
+
+    def _on_url_change(self, e) -> None:
+        """Show or hide the warning as the address is typed; nothing is asked of the backend."""
+        warn = is_plain_http_to_another_computer(self.base_url_field.value)
+        if warn != self.base_url_warning.visible:
+            self.base_url_warning.visible = warn
+            safe_update(self.dialog, self.base_url_warning)
 
     def _cancel(self, e) -> None:
         close_dialog(self.dialog)
