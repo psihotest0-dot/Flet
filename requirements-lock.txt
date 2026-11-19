@@ -49,9 +49,9 @@ pluggy==1.7.0
     # via
     #   pytest
     #   pytest-cov
-pydantic==2.14.3
+pydantic==2.14.4
     # via flet-client (pyproject.toml)
-pydantic-core==2.50.4
+pydantic-core==2.50.5
     # via pydantic
 pygments==2.21.0
     # via
@@ -72,7 +72,7 @@ respx==0.23.1
     # via flet-client (pyproject.toml)
 rich==15.0.0
     # via flet-desktop
-ruff==0.17.5
+ruff==0.17.6
     # via flet-client (pyproject.toml)
 six==1.17.0
     # via repath
