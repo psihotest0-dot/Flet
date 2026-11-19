@@ -227,9 +227,8 @@ async def test_only_the_open_chat_is_deleted_and_nothing_else_is_called(
     with confirming(True):
         await view.on_delete_chat_click(None)
 
-    # cancel_stream only stops the local request that was still running.
     called = {name for name, _args, _kwargs in mock_api_client.method_calls}
-    assert called <= {"cancel_stream", "delete_session"}
+    assert called <= {"delete_session"}
     mock_api_client.delete_session.assert_awaited_once_with(CHAT_2)
 
 

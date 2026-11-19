@@ -130,6 +130,8 @@ class ChatView(ft.Container):
         self._last_assistant_row = None
         self._load_task = None
         self._attachments_task = None
+        # The task that reads the answer being streamed; "Спри" cancels it.
+        self._stream_task: asyncio.Future | None = None
         # The files attached to the open conversation, newest first.
         self.attachments: list[ChatAttachment] = []
         # What the input field held at the last change: a jump of thousands of
@@ -269,8 +271,14 @@ class ChatView(ft.Container):
         self._render_attachments()
         safe_update(self)
 
+    def _cancel_stream(self) -> None:
+        """Stop reading the answer that is being streamed, if there is one."""
+        task = self._stream_task
+        if task is not None and not task.done():
+            task.cancel()
+
     def _cancel_running_tasks(self):
-        self.api_client.cancel_stream()
+        self._cancel_stream()
         if self._load_task is not None:
             self._load_task.cancel()
             self._load_task = None
@@ -1004,59 +1012,76 @@ class ChatView(ft.Container):
                 pending_text = ""
                 self._follow_stream()
 
-        try:
+        async def read_stream():
+            nonlocal pending_text, last_chunk_time
             last_flush_time = time.monotonic()
+            try:
+                async for chunk in stream_coro:
+                    last_chunk_time = time.monotonic()
+                    chat_message.hide_activity_indicator()
 
-            async for chunk in stream_coro:
-                last_chunk_time = time.monotonic()
-                chat_message.hide_activity_indicator()
+                    if self._stop_generation:
+                        break
 
-                if self._stop_generation:
-                    break
+                    if isinstance(chunk, dict):
+                        if chunk.get("type") == "sources":
+                            data = chunk.get("data", {})
+                            if isinstance(data, list):
+                                chat_message.add_sources(data)
+                            elif isinstance(data, dict):
+                                for key in ("facts", "chunks", "sources"):
+                                    if isinstance(data.get(key), list):
+                                        chat_message.add_sources(data[key])
+                            continue
 
-                if isinstance(chunk, dict):
-                    if chunk.get("type") == "sources":
-                        data = chunk.get("data", {})
-                        if isinstance(data, list):
-                            chat_message.add_sources(data)
-                        elif isinstance(data, dict):
-                            for key in ("facts", "chunks", "sources"):
-                                if isinstance(data.get(key), list):
-                                    chat_message.add_sources(data[key])
-                        continue
+                        if chunk.get("type") == "proposals":
+                            chat_message.add_proposals(chunk.get("data") or [])
+                            continue
 
-                    if chunk.get("type") == "proposals":
-                        chat_message.add_proposals(chunk.get("data") or [])
-                        continue
+                        if chunk.get("type") == "model":
+                            chat_message.set_model(chunk.get("data") or {})
+                            continue
 
-                    if chunk.get("type") == "model":
-                        chat_message.set_model(chunk.get("data") or {})
-                        continue
+                        for key in ("text", "content"):
+                            value = chunk.get(key)
+                            if isinstance(value, str):
+                                pending_text += value
 
-                    for key in ("text", "content"):
-                        value = chunk.get(key)
-                        if isinstance(value, str):
-                            pending_text += value
+                        if "error" in chunk:
+                            pending_text += f"\n\n**Грешка:** {chunk['error']}"
 
-                    if "error" in chunk:
-                        pending_text += f"\n\n**Грешка:** {chunk['error']}"
+                        for source_key in ("facts", "chunks", "sources"):
+                            if isinstance(chunk.get(source_key), list):
+                                chat_message.add_sources(chunk[source_key])
 
-                    for source_key in ("facts", "chunks", "sources"):
-                        if isinstance(chunk.get(source_key), list):
-                            chat_message.add_sources(chunk[source_key])
+                    elif isinstance(chunk, str):
+                        pending_text += chunk
 
-                elif isinstance(chunk, str):
-                    pending_text += chunk
+                    current_time = time.monotonic()
+                    if current_time - last_flush_time >= STREAM_FLUSH_INTERVAL:
+                        flush_text()
+                        last_flush_time = current_time
 
-                current_time = time.monotonic()
-                if current_time - last_flush_time >= STREAM_FLUSH_INTERVAL:
-                    flush_text()
-                    last_flush_time = current_time
+                flush_text()
+            finally:
+                # A stream left half read (the reader stopped) closes its connection
+                # now, not whenever the garbage collector gets to it: that is what
+                # tells the backend to stop writing the answer.
+                close = getattr(stream_coro, "aclose", None)
+                if close is not None:
+                    await close()
 
-            flush_text()
-
+        # The answer is read by a task of its own, so that "Спри" cancels exactly
+        # that and nothing else; cancelling the task of this handler could not be
+        # told from the window going away.
+        self._stream_task = asyncio.ensure_future(read_stream())
+        try:
+            await self._stream_task
         except asyncio.CancelledError:
             flush_text()
+            if asyncio.current_task().cancelling():
+                # Not "Спри": this very handler is being cancelled.
+                raise
         except Exception as ex:
             if isinstance(ex, (StreamError, APIError, httpx.TransportError)):
                 logger.error("Chat request failed: %r", ex)
@@ -1070,6 +1095,7 @@ class ChatView(ft.Container):
             if fallback_user_text and not isinstance(ex, StreamError):
                 self._set_input(fallback_user_text)
         finally:
+            self._stream_task = None
             stream_open = False
             chat_message.hide_activity_indicator()
             if activity_task:
@@ -1112,16 +1138,16 @@ class ChatView(ft.Container):
         safe_update(self)
         self.scroll_to_bottom()
 
+        stopped = False
         try:
-            await self._stream_response(
+            error = await self._stream_response(
                 chat_message,
                 self.api_client.stream_chat(
                     session_id=session_id, content=text, **self._chat_options()
                 ),
                 text,
             )
-        except asyncio.CancelledError:
-            pass
+            stopped = error is None and self._stop_generation
         finally:
             self._is_streaming = False
             self._stop_generation = False
@@ -1130,6 +1156,9 @@ class ChatView(ft.Container):
                 self._last_assistant_msg = chat_message
                 self._last_assistant_row = chat_message._row
                 chat_message.set_regenerate_visible(True)
+                if stopped:
+                    # The backend never stores a half-written answer.
+                    chat_message.show_stopped_note()
 
     async def regenerate_last(self, *_args):
         if self._is_streaming:
@@ -1166,8 +1195,6 @@ class ChatView(ft.Container):
                     session_id=session_id, **self._chat_options()
                 ),
             )
-        except asyncio.CancelledError:
-            pass
         finally:
             # "Стоп" ends the stream without an error, but the backend replaces
             # the stored answer only after a complete new one - an interrupted
@@ -1219,6 +1246,6 @@ class ChatView(ft.Container):
     async def stop_generation_click(self, e):
         logger.info("Chat %s: generation stopped by the user.", self.session_id[:8])
         self._stop_generation = True
-        self.api_client.cancel_stream()
+        self._cancel_stream()
         self.stop_btn.disabled = True
         safe_update(self, self.stop_btn)

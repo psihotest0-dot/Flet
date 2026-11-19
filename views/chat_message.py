@@ -27,6 +27,12 @@ from views.ui_utils import (
 
 logger = logging.getLogger(__name__)
 
+# Under an answer that "Спри" cut off. The backend keeps only a complete answer, so
+# after a reload this one is gone and its question waits for a new one.
+STOPPED_NOTE = (
+    "Спряно. Недописаният отговор не се запазва — „Опитай отново“ го пише наново."
+)
+
 
 class ChatMessage(ft.Column):
     """A component representing a single chat message in the UI."""
@@ -125,11 +131,15 @@ class ChatMessage(ft.Column):
         self.error_text = ft.Text(
             "", color=ft.Colors.RED, selectable=True, visible=False
         )
+        self.stopped_note = ft.Text(
+            STOPPED_NOTE, size=11, color=ft.Colors.GREY_500, visible=False
+        )
 
         self.controls = [
             self.top_row,
             self.msg_container,
             self.error_text,
+            self.stopped_note,
             self.activity_indicator,
             self.sources_row,
             self.proposals_column,
@@ -180,6 +190,11 @@ class ChatMessage(ft.Column):
         self.error_text.visible = True
         self.hide_activity_indicator()
         safe_update(self, self.error_text)
+
+    def show_stopped_note(self) -> None:
+        """Say that this answer was cut off by the user and will not be kept."""
+        self.stopped_note.visible = True
+        safe_update(self, self.stopped_note)
 
     def set_model(self, who: dict) -> None:
         """Show who gave this answer: the cloud (with the model) or this computer."""

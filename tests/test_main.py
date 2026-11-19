@@ -257,13 +257,12 @@ async def test_stop_still_reaches_the_answer_being_streamed_after_a_save(
 ):
     tabs = start_app()
     chat_view = tab_view(tabs, 0)
-    # The stream records its task on the client it reads through.
+    # The view reads the answer in a task of its own and keeps it.
     answer = asyncio.get_running_loop().create_task(asyncio.sleep(10))
-    chat_view.api_client._current_stream_task = answer
+    chat_view._stream_task = answer
 
     settings_dialog_spy["on_save"]("http://127.0.0.1:9000", "Ти")
-    # What "Спри" does (ChatView.stop_generation_click).
-    chat_view.api_client.cancel_stream()
+    await chat_view.stop_generation_click(None)
 
     with pytest.raises(asyncio.CancelledError):
         await answer

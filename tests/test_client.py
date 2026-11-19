@@ -1146,15 +1146,3 @@ async def test_refused_stream_request_is_logged_and_raised(client, caplog):
 
     assert exc_info.value.status == 400
     assert "POST /chat/regenerate -> HTTP 400: no user message found" in caplog.text
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_current_stream_task_is_cleared_when_the_stream_ends(client):
-    respx.post("http://localhost:8080/chat/stream").mock(
-        return_value=_sse_response(b'data: {"content": "x"}\n\n', b"data: [DONE]\n\n")
-    )
-
-    async for _ in client.stream_chat("s1", "Hi"):
-        assert client._current_stream_task is not None
-    assert client._current_stream_task is None

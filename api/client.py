@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -381,7 +380,6 @@ class APIClient:
         self.client = httpx.AsyncClient(
             base_url=self.base_url, headers={"X-User-ID": user_id}
         )
-        self._current_stream_task = None
 
     def set_base_url(self, base_url: str) -> None:
         """Send the next requests to ``base_url``.
@@ -392,11 +390,6 @@ class APIClient:
         """
         self.base_url = base_url
         self.client.base_url = base_url
-
-    def cancel_stream(self):
-        """Cancel the current streaming task."""
-        if self._current_stream_task and not self._current_stream_task.done():
-            self._current_stream_task.cancel()
 
     async def __aenter__(self):
         return self
@@ -738,72 +731,68 @@ class APIClient:
         What the model wrote and what the documents say never reach the log: an
         undecodable frame is reported by its size only.
         """
-        try:
-            self._current_stream_task = asyncio.current_task()
-            async with aconnect_sse(
-                self.client,
-                "POST",
-                path,
-                json=payload,
-                timeout=httpx.Timeout(5.0, read=None),
-            ) as event_source:
-                try:
-                    event_source.response.raise_for_status()
-                except httpx.HTTPStatusError as e:
-                    await e.response.aread()
-                    error = APIError.from_response(e.response)
-                    _log_http_error(e.response, error)
-                    raise error from e
+        async with aconnect_sse(
+            self.client,
+            "POST",
+            path,
+            json=payload,
+            timeout=httpx.Timeout(5.0, read=None),
+        ) as event_source:
+            try:
+                event_source.response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                await e.response.aread()
+                error = APIError.from_response(e.response)
+                _log_http_error(e.response, error)
+                raise error from e
 
-                async for sse in event_source.aiter_sse():
-                    if sse.data == "[DONE]":
-                        break
+            async for sse in event_source.aiter_sse():
+                if sse.data == "[DONE]":
+                    break
 
-                    if sse.event == "error":
-                        raise StreamError(_stream_error_text(sse.data))
-                    elif sse.event == "sources":
-                        try:
-                            yield {"type": "sources", "data": json.loads(sse.data)}
-                        except json.JSONDecodeError as e:
-                            logger.error(
-                                "Could not decode the sources frame (%d characters): %s",
-                                len(sse.data),
-                                e,
-                            )
-                            yield {"type": "sources", "data": sse.data}
-                    elif sse.event == "model":
-                        # Who answered; a frame this client cannot read is not worth a failure.
-                        try:
-                            who = json.loads(sse.data)
-                        except json.JSONDecodeError:
-                            continue
-                        if isinstance(who, dict):
-                            yield {"type": "model", "data": who}
-                    elif sse.event == "proposals":
-                        try:
-                            proposals = json.loads(sse.data)
-                        except json.JSONDecodeError as e:
-                            logger.error(
-                                "Could not decode the proposals frame (%d characters): %s",
-                                len(sse.data),
-                                e,
-                            )
-                            continue
-                        if isinstance(proposals, list):
-                            yield {"type": "proposals", "data": proposals}
-                    else:
-                        try:
-                            chunk = json.loads(sse.data)
-                        except json.JSONDecodeError as e:
-                            logger.error(
-                                "Could not decode a stream chunk (%d characters): %s",
-                                len(sse.data),
-                                e,
-                            )
-                            yield sse.data
-                            continue
-                        if isinstance(chunk, dict) and "error" in chunk:
-                            raise StreamError(str(chunk["error"] or "Unknown error"))
-                        yield chunk
-        finally:
-            self._current_stream_task = None
+                if sse.event == "error":
+                    raise StreamError(_stream_error_text(sse.data))
+                elif sse.event == "sources":
+                    try:
+                        yield {"type": "sources", "data": json.loads(sse.data)}
+                    except json.JSONDecodeError as e:
+                        logger.error(
+                            "Could not decode the sources frame (%d characters): %s",
+                            len(sse.data),
+                            e,
+                        )
+                        yield {"type": "sources", "data": sse.data}
+                elif sse.event == "model":
+                    # Who answered; a frame this client cannot read is not worth a failure.
+                    try:
+                        who = json.loads(sse.data)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(who, dict):
+                        yield {"type": "model", "data": who}
+                elif sse.event == "proposals":
+                    try:
+                        proposals = json.loads(sse.data)
+                    except json.JSONDecodeError as e:
+                        logger.error(
+                            "Could not decode the proposals frame (%d characters): %s",
+                            len(sse.data),
+                            e,
+                        )
+                        continue
+                    if isinstance(proposals, list):
+                        yield {"type": "proposals", "data": proposals}
+                else:
+                    try:
+                        chunk = json.loads(sse.data)
+                    except json.JSONDecodeError as e:
+                        logger.error(
+                            "Could not decode a stream chunk (%d characters): %s",
+                            len(sse.data),
+                            e,
+                        )
+                        yield sse.data
+                        continue
+                    if isinstance(chunk, dict) and "error" in chunk:
+                        raise StreamError(str(chunk["error"] or "Unknown error"))
+                    yield chunk

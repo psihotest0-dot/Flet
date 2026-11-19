@@ -435,6 +435,116 @@ def chat_messages(view: ChatView):
     return [row.controls[0].content for row in view.chat_list.controls]
 
 
+def slow_stream(closed: list, started: asyncio.Event):
+    """A stream that wrote half an answer and goes on writing for a long time."""
+
+    async def stream(**_kwargs):
+        try:
+            yield {"content": "half of an answ"}
+            started.set()
+            await asyncio.sleep(10)
+            yield {"content": "er that was never finished"}
+        finally:
+            closed.append(True)
+
+    return MagicMock(side_effect=lambda **kwargs: stream(**kwargs))
+
+
+@pytest.mark.asyncio
+async def test_stop_cuts_the_answer_and_says_that_it_is_not_kept(
+    chat_view, mock_api_client
+):
+    closed, started = [], asyncio.Event()
+    mock_api_client.stream_chat = slow_stream(closed, started)
+    chat_view.input_field.value = "hi"
+
+    with mounted(ChatView):
+        sending = asyncio.ensure_future(chat_view.send_message_click(None))
+        await started.wait()
+        await chat_view.stop_generation_click(None)
+        await sending
+
+    _question, answer = chat_messages(chat_view)
+    # What was written stays on screen ...
+    assert answer.md.value == "half of an answ"
+    # ... with the truth about it: the backend stores only a whole answer.
+    assert answer.stopped_note.visible is True
+    assert "не се запазва" in answer.stopped_note.value
+    # The stream was closed, which is what tells the backend to stop writing.
+    assert closed == [True]
+    assert chat_view._stream_task is None
+    assert chat_view._is_streaming is False
+    assert chat_view._stop_generation is False
+    assert chat_view.send_btn.visible is True
+    assert chat_view.stop_btn.visible is False
+    assert answer.regenerate_btn.visible is True
+
+
+@pytest.mark.asyncio
+async def test_a_finished_answer_has_no_stopped_note(chat_view, mock_api_client):
+    async def stream(**_kwargs):
+        yield {"content": "the whole answer"}
+
+    mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: stream(**kw))
+    chat_view.input_field.value = "hi"
+
+    await chat_view.send_message_click(None)
+
+    _question, answer = chat_messages(chat_view)
+    assert answer.md.value == "the whole answer"
+    assert answer.stopped_note.visible is False
+
+
+@pytest.mark.asyncio
+async def test_a_failed_answer_has_no_stopped_note(chat_view, mock_api_client):
+    mock_api_client.stream_chat = failing_stream(StreamError("boom"), {"content": "x"})
+    chat_view.input_field.value = "hi"
+
+    await chat_view.send_message_click(None)
+
+    _question, answer = chat_messages(chat_view)
+    assert answer.error_text.visible is True
+    assert answer.stopped_note.visible is False
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_handler_is_not_taken_for_stop(chat_view, mock_api_client):
+    closed, started = [], asyncio.Event()
+    mock_api_client.stream_chat = slow_stream(closed, started)
+    chat_view.input_field.value = "hi"
+
+    sending = asyncio.ensure_future(chat_view.send_message_click(None))
+    await started.wait()
+    sending.cancel()
+
+    # AGENTS.md rule 7: a cancellation goes up, whoever asked for it.
+    with pytest.raises(asyncio.CancelledError):
+        await sending
+    _question, answer = chat_messages(chat_view)
+    assert answer.stopped_note.visible is False
+    assert closed == [True]
+    assert chat_view._stream_task is None
+    assert chat_view._is_streaming is False
+    assert chat_view.send_btn.visible is True
+
+
+@pytest.mark.asyncio
+async def test_leaving_the_chat_stops_the_answer_that_is_being_read(
+    chat_view, mock_api_client
+):
+    closed, started = [], asyncio.Event()
+    mock_api_client.stream_chat = slow_stream(closed, started)
+    chat_view.input_field.value = "hi"
+
+    sending = asyncio.ensure_future(chat_view.send_message_click(None))
+    await started.wait()
+    chat_view.will_unmount()
+    await sending
+
+    assert closed == [True]
+    assert chat_view._is_streaming is False
+
+
 @pytest.mark.asyncio
 async def test_stream_error_is_shown_as_red_text_not_html(chat_view, mock_api_client):
     mock_api_client.stream_chat = failing_stream(
