@@ -13,11 +13,13 @@ import flet as ft
 
 from api.client import APIClient, Proposal
 from state.settings import DEFAULT_DISPLAY_NAME
+from views.links import WEB_PREFIXES, link_host, link_question
 from views.markdown_safety import disarm_images
 from views.proposals import ProposalCard
 from views.sources import source_details
 from views.ui_utils import (
     close_dialog,
+    confirm_dialog,
     copy_text,
     is_mounted,
     open_dialog,
@@ -153,11 +155,32 @@ class ChatMessage(ft.Column):
         return text if self.role == "user" else disarm_images(text)
 
     async def _open_link(self, e):
-        """Open only web/mail links, never arbitrary URL schemes."""
+        """Open only web/mail links, and a web link only after saying where it goes.
+
+        The text of a link is free, so ``[your bank](https://evil.example)`` looks
+        like something it is not: the click names the host first and the link opens
+        on a yes (``views.links``). A mail link only opens the mail program.
+        """
         url = (getattr(e, "data", None) or "").strip()
-        if not url.lower().startswith(("http://", "https://", "mailto:")):
-            logger.warning("Blocked non-http link: %s", url)
+        lowered = url.lower()
+        if not lowered.startswith((*WEB_PREFIXES, "mailto:")):
+            # The scheme only: the rest of the address is the model's text.
+            logger.warning(
+                "Blocked non-http link (scheme %r).", url.partition(":")[0][:20]
+            )
             return
+        if lowered.startswith(WEB_PREFIXES):
+            if link_host(url) is None:
+                logger.warning("Blocked a web link that has no host.")
+                return
+            if not await confirm_dialog(
+                self.page_ref,
+                "Отваряне на връзка",
+                link_question(url),
+                confirm_text="Отвори",
+                destructive=False,
+            ):
+                return
         await open_url(self.page_ref, url)
 
     async def _handle_regenerate(self, e):

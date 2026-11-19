@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 from typing import ClassVar
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import flet as ft
 import httpx
@@ -417,7 +417,9 @@ async def test_a_web_or_mail_link_in_an_answer_is_opened(mock_page, launcher, ur
 
     message = ChatMessage("assistant", "текст", page=mock_page)
 
-    await message.md.on_tap_link(SimpleNamespace(data=url))
+    # A web link is opened after a yes (see test_links.py); a mail link without.
+    with patch("views.chat_message.confirm_dialog", new=AsyncMock(return_value=True)):
+        await message.md.on_tap_link(SimpleNamespace(data=url))
 
     assert launcher == [url.strip()]
 
@@ -445,3 +447,6 @@ async def test_any_other_link_in_an_answer_is_refused(mock_page, launcher, caplo
 
     assert launcher == []
     assert "Blocked non-http link" in caplog.text
+    # Only the scheme: the rest of an address is the model's text.
+    assert "alert(1)" not in caplog.text
+    assert "calc.exe" not in caplog.text
