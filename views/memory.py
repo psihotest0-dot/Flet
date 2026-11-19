@@ -22,6 +22,7 @@ from views.ui_utils import (
     close_dialog,
     confirm_dialog,
     error_detail,
+    is_unexpected,
     open_dialog,
     safe_update,
     show_snackbar,
@@ -262,8 +263,8 @@ class MemoryRow(ft.DataRow):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as ex:  # noqa: BLE001
-            logger.error("Failed to update memory: %s", ex)
+        except Exception as ex:
+            logger.error("Failed to update memory: %s", ex, exc_info=is_unexpected(ex))
             show_snackbar(
                 self.view.page_ref,
                 f"Грешка при запазване на спомена: {error_detail(ex)}",
@@ -290,8 +291,10 @@ class MemoryRow(ft.DataRow):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as ex:  # noqa: BLE001
-            logger.error("Failed to activate memory: %s", ex)
+        except Exception as ex:
+            logger.error(
+                "Failed to activate memory: %s", ex, exc_info=is_unexpected(ex)
+            )
             show_snackbar(
                 self.view.page_ref,
                 f"Грешка при активиране на спомена: {error_detail(ex)}",
@@ -327,8 +330,8 @@ class MemoryRow(ft.DataRow):
                 )
                 return
             logger.info("Memory %s was already deleted on the backend.", self.memory.id)
-        except Exception as ex:  # noqa: BLE001
-            logger.error("Failed to delete memory: %s", ex)
+        except Exception as ex:
+            logger.error("Failed to delete memory: %s", ex, exc_info=is_unexpected(ex))
             show_snackbar(
                 self.view.page_ref,
                 f"Грешка при изтриване на спомена: {error_detail(ex)}",
@@ -517,8 +520,8 @@ class MemoryView(ft.Container):
             memories = await self.api_client.list_memories(status=status)
         except asyncio.CancelledError:
             raise
-        except Exception as e:  # noqa: BLE001
-            logger.error("Failed to load memories: %s", e)
+        except Exception as e:
+            logger.error("Failed to load memories: %s", e, exc_info=is_unexpected(e))
             show_snackbar(self.page_ref, "Неуспешно зареждане на спомените.")
             return
         finally:
@@ -565,8 +568,10 @@ class MemoryView(ft.Container):
             proposals = await self.api_client.list_proposals()
         except asyncio.CancelledError:
             raise
-        except Exception as ex:  # noqa: BLE001
-            logger.warning("Failed to load proposals: %s", ex)
+        except Exception as ex:
+            logger.warning(
+                "Failed to load proposals: %s", ex, exc_info=is_unexpected(ex)
+            )
             return
 
         self.proposals_column.controls = [
@@ -595,8 +600,10 @@ class MemoryView(ft.Container):
             rules = await self.api_client.list_rules()
         except asyncio.CancelledError:
             raise
-        except Exception as ex:  # noqa: BLE001
-            logger.warning("Failed to load global rules: %s", ex)
+        except Exception as ex:
+            logger.warning(
+                "Failed to load global rules: %s", ex, exc_info=is_unexpected(ex)
+            )
             return
 
         notes = [rule for rule in rules if rule.kind == "style"]
@@ -651,8 +658,8 @@ class MemoryView(ft.Container):
                 show_snackbar(self.page_ref, f"Грешка при изтриване на {what}: {ex}")
                 return
             logger.info("Rule %s was already deleted on the backend.", rule.id)
-        except Exception as ex:  # noqa: BLE001
-            logger.error("Failed to delete rule: %s", ex)
+        except Exception as ex:
+            logger.error("Failed to delete rule: %s", ex, exc_info=is_unexpected(ex))
             show_snackbar(
                 self.page_ref, f"Неуспешно изтриване на {what}: {error_detail(ex)}"
             )
@@ -709,8 +716,8 @@ class MemoryView(ft.Container):
                 "Такъв спомен вече съществува." if ex.status == 409 else str(ex)
             )
             return
-        except Exception as ex:  # noqa: BLE001
-            logger.error("Failed to create memory: %s", ex)
+        except Exception as ex:
+            logger.error("Failed to create memory: %s", ex, exc_info=is_unexpected(ex))
             self._show_new_error(
                 "Бекендът не е достъпен."
                 if isinstance(ex, httpx.TransportError)

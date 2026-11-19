@@ -10,7 +10,13 @@ from pathlib import Path
 import flet as ft
 
 from api.client import SUPPORTED_EXTENSIONS, APIClient, IngestedFile, is_supported_file
-from views.ui_utils import confirm_dialog, error_detail, safe_update, show_snackbar
+from views.ui_utils import (
+    confirm_dialog,
+    error_detail,
+    is_unexpected,
+    safe_update,
+    show_snackbar,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -339,8 +345,8 @@ class FilesView(ft.Container):
             files = await self.api_client.list_files()
         except asyncio.CancelledError:
             raise
-        except Exception as e:  # noqa: BLE001
-            logger.error("Failed to load files: %s", e)
+        except Exception as e:
+            logger.error("Failed to load files: %s", e, exc_info=is_unexpected(e))
             show_snackbar(self.page_ref, "Неуспешно зареждане на файловете.")
             return
         self.files = files
@@ -463,9 +469,12 @@ class FilesView(ft.Container):
             fresh = await self.api_client.list_files()
         except asyncio.CancelledError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(
-                "Failed to refresh %d file statuses: %s", len(pending_files), e
+                "Failed to refresh %d file statuses: %s",
+                len(pending_files),
+                e,
+                exc_info=is_unexpected(e),
             )
             return
         by_id = {f.id: f for f in fresh if f.id}
@@ -486,8 +495,8 @@ class FilesView(ft.Container):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as ex:  # noqa: BLE001
-            logger.error("The file dialog failed: %s", ex)
+        except Exception as ex:
+            logger.error("The file dialog failed: %s", ex, exc_info=is_unexpected(ex))
             show_snackbar(self.page_ref, "Диалогът за избор на файл не се отвори.")
             return
         await self.upload_files(files)
@@ -533,8 +542,13 @@ class FilesView(ft.Container):
                         duplicates.append(f.name)
                 except asyncio.CancelledError:
                     raise
-                except Exception as ex:  # noqa: BLE001
-                    logger.error("Failed to upload %s: %s", f.name, ex)
+                except Exception as ex:
+                    logger.error(
+                        "Failed to upload %s: %s",
+                        f.name,
+                        ex,
+                        exc_info=is_unexpected(ex),
+                    )
                     errors.append(f"{f.name}: {error_detail(ex)}")
 
         try:
@@ -629,8 +643,10 @@ class FilesView(ft.Container):
                 )
             except asyncio.CancelledError:
                 raise
-            except Exception as ex:  # noqa: BLE001
-                logger.error("Failed to update category: %s", ex)
+            except Exception as ex:
+                logger.error(
+                    "Failed to update category: %s", ex, exc_info=is_unexpected(ex)
+                )
                 # The dropdown already shows the value that was just refused. Put the
                 # saved one back, so the screen never shows a category the database
                 # does not have.
@@ -667,8 +683,10 @@ class FilesView(ft.Container):
                 await self.api_client.delete_file(file_id)
             except asyncio.CancelledError:
                 raise
-            except Exception as ex:  # noqa: BLE001
-                logger.error("Failed to delete file: %s", ex)
+            except Exception as ex:
+                logger.error(
+                    "Failed to delete file: %s", ex, exc_info=is_unexpected(ex)
+                )
                 show_snackbar(
                     self.page_ref, f"Грешка при изтриване на файла: {error_detail(ex)}"
                 )

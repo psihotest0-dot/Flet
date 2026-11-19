@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 import flet as ft
 
 from api.client import APIClient, OracleDecision, OracleDecisionPage
-from views.ui_utils import error_detail, safe_update
+from views.ui_utils import error_detail, is_unexpected, safe_update
 
 logger = logging.getLogger(__name__)
 
@@ -477,9 +477,13 @@ class OracleView(ft.Container):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as ex:  # noqa: BLE001
+        except Exception as ex:
             if generation == self._generation:
-                logger.error("Failed to load the Oracle journal: %s", ex)
+                logger.error(
+                    "Failed to load the Oracle journal: %s",
+                    ex,
+                    exc_info=is_unexpected(ex),
+                )
                 self._set_error(f"Грешка при зареждане на журнала: {error_detail(ex)}")
             return
         finally:
@@ -504,9 +508,13 @@ class OracleView(ft.Container):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as ex:  # noqa: BLE001
+        except Exception as ex:
             if generation == self._generation:
-                logger.error("Failed to load older Oracle decisions: %s", ex)
+                logger.error(
+                    "Failed to load older Oracle decisions: %s",
+                    ex,
+                    exc_info=is_unexpected(ex),
+                )
                 self._set_error(f"Грешка при зареждане на журнала: {error_detail(ex)}")
             return
         finally:
@@ -532,11 +540,15 @@ class OracleView(ft.Container):
                 await self.refresh_progress()
             except asyncio.CancelledError:
                 raise
-            except Exception as ex:  # noqa: BLE001
+            except Exception as ex:
                 # One line when it starts to fail, not one per poll while the
                 # backend is down; the tab itself says that it is stale.
                 if not self._poll_failed:
-                    logger.warning("Could not refresh the Oracle journal: %s", ex)
+                    logger.warning(
+                        "Could not refresh the Oracle journal: %s",
+                        ex,
+                        exc_info=is_unexpected(ex),
+                    )
                 self._poll_failed = True
                 self._set_error(f"Журналът не може да се обнови: {error_detail(ex)}")
             else:
@@ -589,10 +601,12 @@ class OracleView(ft.Container):
                 fresh = await self._read_journal_since(newest)
             except asyncio.CancelledError:
                 raise
-            except Exception as ex:  # noqa: BLE001
+            except Exception as ex:
                 if not self._progress_failed:
                     logger.warning(
-                        "Could not read the Oracle journal for the counters: %s", ex
+                        "Could not read the Oracle journal for the counters: %s",
+                        ex,
+                        exc_info=is_unexpected(ex),
                     )
                 self._progress_failed = True
                 self.progress_error.value = (

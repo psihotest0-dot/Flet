@@ -440,20 +440,19 @@ class APIClient:
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 409:
                 await e.response.aread()
+                existing = IngestedFile(**e.response.json())
+                # The name of a file is the user's own text: the log keeps the id.
                 logger.info(
-                    "File %s is already uploaded, the existing one is used.", filename
+                    "A file with the same content is already uploaded (id %s), "
+                    "the existing one is used.",
+                    existing.id,
                 )
-                return UploadResult(IngestedFile(**e.response.json()), duplicate=True)
+                return UploadResult(existing, duplicate=True)
             error = APIError.from_response(response)
             _log_http_error(response, error)
             raise error from e
         uploaded = IngestedFile(**response.json())
-        logger.info(
-            "File %s uploaded (%d bytes, id %s).",
-            filename,
-            len(file_content),
-            uploaded.id,
-        )
+        logger.info("File uploaded (%d bytes, id %s).", len(file_content), uploaded.id)
         return UploadResult(uploaded)
 
     async def delete_file(self, file_id: str) -> None:

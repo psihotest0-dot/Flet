@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import ClassVar
 from unittest.mock import MagicMock
 
 import flet as ft
@@ -17,10 +18,31 @@ from views.ui_utils import (
     describe_error,
     error_detail,
     is_mounted,
+    is_unexpected,
     open_dialog,
     open_url,
     show_snackbar,
 )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx.ConnectError("refused"),
+        httpx.ReadTimeout(""),
+        APIError(503, "database unavailable"),
+        StreamError("the model failed"),
+    ],
+)
+def test_what_happens_to_a_client_is_not_unexpected(error):
+    assert is_unexpected(error) is False
+
+
+@pytest.mark.parametrize(
+    "error", [AttributeError("x"), KeyError("x"), ValueError("x"), RuntimeError()]
+)
+def test_anything_else_is_a_bug_and_unexpected(error):
+    assert is_unexpected(error) is True
 
 
 @pytest.mark.parametrize(
@@ -325,7 +347,7 @@ async def test_copy_text_without_a_page_is_false():
 
 
 class FakeLauncher:
-    opened: list[str] = []  # noqa: RUF012
+    opened: ClassVar[list[str]] = []
 
     async def launch_url(self, url):
         FakeLauncher.opened.append(url)

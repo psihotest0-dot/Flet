@@ -16,7 +16,7 @@ from views.files import FilesView
 from views.memory import MemoryView
 from views.oracle import OracleView
 from views.settings_dialog import SettingsDialog
-from views.ui_utils import safe_update, show_snackbar
+from views.ui_utils import is_unexpected, safe_update, show_snackbar
 from views.user_files import UserFilesView
 
 logger = logging.getLogger(__name__)
@@ -128,8 +128,8 @@ async def run_health_checks(probe, on_change, interval: float = HEALTH_CHECK_INT
             is_healthy = await probe()
         except asyncio.CancelledError:
             raise
-        except Exception as ex:  # noqa: BLE001
-            logger.warning("Health check failed: %s", ex)
+        except Exception as ex:
+            logger.warning("Health check failed: %s", ex, exc_info=is_unexpected(ex))
             is_healthy = False
 
         if is_healthy != healthy:
@@ -274,18 +274,22 @@ def main(page: ft.Page):
                 view.will_unmount()
             # The session has one client for its whole life; it is closed here.
             await asyncio.wait_for(api_client.aclose(), CLOSE_TIMEOUT)
-        except Exception as ex:  # noqa: BLE001
+        except Exception as ex:
             logger.warning(
-                "Could not shut down cleanly: %s", str(ex) or type(ex).__name__
+                "Could not shut down cleanly: %s",
+                str(ex) or type(ex).__name__,
+                exc_info=is_unexpected(ex),
             )
         finally:
             try:
                 await page.window.destroy()
-            except Exception as ex:  # noqa: BLE001
+            except Exception as ex:
                 # Raised out of the handler it would be reported as a crash of
                 # the session. The window is still there: let the X work again.
                 closing = False
-                logger.warning("The window was not destroyed: %s", ex)
+                logger.warning(
+                    "The window was not destroyed: %s", ex, exc_info=is_unexpected(ex)
+                )
 
     page.window.prevent_close = True
     page.window.on_event = on_window_event

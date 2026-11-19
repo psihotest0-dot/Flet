@@ -11,7 +11,13 @@ import flet as ft
 
 from api.client import APIClient
 from state.settings import DEFAULT_DISPLAY_NAME, MAX_DISPLAY_NAME_CHARS
-from views.ui_utils import close_dialog, copy_text, open_dialog, safe_update
+from views.ui_utils import (
+    close_dialog,
+    copy_text,
+    is_unexpected,
+    open_dialog,
+    safe_update,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -198,8 +204,10 @@ class SettingsDialog:
                 healthy = await client.check_health()
         except asyncio.CancelledError:
             raise
-        except Exception as ex:  # noqa: BLE001
-            logger.warning("Connection check failed: %s", ex)
+        except Exception as ex:
+            logger.warning(
+                "Connection check failed: %s", ex, exc_info=is_unexpected(ex)
+            )
         finally:
             self._set_checking(False)
 

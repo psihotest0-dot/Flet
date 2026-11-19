@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -157,6 +158,38 @@ async def test_load_history_failure_is_logged_and_shown(
     snackbar.assert_called_once()
     assert "Историята на чата не се зареди" in snackbar.call_args.args[1]
     assert "Бекендът не е достъпен" in snackbar.call_args.args[1]
+
+
+def _history_failure(caplog) -> logging.LogRecord:
+    (record,) = [
+        r for r in caplog.records if "Failed to load the history" in r.getMessage()
+    ]
+    return record
+
+
+@pytest.mark.asyncio
+async def test_a_failed_connection_is_logged_as_one_line_without_a_traceback(
+    chat_view, mock_api_client, caplog
+):
+    mock_api_client.get_messages = AsyncMock(side_effect=httpx.ConnectError("refused"))
+
+    with patch("views.chat.show_snackbar"), caplog.at_level("ERROR"):
+        await chat_view.load_history()
+
+    # With the backend down this would be a traceback in app.log for every try.
+    assert not _history_failure(caplog).exc_info
+
+
+@pytest.mark.asyncio
+async def test_a_bug_is_logged_with_its_traceback(chat_view, mock_api_client, caplog):
+    mock_api_client.get_messages = AsyncMock(side_effect=AttributeError("no such name"))
+
+    with patch("views.chat.show_snackbar"), caplog.at_level("ERROR"):
+        await chat_view.load_history()
+
+    exc_type, _value, traceback = _history_failure(caplog).exc_info
+    assert exc_type is AttributeError
+    assert traceback is not None
 
 
 @pytest.mark.asyncio

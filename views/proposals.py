@@ -15,7 +15,12 @@ from collections.abc import Callable
 import flet as ft
 
 from api.client import APIClient, APIError, Proposal
-from views.ui_utils import describe_error, safe_update, show_snackbar
+from views.ui_utils import (
+    describe_error,
+    is_unexpected,
+    safe_update,
+    show_snackbar,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -201,8 +206,13 @@ class ProposalCard(ft.Container):
             self._set_busy(False)
             show_snackbar(self.page_ref, _api_error_text(ex, self.proposal))
             return
-        except Exception as ex:  # noqa: BLE001
-            logger.error("Failed to decide proposal %s: %s", self.proposal.id, ex)
+        except Exception as ex:
+            logger.error(
+                "Failed to decide proposal %s: %s",
+                self.proposal.id,
+                ex,
+                exc_info=is_unexpected(ex),
+            )
             self._set_busy(False)
             show_snackbar(self.page_ref, describe_error(ex))
             return

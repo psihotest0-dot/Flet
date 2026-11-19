@@ -110,6 +110,18 @@ async def open_url(page: ft.Page | None, url: str) -> bool:
     return True
 
 
+def is_unexpected(error: BaseException) -> bool:
+    """Whether ``error`` is a bug rather than something that happens to a client.
+
+    A dropped connection, an answer with an error status and an ``event: error``
+    frame are told to the user and written to the log as one line; a traceback
+    would only fill ``app.log`` while the backend is down. Anything else
+    (``AttributeError``, a malformed answer, ...) has no explanation but its
+    place in the code, so the handler logs it with ``exc_info=is_unexpected(ex)``.
+    """
+    return not isinstance(error, (httpx.TransportError, APIError, StreamError))
+
+
 def error_detail(error: BaseException) -> str:
     """Short text for the tail of "Грешка при ...: <detail>" messages.
 

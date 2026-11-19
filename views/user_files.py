@@ -24,6 +24,7 @@ from views.ui_utils import (
     confirm_dialog,
     copy_text,
     error_detail,
+    is_unexpected,
     open_dialog,
     safe_update,
     show_snackbar,
@@ -158,8 +159,12 @@ class UserFilesView(ft.Container):
                     logger.error("Failed to load the assistant's files: %s", ex)
                     self._show_notice("Неуспешно зареждане на файловете.")
             return
-        except Exception as ex:  # noqa: BLE001
-            logger.error("Failed to load the assistant's files: %s", ex)
+        except Exception as ex:
+            logger.error(
+                "Failed to load the assistant's files: %s",
+                ex,
+                exc_info=is_unexpected(ex),
+            )
             if sequence == self._load_seq:
                 self._show_notice(
                     f"Неуспешно зареждане на файловете: {error_detail(ex)}"
@@ -237,8 +242,10 @@ class UserFilesView(ft.Container):
             proposals = await self.api_client.list_proposals()
         except asyncio.CancelledError:
             raise
-        except Exception as ex:  # noqa: BLE001
-            logger.warning("Failed to load proposals: %s", ex)
+        except Exception as ex:
+            logger.warning(
+                "Failed to load proposals: %s", ex, exc_info=is_unexpected(ex)
+            )
             return
         if sequence is not None and sequence != self._load_seq:
             return
@@ -278,8 +285,12 @@ class UserFilesView(ft.Container):
             if ex.status == 404:
                 await self.load()
             return
-        except Exception as ex:  # noqa: BLE001
-            logger.error("Failed to open a file of the assistant: %s", ex)
+        except Exception as ex:
+            logger.error(
+                "Failed to open a file of the assistant: %s",
+                ex,
+                exc_info=is_unexpected(ex),
+            )
             show_snackbar(
                 self.page_ref, f"Неуспешно отваряне на файла: {error_detail(ex)}"
             )
@@ -311,8 +322,12 @@ class UserFilesView(ft.Container):
                         return
                     show_snackbar(self.page_ref, NO_PREVIOUS_TEXT)
                     return
-                except Exception as ex:  # noqa: BLE001
-                    logger.error("Failed to open a previous version: %s", ex)
+                except Exception as ex:
+                    logger.error(
+                        "Failed to open a previous version: %s",
+                        ex,
+                        exc_info=is_unexpected(ex),
+                    )
                     show_snackbar(
                         self.page_ref,
                         f"Неуспешно отваряне на версията: {error_detail(ex)}",
@@ -371,8 +386,12 @@ class UserFilesView(ft.Container):
                 show_snackbar(self.page_ref, f"Грешка при изтриване на файла: {ex}")
                 return
             logger.info("A file of the assistant was already deleted.")
-        except Exception as ex:  # noqa: BLE001
-            logger.error("Failed to delete a file of the assistant: %s", ex)
+        except Exception as ex:
+            logger.error(
+                "Failed to delete a file of the assistant: %s",
+                ex,
+                exc_info=is_unexpected(ex),
+            )
             show_snackbar(
                 self.page_ref, f"Неуспешно изтриване на файла: {error_detail(ex)}"
             )

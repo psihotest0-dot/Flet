@@ -1007,7 +1007,24 @@ async def test_upload_is_logged(client, caplog):
     with caplog.at_level(logging.INFO, logger="api.client"):
         await client.upload_file(b"hello", "a.txt")
 
-    assert "File a.txt uploaded (5 bytes, id f1)." in caplog.text
+    assert "File uploaded (5 bytes, id f1)." in caplog.text
+    # The name of a file is the user's own text; only the id is logged.
+    assert "a.txt" not in caplog.text
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_duplicate_upload_is_logged_without_the_name(client, caplog):
+    respx.post("http://localhost:8080/v1/files").mock(
+        return_value=httpx.Response(409, json={"id": "f1", "file_name": "a.txt"})
+    )
+
+    with caplog.at_level(logging.INFO, logger="api.client"):
+        result = await client.upload_file(b"hello", "a.txt")
+
+    assert result.duplicate is True
+    assert "already uploaded (id f1)" in caplog.text
+    assert "a.txt" not in caplog.text
 
 
 # ------------------------------------------------------------------- SSE reader

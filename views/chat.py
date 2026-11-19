@@ -38,6 +38,7 @@ from views.ui_utils import (
     confirm_dialog,
     describe_error,
     is_mounted,
+    is_unexpected,
     safe_update,
     show_snackbar,
 )
@@ -346,8 +347,10 @@ class ChatView(ft.Container):
             return
         try:
             self.on_session_changed(session_id)
-        except Exception as ex:  # noqa: BLE001
-            logger.warning("Session change listener failed: %s", ex)
+        except Exception as ex:
+            logger.warning(
+                "Session change listener failed: %s", ex, exc_info=is_unexpected(ex)
+            )
 
     def _activate_session(self, session_id: str, reload_history: bool = True) -> None:
         """Point the view at ``session_id`` and reload what belongs to it."""
@@ -464,8 +467,13 @@ class ChatView(ft.Container):
             await self.api_client.delete_session(old_id)
         except asyncio.CancelledError:
             raise
-        except Exception as ex:  # noqa: BLE001
-            logger.error("Failed to delete chat %s on the backend: %s", old_id[:8], ex)
+        except Exception as ex:
+            logger.error(
+                "Failed to delete chat %s on the backend: %s",
+                old_id[:8],
+                ex,
+                exc_info=is_unexpected(ex),
+            )
             show_snackbar(
                 self.page_ref,
                 f"Разговорът не беше изтрит, чатът е непроменен. {describe_error(ex)}",
@@ -624,10 +632,15 @@ class ChatView(ft.Container):
             found = await self.api_client.list_attachments(session_id)
         except asyncio.CancelledError:
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # Not worth a message on screen: the chat works without the row, and the
             # next attach or reload reads the list again.
-            logger.warning("Failed to read the files of chat %s: %s", session_id[:8], e)
+            logger.warning(
+                "Failed to read the files of chat %s: %s",
+                session_id[:8],
+                e,
+                exc_info=is_unexpected(e),
+            )
             return
         if session_id != self.session_id:
             return
@@ -659,12 +672,17 @@ class ChatView(ft.Container):
             await self.api_client.delete_attachment(attachment_id)
         except asyncio.CancelledError:
             raise
-        except Exception as ex:  # noqa: BLE001
+        except Exception as ex:
             if isinstance(ex, APIError) and ex.status == 404:
                 # Gone already (another window, or it expired): the list is just stale.
                 logger.info("Attachment %s was already gone.", attachment_id)
             else:
-                logger.error("Failed to remove attachment %s: %s", attachment_id, ex)
+                logger.error(
+                    "Failed to remove attachment %s: %s",
+                    attachment_id,
+                    ex,
+                    exc_info=is_unexpected(ex),
+                )
                 show_snackbar(
                     self.page_ref, f"Файлът не беше махнат. {describe_error(ex)}"
                 )
@@ -681,8 +699,8 @@ class ChatView(ft.Container):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as ex:  # noqa: BLE001
-            logger.error("The file dialog failed: %s", ex)
+        except Exception as ex:
+            logger.error("The file dialog failed: %s", ex, exc_info=is_unexpected(ex))
             show_snackbar(self.page_ref, "Диалогът за избор на файл не се отвори.")
             return
         await self.attach_files(files)
@@ -715,8 +733,13 @@ class ChatView(ft.Container):
             except OSError as ex:
                 logger.warning("Could not read %s: %s", picked.name, ex)
                 problems.append(f"{picked.name}: файлът не може да се прочете")
-            except Exception as ex:  # noqa: BLE001
-                logger.error("Failed to attach %s: %s", picked.name, ex)
+            except Exception as ex:
+                logger.error(
+                    "Failed to attach %s: %s",
+                    picked.name,
+                    ex,
+                    exc_info=is_unexpected(ex),
+                )
                 problems.append(f"{picked.name}: {self._attach_error_text(ex)}")
             else:
                 attached.append(picked.name)
@@ -786,8 +809,10 @@ class ChatView(ft.Container):
             await self._store_attachment(name, text)
         except asyncio.CancelledError:
             raise
-        except Exception as ex:  # noqa: BLE001
-            logger.error("Failed to attach the pasted text: %s", ex)
+        except Exception as ex:
+            logger.error(
+                "Failed to attach the pasted text: %s", ex, exc_info=is_unexpected(ex)
+            )
             show_snackbar(
                 self.page_ref,
                 f"Текстът не беше прикачен — {self._attach_error_text(ex)}",
@@ -834,8 +859,13 @@ class ChatView(ft.Container):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as e:  # noqa: BLE001
-            logger.error("Failed to load the history of chat %s: %s", session_id[:8], e)
+        except Exception as e:
+            logger.error(
+                "Failed to load the history of chat %s: %s",
+                session_id[:8],
+                e,
+                exc_info=is_unexpected(e),
+            )
             # Not when the user already moved to another chat: the failure is not theirs to see.
             if session_id == self.session_id:
                 show_snackbar(
@@ -946,7 +976,7 @@ class ChatView(ft.Container):
         """
         error_text = None
         stream_open = True
-        last_chunk_time = time.time()
+        last_chunk_time = time.monotonic()
 
         async def show_activity_after_delay():
             try:
@@ -954,7 +984,8 @@ class ChatView(ft.Container):
                     await asyncio.sleep(0.25)
                     if (
                         stream_open
-                        and (time.time() - last_chunk_time) >= ACTIVITY_INDICATOR_DELAY
+                        and (time.monotonic() - last_chunk_time)
+                        >= ACTIVITY_INDICATOR_DELAY
                     ):
                         chat_message.show_activity_indicator()
             except asyncio.CancelledError:
@@ -974,10 +1005,10 @@ class ChatView(ft.Container):
                 self._follow_stream()
 
         try:
-            last_flush_time = time.time()
+            last_flush_time = time.monotonic()
 
             async for chunk in stream_coro:
-                last_chunk_time = time.time()
+                last_chunk_time = time.monotonic()
                 chat_message.hide_activity_indicator()
 
                 if self._stop_generation:
@@ -1017,7 +1048,7 @@ class ChatView(ft.Container):
                 elif isinstance(chunk, str):
                     pending_text += chunk
 
-                current_time = time.time()
+                current_time = time.monotonic()
                 if current_time - last_flush_time >= STREAM_FLUSH_INTERVAL:
                     flush_text()
                     last_flush_time = current_time
