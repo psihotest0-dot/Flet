@@ -20,7 +20,15 @@ PASTE_THRESHOLD_CHARS = 3000
 
 
 class NotAttachable(Exception):
-    """The file cannot be attached; the text says why, in Bulgarian, for the user."""
+    """The file cannot be attached.
+
+    ``str()`` is for the user (``name: reason``, in Bulgarian); ``reason`` alone is
+    for the log, which does not hold the names of the user's files.
+    """
+
+    def __init__(self, name: str, reason: str):
+        super().__init__(f"{name}: {reason}")
+        self.reason = reason
 
 
 def estimate_message_tokens(text: str) -> int:
@@ -35,9 +43,9 @@ def read_text_file(raw: bytes, name: str) -> str:
     older Bulgarian files are written in. A NUL byte means the file is not text.
     """
     if len(raw) > MAX_FILE_BYTES:
-        raise NotAttachable(f"{name}: файлът е по-голям от {MAX_FILE_BYTES // 1024} KB")
+        raise NotAttachable(name, f"файлът е по-голям от {MAX_FILE_BYTES // 1024} KB")
     if b"\x00" in raw:
-        raise NotAttachable(f"{name}: не е текстов файл")
+        raise NotAttachable(name, "не е текстов файл")
     for encoding in ("utf-8-sig", "cp1251"):
         try:
             text = raw.decode(encoding)
@@ -45,9 +53,9 @@ def read_text_file(raw: bytes, name: str) -> str:
         except UnicodeDecodeError:
             continue
     else:
-        raise NotAttachable(f"{name}: не е текст в UTF-8 или Windows-1251")
+        raise NotAttachable(name, "не е текст в UTF-8 или Windows-1251")
     if not text.strip():
-        raise NotAttachable(f"{name}: файлът е празен")
+        raise NotAttachable(name, "файлът е празен")
     return text
 
 

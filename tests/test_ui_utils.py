@@ -17,6 +17,8 @@ from views.ui_utils import (
     copy_text,
     describe_error,
     error_detail,
+    error_for_log,
+    file_kind,
     is_mounted,
     is_unexpected,
     open_dialog,
@@ -39,10 +41,54 @@ def test_what_happens_to_a_client_is_not_unexpected(error):
 
 
 @pytest.mark.parametrize(
+    "error",
+    [
+        PermissionError(13, "Permission denied", "C:/Users/me/name.pdf"),
+        FileNotFoundError(2, "No such file or directory"),
+        TimeoutError(),
+    ],
+)
+def test_a_file_or_a_disk_that_is_not_there_is_not_a_bug_either(error):
+    # Its traceback would only repeat the path of a file of the user.
+    assert is_unexpected(error) is False
+
+
+@pytest.mark.parametrize(
     "error", [AttributeError("x"), KeyError("x"), ValueError("x"), RuntimeError()]
 )
 def test_anything_else_is_a_bug_and_unexpected(error):
     assert is_unexpected(error) is True
+
+
+@pytest.mark.parametrize(
+    ("name", "kind"),
+    [
+        ("book.pdf", "a .pdf file"),
+        ("Диагноза Иван.PDF", "a .pdf file"),
+        ("archive.tar.gz", "a .gz file"),
+        ("notes", "a file without an extension"),
+        (".gitignore", "a file without an extension"),
+        ("", "a file without an extension"),
+        ("x." + "y" * 40, "a ." + "y" * 11 + " file"),
+    ],
+)
+def test_the_log_tells_the_kind_of_a_file_and_not_its_name(name, kind):
+    assert file_kind(name) == kind
+    assert "Иван" not in file_kind(name)
+
+
+def test_an_os_error_is_logged_without_the_path_it_carries():
+    error = PermissionError(13, "Permission denied", "C:\\Users\\me\\diagnosis.pdf")
+
+    text = error_for_log(error)
+
+    assert text == "PermissionError (errno 13)"
+    assert "diagnosis" not in text
+
+
+def test_any_other_error_is_logged_with_its_own_text():
+    assert error_for_log(ValueError("bad value")) == "bad value"
+    assert error_for_log(ValueError()) == "ValueError"
 
 
 @pytest.mark.parametrize(

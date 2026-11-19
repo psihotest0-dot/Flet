@@ -285,12 +285,32 @@ class APIError(Exception):
         return cls(response.status_code, text)
 
 
+FILES_PATH = "/workspace/files/"
+SESSIONS_PATH = "/chat/sessions/"
+
+
+def _loggable_path(path: str) -> str:
+    """The path of a request as the log may hold it.
+
+    The last part of most paths is an id of a file, a memory or a rule, which the
+    log keeps. Two are not: ``/workspace/files/<name>`` ends in the name of a file
+    of the user (their own text) and ``/chat/sessions/<id>`` in the whole key to a
+    conversation, of which the log keeps the first 8 characters, like everywhere.
+    """
+    if path.startswith(FILES_PATH):
+        return FILES_PATH + "{name}"
+    if path.startswith(SESSIONS_PATH):
+        return SESSIONS_PATH + path[len(SESSIONS_PATH) :][:8] + "..."
+    return path
+
+
 def _log_http_error(response: httpx.Response, error: APIError) -> None:
     """Write a refused request to the log: one line with what was asked and what came back.
 
     The views only log the backend's text; without the method and path the log
     cannot say which call failed. Only the path is written - the query string
-    carries the ``session_id``. A 5xx is the backend's fault (error), a 4xx is
+    carries the ``session_id`` - and ``_loggable_path`` keeps a file name and a
+    whole session id out of it. A 5xx is the backend's fault (error), a 4xx is
     the answer to this very request (warning).
     """
     request = response.request
@@ -299,7 +319,7 @@ def _log_http_error(response: httpx.Response, error: APIError) -> None:
         level,
         "%s %s -> HTTP %s: %s",
         request.method,
-        request.url.path,
+        _loggable_path(request.url.path),
         error.status,
         error.message,
     )

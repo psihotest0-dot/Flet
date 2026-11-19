@@ -1240,6 +1240,47 @@ async def test_a_file_over_the_limit_is_not_sent(mock_page, mock_api_client, tmp
 
 
 @pytest.mark.asyncio
+async def test_the_log_holds_the_kind_of_an_uploaded_file_and_never_its_name(
+    mock_page, mock_api_client, tmp_path, caplog
+):
+    secret = "диагноза-Иван"
+    unsupported, refused, huge = _picked(
+        tmp_path, f"{secret}.doc", f"{secret}.pdf", f"{secret}.epub"
+    )
+
+    async def upload(path, name, *_args):
+        # What a file that cannot be opened looks like: the path is in the message.
+        raise PermissionError(13, "Permission denied", str(path))
+
+    mock_api_client.upload_file = AsyncMock(side_effect=upload)
+    view = FilesView(mock_page, mock_api_client)
+
+    with (
+        patch("views.files.safe_update"),
+        patch("views.files.show_snackbar") as snackbar,
+        patch("views.files.MAX_UPLOAD_BYTES", 0),
+        caplog.at_level(logging.WARNING, logger="views.files"),
+    ):
+        await view.upload_files([unsupported])
+        await view.upload_files([huge])
+    mock_api_client.upload_file.assert_not_called()
+    with (
+        patch("views.files.safe_update"),
+        patch("views.files.show_snackbar"),
+        caplog.at_level(logging.WARNING, logger="views.files"),
+    ):
+        await view.upload_files([refused])
+
+    assert "Skipped a .doc file: the format is not supported." in caplog.text
+    assert "Skipped a .epub file: 1 bytes is over the 100 MB limit." in caplog.text
+    assert "Failed to upload a .pdf file: PermissionError (errno 13)" in caplog.text
+    assert secret not in caplog.text
+    assert str(tmp_path) not in caplog.text
+    # The screen is the user's own and names the files.
+    assert secret in snackbar.call_args_list[0].args[1]
+
+
+@pytest.mark.asyncio
 async def test_unsupported_file_is_not_uploaded(mock_page, mock_api_client, tmp_path):
     mock_api_client.upload_file = AsyncMock(
         return_value=UploadResult(IngestedFile(id="1", file_name="ok.txt"))

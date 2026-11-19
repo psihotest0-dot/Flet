@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import weakref
+from pathlib import PurePath
 
 import flet as ft
 import httpx
@@ -117,13 +118,36 @@ TOO_LARGE_TEXT = "над позволения от бекенда размер"
 def is_unexpected(error: BaseException) -> bool:
     """Whether ``error`` is a bug rather than something that happens to a client.
 
-    A dropped connection, an answer with an error status and an ``event: error``
-    frame are told to the user and written to the log as one line; a traceback
-    would only fill ``app.log`` while the backend is down. Anything else
-    (``AttributeError``, a malformed answer, ...) has no explanation but its
-    place in the code, so the handler logs it with ``exc_info=is_unexpected(ex)``.
+    A dropped connection, an answer with an error status, an ``event: error``
+    frame and a file or a disk that is not there (``OSError``, a timeout among
+    them) are told to the user and written to the log as one line; a traceback
+    would only fill ``app.log`` while the backend is down, and the message of an
+    ``OSError`` carries the path of a file. Anything else (``AttributeError``, a
+    malformed answer, ...) has no explanation but its place in the code, so the
+    handler logs it with ``exc_info=is_unexpected(ex)``.
     """
-    return not isinstance(error, (httpx.TransportError, APIError, StreamError))
+    return not isinstance(error, (httpx.TransportError, APIError, StreamError, OSError))
+
+
+def file_kind(name: str) -> str:
+    """What the log says of a file of the user instead of its name: its type.
+
+    The name is the user's own text (``диагноза_Иван.pdf``), like a message or a
+    memory, so it stays on the screen and out of ``app.log``.
+    """
+    suffix = PurePath(name).suffix.lower()[:12]
+    return f"a {suffix} file" if suffix else "a file without an extension"
+
+
+def error_for_log(error: BaseException) -> str:
+    """The text of ``error`` for the log: without the path an ``OSError`` carries.
+
+    ``str(PermissionError)`` is ``[Errno 13] Permission denied: 'C:\\...\\name.pdf'``;
+    the log keeps the kind and the number, which is what finds the cause.
+    """
+    if isinstance(error, OSError):
+        return f"{type(error).__name__} (errno {error.errno})"
+    return str(error) or type(error).__name__
 
 
 def error_detail(error: BaseException) -> str:

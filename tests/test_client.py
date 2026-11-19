@@ -268,6 +268,59 @@ async def test_delete_session_logs_only_the_start_of_the_id(client, caplog):
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_a_refused_session_delete_logs_only_the_start_of_the_id(client, caplog):
+    session_id = "22222222-3333-4444-5555-666666666666"
+    respx.delete(f"http://localhost:8080/chat/sessions/{session_id}").mock(
+        return_value=httpx.Response(500, text="boom")
+    )
+    caplog.set_level(logging.WARNING, logger="api.client")
+
+    with pytest.raises(APIError):
+        await client.delete_session(session_id)
+
+    # The path of the refused request is in the log, but not the whole key.
+    assert "DELETE /chat/sessions/22222222... -> HTTP 500: boom" in caplog.text
+    assert session_id not in caplog.text
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_refused_call_for_a_file_of_the_assistant_logs_no_file_name(
+    client, caplog
+):
+    respx.get(url__regex=r"http://localhost:8080/workspace/files/.*").mock(
+        return_value=httpx.Response(404, text="not found")
+    )
+    caplog.set_level(logging.WARNING, logger="api.client")
+
+    with pytest.raises(APIError):
+        await client.get_user_file("диагноза Иван.md")
+
+    # The name of the file is the user's own text.
+    assert "GET /workspace/files/{name} -> HTTP 404: not found" in caplog.text
+    assert "диагноза" not in caplog.text
+    assert "Иван" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("path", "logged"),
+    [
+        ("/v1/files/3f2a", "/v1/files/3f2a"),
+        ("/memories/42", "/memories/42"),
+        ("/workspace/files", "/workspace/files"),
+        ("/workspace/files/notes.md", "/workspace/files/{name}"),
+        ("/workspace/files/a b/c.md", "/workspace/files/{name}"),
+        ("/chat/sessions/22222222-3333-4444", "/chat/sessions/22222222..."),
+        ("/chat/sessions/abc", "/chat/sessions/abc..."),
+        ("/chat/stream", "/chat/stream"),
+    ],
+)
+def test_the_logged_path_keeps_out_a_file_name_and_a_whole_session_id(path, logged):
+    assert client_module._loggable_path(path) == logged
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_delete_session_escapes_the_id_and_reports_a_refusal(client):
     # An id with characters that mean something in a path stays one path segment.
     route = respx.delete("http://localhost:8080/chat/sessions/a%2Fb%20c").mock(

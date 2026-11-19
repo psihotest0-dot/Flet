@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -68,6 +69,9 @@ def test_what_is_not_text_is_refused_with_a_reason(raw, why):
         read_text_file(raw, "x.bin")
     assert why in str(info.value)
     assert str(info.value).startswith("x.bin:")
+    # The reason alone is what the log gets: the name stays on the screen.
+    assert why in info.value.reason
+    assert "x.bin" not in info.value.reason
 
 
 def test_a_file_of_exactly_the_limit_is_accepted():
@@ -449,6 +453,35 @@ async def test_what_cannot_be_attached_is_reported_and_does_not_stop_the_others(
     assert "huge.log: файлът е по-голям от 256 KB" in problems
     assert "empty.txt: файлът е празен" in problems
     assert any("ok.py" in r for r in reports), "and the good one is confirmed"
+
+
+@pytest.mark.asyncio
+async def test_the_log_names_the_kind_of_a_refused_file_and_not_the_file(
+    view, mock_api_client, tmp_path, caplog
+):
+    secret = "диагноза-Иван"
+    files = [
+        picked(tmp_path, f"{secret}.exe", b"MZ\x00\x01"),
+        # A file that is gone: its error carries the whole path.
+        ft.FilePickerFile(
+            id=1, name=f"{secret}.txt", size=1, path=str(tmp_path / "gone.txt")
+        ),
+    ]
+
+    with snackbars() as snackbar, caplog.at_level(logging.WARNING, logger="views.chat"):
+        await view.attach_files(files)
+
+    assert "Skipped a .exe file: не е текстов файл" in caplog.text
+    assert "Could not read a .txt file: FileNotFoundError (errno 2)" in caplog.text
+    assert secret not in caplog.text
+    assert "gone.txt" not in caplog.text
+    assert str(tmp_path) not in caplog.text
+    # The screen is the user's own and names the files.
+    report = next(
+        c.args[1] for c in snackbar.call_args_list if c.args[1].startswith("Не са")
+    )
+    assert f"{secret}.exe: не е текстов файл" in report
+    assert f"{secret}.txt: файлът не може да се прочете" in report
 
 
 @pytest.mark.asyncio

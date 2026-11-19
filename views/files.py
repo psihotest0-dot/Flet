@@ -19,6 +19,8 @@ from api.client import (
 from views.ui_utils import (
     confirm_dialog,
     error_detail,
+    error_for_log,
+    file_kind,
     is_unexpected,
     safe_update,
     show_snackbar,
@@ -525,7 +527,8 @@ class FilesView(ft.Container):
                         # The picker is filtered, but a file can still arrive from
                         # elsewhere; the backend would accept it and fail later.
                         logger.warning(
-                            "Skipped %s: the format is not supported.", f.name
+                            "Skipped %s: the format is not supported.",
+                            file_kind(f.name),
                         )
                         errors.append(f"{f.name}: форматът не се поддържа")
                         return
@@ -533,7 +536,7 @@ class FilesView(ft.Container):
                     if size > MAX_UPLOAD_BYTES:
                         logger.warning(
                             "Skipped %s: %d bytes is over the 100 MB limit.",
-                            f.name,
+                            file_kind(f.name),
                             size,
                         )
                         errors.append(f"{f.name}: файлът е по-голям от 100 MB")
@@ -547,8 +550,8 @@ class FilesView(ft.Container):
                 except Exception as ex:
                     logger.error(
                         "Failed to upload %s: %s",
-                        f.name,
-                        ex,
+                        file_kind(f.name),
+                        error_for_log(ex),
                         exc_info=is_unexpected(ex),
                     )
                     errors.append(f"{f.name}: {error_detail(ex)}")

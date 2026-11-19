@@ -37,6 +37,8 @@ from views.emoji_picker import EmojiPicker
 from views.ui_utils import (
     confirm_dialog,
     describe_error,
+    error_for_log,
+    file_kind,
     is_mounted,
     is_unexpected,
     safe_update,
@@ -736,7 +738,8 @@ class ChatView(ft.Container):
                 )
                 if size > MAX_FILE_BYTES:
                     raise NotAttachable(
-                        f"{picked.name}: файлът е по-голям от {MAX_FILE_BYTES // 1024} KB"
+                        picked.name,
+                        f"файлът е по-голям от {MAX_FILE_BYTES // 1024} KB",
                     )
                 raw = await asyncio.to_thread(Path(picked.path).read_bytes)
                 text = read_text_file(raw, picked.name)
@@ -744,16 +747,19 @@ class ChatView(ft.Container):
             except asyncio.CancelledError:
                 raise
             except NotAttachable as ex:
-                logger.warning("Skipped %s: %s", picked.name, ex)
+                # The screen names the file; the log only says what kind it was.
+                logger.warning("Skipped %s: %s", file_kind(picked.name), ex.reason)
                 problems.append(str(ex))
             except OSError as ex:
-                logger.warning("Could not read %s: %s", picked.name, ex)
+                logger.warning(
+                    "Could not read %s: %s", file_kind(picked.name), error_for_log(ex)
+                )
                 problems.append(f"{picked.name}: файлът не може да се прочете")
             except Exception as ex:
                 logger.error(
                     "Failed to attach %s: %s",
-                    picked.name,
-                    ex,
+                    file_kind(picked.name),
+                    error_for_log(ex),
                     exc_info=is_unexpected(ex),
                 )
                 problems.append(f"{picked.name}: {self._attach_error_text(ex)}")
