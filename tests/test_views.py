@@ -4,6 +4,7 @@ import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1183,7 +1184,8 @@ async def test_failed_upload_shows_the_backend_text(
         )
 
     snackbar.assert_called_once()
-    assert "big.pdf: file too large" in snackbar.call_args.args[1]
+    # The backend answers 413 in English; the user reads it in Bulgarian.
+    assert "big.pdf: над позволения от бекенда размер" in snackbar.call_args.args[1]
 
 
 def _picked(tmp_path, *names):
@@ -1196,6 +1198,45 @@ def _picked(tmp_path, *names):
             ft.FilePickerFile(id=len(files), name=name, size=1, path=str(path))
         )
     return files
+
+
+@pytest.mark.asyncio
+async def test_a_file_goes_to_the_client_as_a_path_not_as_bytes(
+    mock_page, mock_api_client, tmp_path
+):
+    mock_api_client.upload_file = AsyncMock(
+        return_value=UploadResult(IngestedFile(id="1", file_name="ok.txt"))
+    )
+    (picked,) = _picked(tmp_path, "ok.txt")
+    view = FilesView(mock_page, mock_api_client)
+
+    with (
+        patch("views.files.safe_update"),
+        patch("views.files.show_snackbar"),
+        patch.object(
+            Path, "read_bytes", side_effect=AssertionError("read into memory")
+        ),
+    ):
+        await view.upload_files([picked])
+
+    mock_api_client.upload_file.assert_awaited_once_with(Path(picked.path), "ok.txt")
+
+
+@pytest.mark.asyncio
+async def test_a_file_over_the_limit_is_not_sent(mock_page, mock_api_client, tmp_path):
+    mock_api_client.upload_file = AsyncMock()
+    (picked,) = _picked(tmp_path, "huge.pdf")
+    view = FilesView(mock_page, mock_api_client)
+
+    with (
+        patch("views.files.safe_update"),
+        patch("views.files.show_snackbar") as snackbar,
+        patch("views.files.MAX_UPLOAD_BYTES", 0),
+    ):
+        await view.upload_files([picked])
+
+    mock_api_client.upload_file.assert_not_called()
+    assert "huge.pdf: файлът е по-голям от 100 MB" in snackbar.call_args.args[1]
 
 
 @pytest.mark.asyncio
@@ -1268,7 +1309,7 @@ async def test_new_file_and_duplicate_are_reported_together_with_errors(
         await view.upload_files(_picked(tmp_path, "a.pdf", "b.pdf"))
 
     message = snackbar.call_args.args[1]
-    assert "Неуспешно качване: b.pdf: file too large" in message
+    assert "Неуспешно качване: b.pdf: над позволения от бекенда размер" in message
     assert "Файлът вече е качен: a.pdf" in message
     assert snackbar.call_args.kwargs.get("success") is False
 

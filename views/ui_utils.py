@@ -110,6 +110,10 @@ async def open_url(page: ft.Page | None, url: str) -> bool:
     return True
 
 
+# The backend answers 413 in English ("file too large") to a body over its limit.
+TOO_LARGE_TEXT = "над позволения от бекенда размер"
+
+
 def is_unexpected(error: BaseException) -> bool:
     """Whether ``error`` is a bug rather than something that happens to a client.
 
@@ -130,6 +134,8 @@ def error_detail(error: BaseException) -> str:
     """
     if isinstance(error, httpx.TransportError):
         return "бекендът не е достъпен"
+    if isinstance(error, APIError) and error.status == 413:
+        return TOO_LARGE_TEXT
     return str(error) or type(error).__name__
 
 
@@ -141,6 +147,8 @@ def describe_error(error: BaseException) -> str:
     if isinstance(error, APIError):
         if error.status >= 500:
             return f"Грешка в бекенда (HTTP {error.status}). Опитай отново по-късно."
+        if error.status == 413:
+            return f"Заявката е отхвърлена: {TOO_LARGE_TEXT}"
         return f"Заявката е отхвърлена: {error.message}"
     if isinstance(error, StreamError):
         return "Нещо се обърка. Опитай отново."

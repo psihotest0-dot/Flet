@@ -57,6 +57,19 @@ def test_error_detail_hides_the_connection_jargon(error):
     assert error_detail(error) == "бекендът не е достъпен"
 
 
+def test_error_detail_translates_a_body_that_is_too_large():
+    # The backend says "file too large" (or the like) in English.
+    assert error_detail(APIError(413, "file too large")) == (
+        "над позволения от бекенда размер"
+    )
+
+
+def test_describe_error_translates_a_body_that_is_too_large():
+    assert describe_error(APIError(413, "file too large")) == (
+        "Заявката е отхвърлена: над позволения от бекенда размер"
+    )
+
+
 def test_error_detail_keeps_the_text_of_the_backend():
     assert error_detail(APIError(400, "importance must be between 1 and 10")) == (
         "importance must be between 1 and 10"

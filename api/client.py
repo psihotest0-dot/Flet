@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -33,6 +35,10 @@ DEFAULT_IMPORTANCE = 5
 # Go's len(string) although its error text says "characters". UTF-8 spends two
 # bytes on a Cyrillic letter, so Bulgarian text gets about 16000 letters.
 MAX_CONTENT_BYTES = 32000
+
+# The backend's MAX_UPLOAD_MB (100 unless its owner changed it). It is a limit on
+# the whole request, not on the file, so a file just below it can still get a 413.
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
 
 def content_size(text: str) -> int:
@@ -413,21 +419,32 @@ class APIClient:
 
     async def upload_file(
         self,
-        file_content: bytes,
+        path: Path,
         filename: str,
         mime_type: str = "application/octet-stream",
     ) -> UploadResult:
-        """Upload a file to the backend.
+        """Upload the file at ``path`` to the backend, named ``filename`` there.
+
+        The file goes from the disk to the connection a piece at a time (httpx reads
+        it in chunks of 64 KiB); it is never held in memory, which a 65 MB book
+        taken three at a time used to do. ``ValueError`` for a file over
+        ``MAX_UPLOAD_BYTES``.
 
         A file the backend already holds (same content) is not an error: the
         result carries the existing file with ``duplicate=True``.
         """
-        if len(file_content) > 100 * 1024 * 1024:
+        size = await asyncio.to_thread(lambda: path.stat().st_size)
+        if size > MAX_UPLOAD_BYTES:
             raise ValueError("File too large. Maximum size is 100MB.")
-        files = {"file": (filename, file_content, mime_type)}
-        response = await self.client.post(
-            "/v1/files", files=files, timeout=httpx.Timeout(5.0, read=None)
-        )
+        source = await asyncio.to_thread(path.open, "rb")
+        try:
+            response = await self.client.post(
+                "/v1/files",
+                files={"file": (filename, source, mime_type)},
+                timeout=httpx.Timeout(5.0, read=None),
+            )
+        finally:
+            source.close()
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -445,7 +462,7 @@ class APIClient:
             _log_http_error(response, error)
             raise error from e
         uploaded = IngestedFile(**response.json())
-        logger.info("File uploaded (%d bytes, id %s).", len(file_content), uploaded.id)
+        logger.info("File uploaded (%d bytes, id %s).", size, uploaded.id)
         return UploadResult(uploaded)
 
     async def delete_file(self, file_id: str) -> None:

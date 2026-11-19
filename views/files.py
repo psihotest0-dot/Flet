@@ -9,7 +9,13 @@ from pathlib import Path
 
 import flet as ft
 
-from api.client import SUPPORTED_EXTENSIONS, APIClient, IngestedFile, is_supported_file
+from api.client import (
+    MAX_UPLOAD_BYTES,
+    SUPPORTED_EXTENSIONS,
+    APIClient,
+    IngestedFile,
+    is_supported_file,
+)
 from views.ui_utils import (
     confirm_dialog,
     error_detail,
@@ -20,9 +26,6 @@ from views.ui_utils import (
 
 logger = logging.getLogger(__name__)
 
-# Mirrors the limit enforced by APIClient.upload_file; checked before the file is
-# read into memory so a huge file is not loaded just to be rejected.
-MAX_UPLOAD_SIZE = 100 * 1024 * 1024
 POLL_INTERVAL = 3.0
 FINAL_STATUSES = ("completed", "failed")
 # Above this many unfinished files one GET /v1/files replaces one GET per file:
@@ -527,7 +530,7 @@ class FilesView(ft.Container):
                         errors.append(f"{f.name}: форматът не се поддържа")
                         return
                     size = await asyncio.to_thread(lambda: Path(f.path).stat().st_size)
-                    if size > MAX_UPLOAD_SIZE:
+                    if size > MAX_UPLOAD_BYTES:
                         logger.warning(
                             "Skipped %s: %d bytes is over the 100 MB limit.",
                             f.name,
@@ -535,9 +538,8 @@ class FilesView(ft.Container):
                         )
                         errors.append(f"{f.name}: файлът е по-голям от 100 MB")
                         return
-                    # Reading is blocking, the upload itself is not.
-                    content = await asyncio.to_thread(Path(f.path).read_bytes)
-                    result = await self.api_client.upload_file(content, f.name)
+                    # Sent from the disk a piece at a time, not read into memory.
+                    result = await self.api_client.upload_file(Path(f.path), f.name)
                     if result.duplicate:
                         duplicates.append(f.name)
                 except asyncio.CancelledError:

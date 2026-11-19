@@ -1,13 +1,16 @@
 import json
 import logging
+from pathlib import Path
 
 import httpx
 import pytest
 import respx
 from tenacity import wait_none
 
+import api.client as client_module
 from api.client import (
     MAX_CONTENT_BYTES,
+    MAX_UPLOAD_BYTES,
     SUPPORTED_EXTENSIONS,
     APIClient,
     APIError,
@@ -25,6 +28,13 @@ def client():
     return APIClient(
         base_url="http://localhost:8080", user_id="123e4567-e89b-12d3-a456-426614174000"
     )
+
+
+def a_file(tmp_path: Path, content: bytes = b"test content", name="test.txt") -> Path:
+    """A file on the disk, as the picker hands it over: the client takes a path."""
+    path = tmp_path / name
+    path.write_bytes(content)
+    return path
 
 
 @pytest.mark.asyncio
@@ -101,7 +111,7 @@ async def test_check_health_exception(client):
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_upload_file_success(client):
+async def test_upload_file_success(client, tmp_path):
     mock_response = {
         "id": "123e4567-e89b-12d3-a456-426614174001",
         "user_id": "123e4567-e89b-12d3-a456-426614174000",
@@ -118,7 +128,7 @@ async def test_upload_file_success(client):
         return_value=httpx.Response(201, json=mock_response)
     )
 
-    result = await client.upload_file(b"test content", "test.txt", "text/plain")
+    result = await client.upload_file(a_file(tmp_path), "test.txt", "text/plain")
 
     assert isinstance(result, UploadResult)
     assert isinstance(result.file, IngestedFile)
@@ -129,7 +139,7 @@ async def test_upload_file_success(client):
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_upload_file_conflict(client):
+async def test_upload_file_conflict(client, tmp_path):
     respx.post("http://localhost:8080/v1/files").mock(
         return_value=httpx.Response(
             409,
@@ -137,28 +147,80 @@ async def test_upload_file_conflict(client):
         )
     )
 
-    result = await client.upload_file(b"test content", "test.txt")
+    result = await client.upload_file(a_file(tmp_path), "test.txt")
     assert result.duplicate is True
     assert result.file.id == "conflict_id"
     assert result.file.file_name == "test.txt"
 
 
 @pytest.mark.asyncio
-async def test_upload_file_too_large(client):
-    large_content = b"a" * (100 * 1024 * 1024 + 1)
+async def test_upload_file_too_large(client, tmp_path, monkeypatch):
+    # A limit of ten bytes instead of a file of 100 MB.
+    monkeypatch.setattr(client_module, "MAX_UPLOAD_BYTES", 10)
+
     with pytest.raises(ValueError, match="Maximum size is 100MB"):
-        await client.upload_file(large_content, "large.txt")
+        await client.upload_file(a_file(tmp_path, b"a" * 11), "large.txt")
+
+
+def test_the_upload_limit_is_the_default_of_the_backend():
+    assert MAX_UPLOAD_BYTES == 100 * 1024 * 1024
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_upload_file_server_error(client):
+async def test_the_file_is_sent_from_the_disk_and_not_read_into_memory(
+    client, tmp_path, monkeypatch
+):
+    content = bytes(range(256)) * 1024  # 256 KiB: four pieces of 64 KiB
+    route = respx.post("http://localhost:8080/v1/files").mock(
+        return_value=httpx.Response(201, json={"id": "f1", "file_name": "b.bin"})
+    )
+    path = a_file(tmp_path, content, "b.bin")
+
+    def not_all_at_once(*_args, **_kwargs):
+        raise AssertionError("the whole file was read into memory")
+
+    monkeypatch.setattr(Path, "read_bytes", not_all_at_once)
+
+    await client.upload_file(path, "name-on-the-backend.bin", "application/pdf")
+
+    request = route.calls.last.request
+    assert content in request.content
+    assert b'filename="name-on-the-backend.bin"' in request.content
+    assert b"Content-Type: application/pdf" in request.content
+    # The length is known, so the backend gets no chunked body.
+    assert int(request.headers["content-length"]) > len(content)
+    assert "transfer-encoding" not in request.headers
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [201, 409, 500])
+async def test_the_file_is_closed_whatever_the_answer_was(client, tmp_path, status):
+    respx.post("http://localhost:8080/v1/files").mock(
+        return_value=httpx.Response(status, json={"id": "f1"})
+    )
+    path = a_file(tmp_path)
+
+    try:
+        await client.upload_file(path, "test.txt")
+    except APIError:
+        pass
+
+    # A file that is still open cannot be deleted on Windows.
+    path.unlink()
+    assert not path.exists()
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_upload_file_server_error(client, tmp_path):
     respx.post("http://localhost:8080/v1/files").mock(
         return_value=httpx.Response(500, json={"error": "Internal Server Error"})
     )
 
     with pytest.raises(APIError) as exc_info:
-        await client.upload_file(b"test content", "test.txt", "text/plain")
+        await client.upload_file(a_file(tmp_path), "test.txt", "text/plain")
     assert exc_info.value.status == 500
 
 
@@ -745,13 +807,13 @@ async def test_api_error_without_a_body_names_the_status(client):
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_upload_error_shows_the_backend_text(client):
+async def test_upload_error_shows_the_backend_text(client, tmp_path):
     respx.post("http://localhost:8080/v1/files").mock(
         return_value=httpx.Response(413, text="file too large\n")
     )
 
     with pytest.raises(APIError, match="file too large") as exc_info:
-        await client.upload_file(b"x", "big.bin")
+        await client.upload_file(a_file(tmp_path, b"x", "big.bin"), "big.bin")
 
     assert exc_info.value.status == 413
 
@@ -999,13 +1061,13 @@ async def test_changes_are_logged_without_the_text_of_the_memory(client, caplog)
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_upload_is_logged(client, caplog):
+async def test_upload_is_logged(client, caplog, tmp_path):
     respx.post("http://localhost:8080/v1/files").mock(
         return_value=httpx.Response(201, json={"id": "f1", "file_name": "a.txt"})
     )
 
     with caplog.at_level(logging.INFO, logger="api.client"):
-        await client.upload_file(b"hello", "a.txt")
+        await client.upload_file(a_file(tmp_path, b"hello", "a.txt"), "a.txt")
 
     assert "File uploaded (5 bytes, id f1)." in caplog.text
     # The name of a file is the user's own text; only the id is logged.
@@ -1014,13 +1076,13 @@ async def test_upload_is_logged(client, caplog):
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_duplicate_upload_is_logged_without_the_name(client, caplog):
+async def test_duplicate_upload_is_logged_without_the_name(client, caplog, tmp_path):
     respx.post("http://localhost:8080/v1/files").mock(
         return_value=httpx.Response(409, json={"id": "f1", "file_name": "a.txt"})
     )
 
     with caplog.at_level(logging.INFO, logger="api.client"):
-        result = await client.upload_file(b"hello", "a.txt")
+        result = await client.upload_file(a_file(tmp_path, b"hello", "a.txt"), "a.txt")
 
     assert result.duplicate is True
     assert "already uploaded (id f1)" in caplog.text
