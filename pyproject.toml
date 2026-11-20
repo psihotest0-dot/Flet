@@ -24,7 +24,12 @@ dev = [
     "pytest-asyncio>=1.4,<2",
     "pytest-cov>=7.1,<8",
     "ruff>=0.17,<0.18",
-    "respx>=0.23,<0.24"
+    "respx>=0.23,<0.24",
+    # Property tests (tests/test_markdown_safety_properties.py, tests/test_contract.py).
+    "hypothesis>=6.170,<7",
+    # Reads docs/openapi.yaml in tests/contract.py. Not PyYAML: it has no wheel for
+    # Python 3.15 yet, and building it needs a C compiler.
+    "ruamel.yaml>=0.19,<0.20"
 ]
 
 [tool.pytest.ini_options]

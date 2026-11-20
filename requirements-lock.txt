@@ -29,6 +29,8 @@ httpx==0.28.1
     #   respx
 httpx-sse==0.4.3
     # via flet-client (pyproject.toml)
+hypothesis==6.170.17
+    # via flet-client (pyproject.toml)
 idna==3.20
     # via
     #   anyio
@@ -72,10 +74,14 @@ respx==0.23.1
     # via flet-client (pyproject.toml)
 rich==15.0.0
     # via flet-desktop
+ruamel-yaml==0.19.1
+    # via flet-client (pyproject.toml)
 ruff==0.17.6
     # via flet-client (pyproject.toml)
 six==1.17.0
     # via repath
+sortedcontainers==2.4.0
+    # via hypothesis
 tenacity==9.2.1
     # via flet-client (pyproject.toml)
 typing-extensions==4.16.0

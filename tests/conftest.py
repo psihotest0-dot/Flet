@@ -4,10 +4,27 @@ from unittest.mock import AsyncMock, MagicMock
 
 import flet as ft
 import pytest
+from hypothesis import HealthCheck, settings
 
 import state.settings as settings_module
 from api.client import APIClient
 from api.models import OracleDecisionPage
+
+# The property tests (Hypothesis) run under the two autouse guards below. Those
+# are set up once per test function, not per generated example, and neither keeps
+# state an example could dirty - so the health check that warns about
+# function-scoped fixtures is switched off. No deadline: a slow CI machine is not
+# a failing example.
+settings.register_profile(
+    "flet-client",
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+    deadline=None,
+)
+# ``pytest --hypothesis-profile=thorough`` for a longer hunt, now and then.
+settings.register_profile(
+    "thorough", settings.get_profile("flet-client"), max_examples=5000
+)
+settings.load_profile("flet-client")
 
 
 @pytest.fixture(autouse=True)
