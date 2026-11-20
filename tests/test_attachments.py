@@ -266,11 +266,13 @@ def chips(v: ChatView) -> list[str]:
 
 
 def confirming(answer: bool):
-    return patch("views.chat.confirm_dialog", new=AsyncMock(return_value=answer))
+    return patch(
+        "views.chat_attachments.confirm_dialog", new=AsyncMock(return_value=answer)
+    )
 
 
 def snackbars():
-    return patch("views.chat.show_snackbar")
+    return patch("views.chat_attachments.show_snackbar")
 
 
 def test_the_view_has_a_paperclip_a_row_for_the_files_and_a_picker(view):
@@ -777,7 +779,7 @@ async def test_a_second_big_change_while_the_question_is_open_does_not_open_anot
         return False
 
     with patch(
-        "views.chat.confirm_dialog", new=AsyncMock(side_effect=slow_dialog)
+        "views.chat_attachments.confirm_dialog", new=AsyncMock(side_effect=slow_dialog)
     ) as dialog:
         first = asyncio.create_task(type_text(view, long_code()))
         await asyncio.sleep(0)  # the first change has reached its question
