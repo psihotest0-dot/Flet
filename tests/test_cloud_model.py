@@ -11,7 +11,7 @@ import pytest
 import respx
 
 from api.client import APIClient
-from state.chat_sessions import _restart_chat_session
+from state.chat_sessions import restart_chat_session
 from state.settings import Settings, load_settings, save_settings
 from views.chat import ChatView
 from views.chat_message import ChatMessage
@@ -235,7 +235,7 @@ async def test_a_deleted_chat_keeps_its_mode_under_the_new_session():
         cloud_modes={CHAT_1: "home"},
     )
 
-    new_id = _restart_chat_session(settings, CHAT_1)
+    new_id = restart_chat_session(settings, CHAT_1)
 
     assert settings.cloud_modes == {new_id: "home"}
 

@@ -56,6 +56,9 @@ class ChatMessage(ft.Column):
         self.sources = sources or []
         self.page_ref = page
         self.on_regenerate = on_regenerate
+        # The line of the chat list that holds this message; the chat sets it when it
+        # adds the message, and takes the message out of the list by it.
+        self.row: ft.Row | None = None
         self.spacing = 2
         self.horizontal_alignment = (
             ft.CrossAxisAlignment.END if role == "user" else ft.CrossAxisAlignment.START

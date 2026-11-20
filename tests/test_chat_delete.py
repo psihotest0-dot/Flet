@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from api.client import APIError
-from state.chat_sessions import _restart_chat_session
+from state.chat_sessions import restart_chat_session
 from state.settings import Settings, load_settings, save_settings
 from views.chat import ChatView
 
@@ -375,7 +375,7 @@ def test_restarting_a_chat_that_is_not_listed_changes_nothing():
         session_id=CHAT_1, chat_sessions=[{"id": CHAT_1, "name": "Чат 1"}]
     )
 
-    assert _restart_chat_session(settings, CHAT_2) is None
+    assert restart_chat_session(settings, CHAT_2) is None
     assert settings.chat_sessions == [{"id": CHAT_1, "name": "Чат 1"}]
     assert settings.session_id == CHAT_1
     assert settings.archived_chats == []
@@ -390,7 +390,7 @@ def test_restarting_a_chat_gives_it_a_new_id_and_archives_nothing():
         ],
     )
 
-    new_id = _restart_chat_session(settings, CHAT_1)
+    new_id = restart_chat_session(settings, CHAT_1)
 
     assert new_id not in (CHAT_1, CHAT_2)
     assert settings.session_id == new_id
@@ -411,7 +411,7 @@ def test_entries_written_by_earlier_versions_are_left_alone():
         archived_chats=[{"id": CHAT_3, "name": "Стар чат"}],
     )
 
-    _restart_chat_session(settings, CHAT_1)
+    restart_chat_session(settings, CHAT_1)
 
     assert settings.archived_chats == [{"id": CHAT_3, "name": "Стар чат"}]
 

@@ -14,12 +14,14 @@ import httpx
 
 from api.client import APIClient, APIError, ChatAttachment, StreamError
 from state.chat_sessions import (
-    _ensure_chat_session,
-    _next_chat_name,
-    _normalize_chat_sessions,
-    _resolve_session_id,
-    _restart_chat_session,
-    _unique_chat_name,
+    ChatSession,
+    ensure_chat_session,
+    next_chat_name,
+    normalize_chat_sessions,
+    resolve_session_id,
+    restart_chat_session,
+    store_chat_sessions,
+    unique_chat_name,
 )
 from state.settings import Settings, load_settings, save_settings
 from views.attachments import (
@@ -125,7 +127,7 @@ class ChatView(ft.Container):
         # One object for the whole app (``main`` hands over its own): what a handler
         # changes is what every other one reads, with no file read in between.
         self.settings = settings if settings is not None else load_settings()
-        self.session_id, chat_sessions = _ensure_chat_session(self.settings)
+        self.session_id, chats = ensure_chat_session(self.settings)
         # How the user's own messages are labelled (the ``display_name`` setting).
         self.display_name = self.settings.display_name
 
@@ -175,10 +177,7 @@ class ChatView(ft.Container):
         )
 
         self.session_dropdown = ft.Dropdown(
-            options=[
-                ft.DropdownOption(key=session["id"], text=session["name"])
-                for session in chat_sessions
-            ],
+            options=self._dropdown_options(chats),
             value=self.session_id,
             width=200,
             on_select=self.on_session_change,
@@ -299,14 +298,16 @@ class ChatView(ft.Container):
         self.delete_chat_btn.disabled = streaming
         safe_update(self, self.send_btn, self.stop_btn, self.delete_chat_btn)
 
+    @staticmethod
+    def _dropdown_options(chats: list[ChatSession]) -> list[ft.DropdownOption]:
+        """One option per chat, keyed by its session id."""
+        return [ft.DropdownOption(key=chat.id, text=chat.name) for chat in chats]
+
     def _apply_session_options(
-        self, chat_sessions: list[dict], selected_id: str | None
+        self, chats: list[ChatSession], selected_id: str | None
     ) -> None:
         """Re-key the dropdown so every option points at a real session id."""
-        self.session_dropdown.options = [
-            ft.DropdownOption(key=session["id"], text=session["name"])
-            for session in chat_sessions
-        ]
+        self.session_dropdown.options = self._dropdown_options(chats)
         self.session_dropdown.value = selected_id
         safe_update(self, self.session_dropdown)
 
@@ -395,28 +396,24 @@ class ChatView(ft.Container):
             return
 
         settings = self.settings
-        chat_sessions = _normalize_chat_sessions(settings)
-        session_id = _resolve_session_id(chat_sessions, selected)
+        chats = normalize_chat_sessions(settings)
+        session_id = resolve_session_id(chats, selected)
 
         if session_id is None:
             # A chat that was never persisted: the only legitimate new id.
             session_id = str(uuid.uuid4())
-            chat_sessions.append(
-                {
-                    "id": session_id,
-                    "name": _unique_chat_name(str(selected), chat_sessions),
-                }
+            chats.append(
+                ChatSession(session_id, unique_chat_name(str(selected), chats))
             )
 
-        settings.chat_sessions = chat_sessions
-        settings.session_id = session_id
+        store_chat_sessions(settings, chats, session_id)
         if not save_settings(settings):
             # The chat still opens, but after a restart the app would forget it.
             show_snackbar(self.page_ref, "Неуспешно запазване на настройките.")
 
         # Re-sync the widget as well: it may have carried a chat name instead
         # of an id, and the options must stay keyed by the saved ids.
-        self._apply_session_options(chat_sessions, session_id)
+        self._apply_session_options(chats, session_id)
 
         if session_id == self.session_id:
             return
@@ -425,21 +422,18 @@ class ChatView(ft.Container):
 
     async def on_new_chat_click(self, e):
         settings = self.settings
-        chat_sessions = _normalize_chat_sessions(settings)
+        chats = normalize_chat_sessions(settings)
 
         new_session = str(uuid.uuid4())
-        chat_sessions.append(
-            {"id": new_session, "name": _next_chat_name(chat_sessions)}
-        )
+        chats.append(ChatSession(new_session, next_chat_name(chats)))
 
-        settings.chat_sessions = chat_sessions
-        settings.session_id = new_session
+        store_chat_sessions(settings, chats, new_session)
         if not save_settings(settings):
             # The chat still opens, but after a restart the app would forget it.
             show_snackbar(self.page_ref, "Неуспешно запазване на настройките.")
         logger.info("New chat %s started.", new_session[:8])
 
-        self._apply_session_options(chat_sessions, new_session)
+        self._apply_session_options(chats, new_session)
         # A brand new chat has no history to fetch, so only the UI is cleared.
         self._activate_session(new_session, reload_history=False)
 
@@ -450,7 +444,7 @@ class ChatView(ft.Container):
         attached files; the long-term memories stay). If that fails nothing
         changes and the user can try again; asking twice is safe. Then the chat
         keeps its name and its place in the list and continues as a new empty
-        session (see ``_restart_chat_session``).
+        session (see ``restart_chat_session``).
         """
         if self._is_streaming:
             show_snackbar(
@@ -498,7 +492,7 @@ class ChatView(ft.Container):
 
         settings = self.settings
         snapshot = settings.snapshot()
-        new_id = _restart_chat_session(settings, old_id)
+        new_id = restart_chat_session(settings, old_id)
         if new_id is None:
             return
 
@@ -513,7 +507,7 @@ class ChatView(ft.Container):
             new_id[:8],
         )
 
-        self._apply_session_options(settings.chat_sessions, new_id)
+        self._apply_session_options(normalize_chat_sessions(settings), new_id)
         # The new session has no history to fetch, so only the screen is cleared.
         self._activate_session(new_id, reload_history=False)
         show_snackbar(
@@ -930,7 +924,7 @@ class ChatView(ft.Container):
 
         if last_msg_obj and last_msg_obj.role == "assistant":
             self._last_assistant_msg = last_msg_obj
-            self._last_assistant_row = last_msg_obj._row
+            self._last_assistant_row = last_msg_obj.row
             last_msg_obj.set_regenerate_visible(True)
 
     def set_display_name(self, name: str) -> None:
@@ -979,7 +973,7 @@ class ChatView(ft.Container):
         )
 
         self.chat_list.controls.append(row)
-        chat_message._row = row
+        chat_message.row = row
         if notify:
             safe_update(self)
             self.scroll_to_bottom()
@@ -1168,7 +1162,7 @@ class ChatView(ft.Container):
             self._set_streaming_ui(False)
             if session_id == self.session_id:
                 self._last_assistant_msg = chat_message
-                self._last_assistant_row = chat_message._row
+                self._last_assistant_row = chat_message.row
                 chat_message.set_regenerate_visible(True)
                 if stopped:
                     # The backend never stores a half-written answer.
@@ -1232,7 +1226,7 @@ class ChatView(ft.Container):
                         )
                 else:
                     self._last_assistant_msg = chat_message
-                    self._last_assistant_row = chat_message._row
+                    self._last_assistant_row = chat_message.row
                     chat_message.set_regenerate_visible(True)
 
     def _restore_previous_answer(
@@ -1243,11 +1237,8 @@ class ChatView(ft.Container):
         The backend swaps the stored answer only once a complete new one exists,
         so after a failure the previous reply is still the one in the history.
         """
-        if (
-            failed_message is not None
-            and failed_message._row in self.chat_list.controls
-        ):
-            self.chat_list.controls.remove(failed_message._row)
+        if failed_message is not None and failed_message.row in self.chat_list.controls:
+            self.chat_list.controls.remove(failed_message.row)
         if previous_row not in self.chat_list.controls:
             self.chat_list.controls.insert(
                 min(position, len(self.chat_list.controls)), previous_row

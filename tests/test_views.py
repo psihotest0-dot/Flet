@@ -22,7 +22,11 @@ from api.client import (
     StreamError,
     UploadResult,
 )
-from state.chat_sessions import _normalize_chat_sessions
+from state.chat_sessions import (
+    ChatSession,
+    normalize_chat_sessions,
+    store_chat_sessions,
+)
 from state.settings import Settings, load_settings, save_settings
 from views.chat import (
     HISTORY_PAGE_SIZE,
@@ -856,7 +860,21 @@ def test_normalize_chat_sessions_tolerates_legacy_and_duplicate_entries():
         ],
     )
 
-    assert _normalize_chat_sessions(settings) == [{"id": CHAT_2, "name": "Чат 1"}]
+    assert normalize_chat_sessions(settings) == [ChatSession(CHAT_2, "Чат 1")]
+
+
+def test_store_chat_sessions_writes_the_file_form_of_the_chats():
+    settings = Settings(user_id="user-1", session_id="old")
+
+    store_chat_sessions(
+        settings, [ChatSession(CHAT_1, "Чат 1"), ChatSession(CHAT_2, "Чат 2")], CHAT_2
+    )
+
+    assert settings.chat_sessions == [
+        {"id": CHAT_1, "name": "Чат 1"},
+        {"id": CHAT_2, "name": "Чат 2"},
+    ]
+    assert settings.session_id == CHAT_2
 
 
 @pytest.mark.asyncio

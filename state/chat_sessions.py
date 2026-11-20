@@ -1,35 +1,51 @@
 """The chat sessions kept in the settings: names, ids and repair of stale entries (P33).
 
-A chat is an entry ``{"id", "name"}`` of ``Settings.chat_sessions``. These are pure
+``Settings.chat_sessions`` is what the file holds: a list of dicts that may lack an id
+or a name (a hand-edited or an old file), kept as it is so that reading the file never
+costs the user their ``session_id``. Everything here works on the clean form,
+:class:`ChatSession`, and writes it back with :func:`store_chat_sessions`. These are
 functions over ``Settings`` (the only side effect is ``save_settings`` in
-``_ensure_chat_session``); the chat screen only calls them.
+``ensure_chat_session``); the chat screen only calls them.
 """
 
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 
 from state.settings import Settings, save_settings
 
 CHAT_SESSION_PREFIX = "Чат"
 
 
-def _next_chat_name(chat_sessions: list[dict]) -> str:
+@dataclass(frozen=True)
+class ChatSession:
+    """A chat of the dropdown: the id of its conversation on the backend, and its name."""
+
+    id: str
+    name: str
+
+    def entry(self) -> dict[str, str]:
+        """The form it has in ``settings.json``."""
+        return {"id": self.id, "name": self.name}
+
+
+def next_chat_name(chats: list[ChatSession]) -> str:
     """Return the first unused "Чат N" label for a brand new chat."""
-    used = {session["name"] for session in chat_sessions}
+    used = {chat.name for chat in chats}
     index = 1
     while f"{CHAT_SESSION_PREFIX} {index}" in used:
         index += 1
     return f"{CHAT_SESSION_PREFIX} {index}"
 
 
-def _unique_chat_name(name: str, chat_sessions: list[dict]) -> str:
+def unique_chat_name(name: str, chats: list[ChatSession]) -> str:
     """Return a label that no other chat session is using yet."""
     name = (name or "").strip()
     if not name:
-        return _next_chat_name(chat_sessions)
+        return next_chat_name(chats)
 
-    used = {session["name"] for session in chat_sessions}
+    used = {chat.name for chat in chats}
     if name not in used:
         return name
 
@@ -39,17 +55,17 @@ def _unique_chat_name(name: str, chat_sessions: list[dict]) -> str:
     return f"{name} ({index})"
 
 
-def _normalize_chat_sessions(settings: Settings) -> list[dict]:
-    """Return ``settings.chat_sessions`` as clean ``{"id", "name"}`` entries.
+def normalize_chat_sessions(settings: Settings) -> list[ChatSession]:
+    """Return ``settings.chat_sessions`` as clean chats, each with an id and a name.
 
     Older builds persisted bare names and a broken write can leave entries
     without an id. Such entries are re-bound to ``settings.session_id`` when
     that id is not listed yet, so an already existing chat stays reachable
     instead of being replaced by a freshly generated session id.
     """
-    chat_sessions: list[dict] = []
+    chats: list[ChatSession] = []
     used_ids: set[str] = set()
-    nameless_entries: list[dict] = []
+    nameless_entries: list[str] = []
 
     for entry in settings.chat_sessions or []:
         if isinstance(entry, str):
@@ -64,44 +80,51 @@ def _normalize_chat_sessions(settings: Settings) -> list[dict]:
         if not session_id:
             # Without an id the entry cannot address a session; keep its name
             # around in case it belongs to the still active session.
-            nameless_entries.append({"name": name})
+            nameless_entries.append(name)
             continue
         if session_id in used_ids:
             continue
 
         used_ids.add(session_id)
-        chat_sessions.append(
-            {"id": session_id, "name": _unique_chat_name(name, chat_sessions)}
-        )
+        chats.append(ChatSession(session_id, unique_chat_name(name, chats)))
 
     active_id = (settings.session_id or "").strip()
     if active_id and active_id not in used_ids:
         # The active session predates `chat_sessions` (or lost its entry):
         # keep it and reuse the name of a legacy entry when there is one.
-        name = nameless_entries.pop(0)["name"] if nameless_entries else ""
-        chat_sessions.append(
-            {"id": active_id, "name": _unique_chat_name(name, chat_sessions)}
-        )
+        name = nameless_entries.pop(0) if nameless_entries else ""
+        chats.append(ChatSession(active_id, unique_chat_name(name, chats)))
 
-    return chat_sessions
+    return chats
 
 
-def _resolve_session_id(chat_sessions: list[dict], selected: str | None) -> str | None:
+def store_chat_sessions(
+    settings: Settings, chats: list[ChatSession], active_id: str
+) -> None:
+    """Make ``chats`` the chats of the settings and ``active_id`` the open one.
+
+    The settings are changed in memory only; saving them is the caller's step.
+    """
+    settings.chat_sessions = [chat.entry() for chat in chats]
+    settings.session_id = active_id
+
+
+def resolve_session_id(chats: list[ChatSession], selected: str | None) -> str | None:
     """Map a dropdown value (session id or chat name) to a saved session id."""
     value = (selected or "").strip()
     if not value:
         return None
 
-    for session in chat_sessions:
-        if session["id"] == value:
-            return session["id"]
-    for session in chat_sessions:
-        if session["name"].casefold() == value.casefold():
-            return session["id"]
+    for chat in chats:
+        if chat.id == value:
+            return chat.id
+    for chat in chats:
+        if chat.name.casefold() == value.casefold():
+            return chat.id
     return None
 
 
-def _restart_chat_session(settings: Settings, session_id: str) -> str | None:
+def restart_chat_session(settings: Settings, session_id: str) -> str | None:
     """Start ``session_id`` over: the same chat in the list, with a new empty session.
 
     The chat keeps its name and its place in the list, but now points at a fresh
@@ -115,19 +138,14 @@ def _restart_chat_session(settings: Settings, session_id: str) -> str | None:
     Returns the new session id, or ``None`` when ``session_id`` is not in the
     list (nothing is changed then).
     """
-    chat_sessions = _normalize_chat_sessions(settings)
-    index = next(
-        (i for i, session in enumerate(chat_sessions) if session["id"] == session_id),
-        None,
-    )
+    chats = normalize_chat_sessions(settings)
+    index = next((i for i, chat in enumerate(chats) if chat.id == session_id), None)
     if index is None:
         return None
 
-    old = chat_sessions[index]
     new_id = str(uuid.uuid4())
-    chat_sessions[index] = {"id": new_id, "name": old["name"]}
-    settings.chat_sessions = chat_sessions
-    settings.session_id = new_id
+    chats[index] = ChatSession(new_id, chats[index].name)
+    store_chat_sessions(settings, chats, new_id)
     # The chat keeps its place in the list, so it keeps the model it was sent to.
     mode = settings.cloud_modes.pop(session_id, None)
     if mode is not None:
@@ -135,7 +153,7 @@ def _restart_chat_session(settings: Settings, session_id: str) -> str | None:
     return new_id
 
 
-def _ensure_chat_session(settings: Settings) -> tuple[str, list[dict]]:
+def ensure_chat_session(settings: Settings) -> tuple[str, list[ChatSession]]:
     """Resolve the session the chat view must open and repair stale settings.
 
     A saved ``chat_sessions`` entry always wins over generating an id: a new
@@ -144,20 +162,21 @@ def _ensure_chat_session(settings: Settings) -> tuple[str, list[dict]]:
     previous_sessions = settings.chat_sessions
     previous_session_id = settings.session_id
 
-    chat_sessions = _normalize_chat_sessions(settings)
-    if chat_sessions:
+    chats = normalize_chat_sessions(settings)
+    if chats:
         active_id = (previous_session_id or "").strip()
-        if not any(session["id"] == active_id for session in chat_sessions):
+        if not any(chat.id == active_id for chat in chats):
             # `session_id` is missing or points nowhere - open the first chat
             # that is actually stored instead of inventing a new one.
-            active_id = chat_sessions[0]["id"]
+            active_id = chats[0].id
     else:
         # No chat was ever saved (first run): the only case that mints an id.
         active_id = (previous_session_id or "").strip() or str(uuid.uuid4())
-        chat_sessions = [{"id": active_id, "name": _next_chat_name(chat_sessions)}]
+        chats = [ChatSession(active_id, next_chat_name(chats))]
 
-    if chat_sessions != previous_sessions or active_id != previous_session_id:
-        settings.chat_sessions = chat_sessions
-        settings.session_id = active_id
+    if [chat.entry() for chat in chats] != previous_sessions or (
+        active_id != previous_session_id
+    ):
+        store_chat_sessions(settings, chats, active_id)
         save_settings(settings)
-    return active_id, chat_sessions
+    return active_id, chats
