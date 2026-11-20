@@ -183,12 +183,11 @@ class OracleDecisionPage(BaseModel):
 
 
 class IngestedFile(BaseModel):
-    """Represents a file uploaded to the system."""
+    """A file uploaded to the library: only what ``IngestedFile`` of the contract has."""
 
     id: str | None = None
     user_id: str | None = None
     file_name: str | None = None
-    file_hash: str | None = None
     mime_type: str | None = None
     file_size: int | None = None
     status: str | None = None
@@ -200,7 +199,6 @@ class IngestedFile(BaseModel):
     chunk_count: int | None = None
     has_embeddings: bool | None = None
     embedding_status: str | None = None
-    local_path: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

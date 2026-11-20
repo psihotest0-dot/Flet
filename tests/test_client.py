@@ -114,11 +114,9 @@ async def test_upload_file_success(client, tmp_path):
         "id": "123e4567-e89b-12d3-a456-426614174001",
         "user_id": "123e4567-e89b-12d3-a456-426614174000",
         "file_name": "test.txt",
-        "file_hash": "dummyhash",
         "mime_type": "text/plain",
         "file_size": 1024,
-        "status": "uploaded",
-        "local_path": "/tmp/test.txt",
+        "status": "pending",
         "created_at": "2023-01-01T00:00:00Z",
         "updated_at": "2023-01-01T00:00:00Z",
     }
