@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from api.client import APIError
+from api.errors import APIError
 from state.chat_sessions import restart_chat_session
 from state.settings import Settings, load_settings, save_settings
 from views.chat import ChatView

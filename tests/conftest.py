@@ -6,7 +6,8 @@ import flet as ft
 import pytest
 
 import state.settings as settings_module
-from api.client import APIClient, OracleDecisionPage
+from api.client import APIClient
+from api.models import OracleDecisionPage
 
 
 @pytest.fixture(autouse=True)

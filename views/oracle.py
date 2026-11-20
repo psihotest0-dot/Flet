@@ -16,7 +16,8 @@ from datetime import UTC, datetime
 
 import flet as ft
 
-from api.client import APIClient, OracleDecision, OracleDecisionPage
+from api.client import APIClient
+from api.models import OracleDecision, OracleDecisionPage
 from views.ui_utils import error_detail, is_unexpected, safe_update
 
 logger = logging.getLogger(__name__)

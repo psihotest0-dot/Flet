@@ -12,7 +12,9 @@ import pytest
 import respx
 from helpers import mounted
 
-from api.client import APIClient, APIError, ChatAttachment
+from api.client import APIClient
+from api.errors import APIError
+from api.models import ChatAttachment
 from views.attachments import (
     MAX_FILE_BYTES,
     MESSAGE_TOKEN_LIMIT,

@@ -11,7 +11,8 @@ import logging
 
 import flet as ft
 
-from api.client import APIClient, Proposal
+from api.client import APIClient
+from api.models import Proposal
 from state.settings import DEFAULT_DISPLAY_NAME
 from views.links import WEB_PREFIXES, link_host, link_question
 from views.markdown_safety import disarm_images

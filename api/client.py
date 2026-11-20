@@ -6,15 +6,12 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 from httpx_sse import aconnect_sse
-from pydantic import BaseModel, field_validator
 from tenacity import (
     before_sleep_log,
     retry,
@@ -23,223 +20,22 @@ from tenacity import (
     wait_exponential,
 )
 
-logger = logging.getLogger(__name__)
-
-# The backend accepts 1 (trivia) .. 10 (critical) and answers 400 to anything
-# else - including a missing value, which it reads as 0.
-MIN_IMPORTANCE = 1
-MAX_IMPORTANCE = 10
-DEFAULT_IMPORTANCE = 5
-
-# A memory (or message) body may be at most 32000 *bytes*: the backend checks
-# Go's len(string) although its error text says "characters". UTF-8 spends two
-# bytes on a Cyrillic letter, so Bulgarian text gets about 16000 letters.
-MAX_CONTENT_BYTES = 32000
-
-# The backend's MAX_UPLOAD_MB (100 unless its owner changed it). It is a limit on
-# the whole request, not on the file, so a file just below it can still get a 413.
-MAX_UPLOAD_BYTES = 100 * 1024 * 1024
-
-
-def content_size(text: str) -> int:
-    """Size of ``text`` as the backend measures it (UTF-8 bytes)."""
-    return len(text.encode("utf-8"))
-
-
-# File types the backend can turn into text (internal/ingest in C:\GO): text
-# formats, documents and images (OCR). The upload endpoint accepts anything, but
-# any other file ends as a failed ingest, so the picker offers only these.
-SUPPORTED_EXTENSIONS = (
-    "txt",
-    "md",
-    "csv",
-    "json",
-    "yaml",
-    "yml",
-    "log",
-    "html",
-    "htm",
-    "pdf",
-    "docx",
-    "xlsx",
-    "epub",
-    "png",
-    "jpg",
-    "jpeg",
-    "tif",
-    "tiff",
-    "bmp",
+from api.errors import APIError, StreamError
+from api.limits import DEFAULT_IMPORTANCE, MAX_UPLOAD_BYTES
+from api.models import (
+    ChatAttachment,
+    IngestedFile,
+    Memory,
+    Message,
+    OracleDecisionPage,
+    Proposal,
+    Rule,
+    UploadResult,
+    UserFile,
+    UserFileList,
 )
 
-
-def is_supported_file(filename: str) -> bool:
-    """Whether the backend can read a file with this name (by its extension)."""
-    _, dot, ext = filename.rpartition(".")
-    return bool(dot) and ext.lower() in SUPPORTED_EXTENSIONS
-
-
-class Message(BaseModel):
-    """Represents a chat message."""
-
-    id: str | None = None
-    user_id: str | None = None
-    session_id: str | None = None
-    role: str | None = None
-    content: str | None = None
-    created_at: datetime | None = None
-    # Where an assistant answer came from (same shape as the SSE ``sources``
-    # event); stored with the message so the references survive a reload.
-    sources: list[dict[str, Any]] | None = None
-
-
-class Memory(BaseModel):
-    """Represents a piece of memory stored in the system."""
-
-    id: str | None = None
-    user_id: str | None = None
-    content: str | None = None
-    status: str | None = None
-    source_message_id: str | None = None
-    importance: int | None = None
-    metadata: dict[str, Any] | None = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-    last_used_at: datetime | None = None
-
-
-class Proposal(BaseModel):
-    """A write the assistant asked for that waits for the user.
-
-    It is a global rule, a note on how to talk, a memory, or a write to one of the
-    user's own text files (``write_file``: ``file_name``, ``file_mode`` and the
-    text in ``content``).
-
-    ``external_sources`` names where untrusted text came from in the turn that
-    made it (``web_search``, ``web_fetch``, ``search_documents``,
-    ``retrieved_documents``, ``attachments``, ``user_files``); empty means the
-    turn read only the conversation.
-    """
-
-    id: int
-    kind: str | None = None
-    status: str | None = None
-    session_id: str | None = None
-    summary: str = ""
-    key: str | None = None
-    value: str | None = None
-    content: str | None = None
-    importance: int | None = None
-    # A file write only: the name, and ``create``, ``replace`` or ``append``.
-    file_name: str | None = None
-    file_mode: str | None = None
-    external_sources: list[str] = []
-    created_at: datetime | None = None
-
-
-class UserFileInfo(BaseModel):
-    """One of the text files the assistant keeps for the user (notes, lists, drafts)."""
-
-    name: str
-    size: int = 0
-    modified: datetime | None = None
-
-
-class UserFileList(BaseModel):
-    """The files with what they take and the limits (``GET /workspace/files``)."""
-
-    files: list[UserFileInfo] = []
-    total_bytes: int = 0
-    max_files: int = 0
-    max_file_bytes: int = 0
-    max_total_bytes: int = 0
-
-
-class UserFile(BaseModel):
-    """The text of one file: ``version`` is ``current`` or ``previous``.
-
-    The previous version is the text a replacement took the place of; it has no
-    size and no date.
-    """
-
-    name: str
-    version: str = "current"
-    content: str = ""
-    size: int | None = None
-    modified: datetime | None = None
-
-
-class Rule(BaseModel):
-    """A global rule or a note on how to talk: both are in the system prompt of every session.
-
-    ``kind`` is ``rule`` for an instruction of the user and ``style`` for a note on how
-    he likes to be talked to (the backend's plan item P42); an older backend sends no
-    kind, and everything it has is a rule.
-    """
-
-    id: int
-    kind: str = "rule"
-    key: str
-    value: str
-    enabled: bool = True
-    updated_at: datetime | None = None
-
-
-class OracleDecision(BaseModel):
-    """One line of the Oracle journal: what the trading bot asked and what came back.
-
-    ``status`` is ``answered`` (``verdict`` is ``APPROVE``, ``VETO`` or ``HOLD``)
-    or ``failed`` (no verdict; ``error`` says why). In ``shadow`` mode the bot
-    ignores the verdict, so the journal is the whole result.
-    """
-
-    id: int
-    created_at: datetime | None = None
-    request_id: str | None = None
-    signal_id: str | None = None
-    symbol: str | None = None
-    mode: str | None = None
-    status: str | None = None
-    verdict: str | None = None
-    reason: str | None = None
-    model: str | None = None
-    attempts: int | None = None
-    finish_reason: str | None = None
-    prompt_tokens: int | None = None
-    completion_tokens: int | None = None
-    latency_ms: int | None = None
-    error: str | None = None
-    # ``signal_version`` is the version of the strategy that made the signal
-    # ("oracle-probe" marks the bot's own test questions, which are not signals);
-    # ``prompt_version`` is a 12-hex label of the question the model was asked.
-    # Both are omitted when empty (``prompt_version`` on rows from before it was
-    # recorded).
-    signal_version: str | None = None
-    prompt_version: str | None = None
-
-
-class OracleDecisionPage(BaseModel):
-    """A page of the journal, newest first.
-
-    ``next_before_id`` is the ``before_id`` of the next page; 0 when this was the
-    last one. An empty journal may arrive as ``"decisions": null``.
-    """
-
-    decisions: list[OracleDecision] = []
-    next_before_id: int = 0
-
-    @field_validator("decisions", mode="before")
-    @classmethod
-    def _no_decisions_is_an_empty_list(cls, value):
-        return [] if value is None else value
-
-    @field_validator("next_before_id", mode="before")
-    @classmethod
-    def _no_next_page_is_zero(cls, value):
-        return 0 if value is None else value
-
-
-class StreamError(Exception):
-    """Exception raised for errors in the stream."""
+logger = logging.getLogger(__name__)
 
 
 def _stream_error_text(data: str) -> str:
@@ -255,34 +51,6 @@ def _stream_error_text(data: str) -> str:
     if isinstance(payload, dict) and payload.get("error"):
         return str(payload["error"])
     return data
-
-
-# Backend error bodies are short plain-text sentences; anything longer is a
-# stack trace or an HTML page that does not belong in a snackbar.
-ERROR_MESSAGE_LIMIT = 200
-
-
-class APIError(Exception):
-    """The backend answered with an error status.
-
-    ``message`` is the plain-text body the backend sent (for example
-    ``importance must be between 1 and 10``), so the UI can show it instead of
-    the generic ``Client error '400 Bad Request' for url ...`` of httpx.
-    """
-
-    def __init__(self, status: int, message: str):
-        super().__init__(message)
-        self.status = status
-        self.message = message
-
-    @classmethod
-    def from_response(cls, response: httpx.Response) -> APIError:
-        text = " ".join(response.text.split())
-        if len(text) > ERROR_MESSAGE_LIMIT:
-            text = text[: ERROR_MESSAGE_LIMIT - 3].rstrip() + "..."
-        if not text:
-            text = f"HTTP {response.status_code} {response.reason_phrase}".strip()
-        return cls(response.status_code, text)
 
 
 FILES_PATH = "/workspace/files/"
@@ -344,57 +112,6 @@ def _is_transient(error: BaseException) -> bool:
     if isinstance(error, APIError):
         return error.status >= 500
     return isinstance(error, httpx.TransportError)
-
-
-class IngestedFile(BaseModel):
-    """Represents a file uploaded to the system."""
-
-    id: str | None = None
-    user_id: str | None = None
-    file_name: str | None = None
-    file_hash: str | None = None
-    mime_type: str | None = None
-    file_size: int | None = None
-    status: str | None = None
-    category: str | None = None
-    manual_override: bool | None = None
-    # Vector state reported by the backend: a file that finished ingestion with
-    # zero chunks cannot be found by retrieval, which the API reports as
-    # embedding_status "empty" instead of "completed".
-    chunk_count: int | None = None
-    has_embeddings: bool | None = None
-    embedding_status: str | None = None
-    local_path: str | None = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-
-
-class ChatAttachment(BaseModel):
-    """A text file attached to one conversation (code, a log, a long paste).
-
-    It is not the library: the model sees it only in this conversation. ``created``,
-    ``replaced`` and ``unchanged`` are set only in the answer to an upload.
-    """
-
-    id: str
-    name: str
-    bytes: int = 0
-    lines: int = 0
-    tokens: int = 0
-    version: int = 1
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-    created: bool | None = None
-    replaced: bool | None = None
-    unchanged: bool | None = None
-
-
-@dataclass(frozen=True)
-class UploadResult:
-    """The outcome of an upload: the stored file, and whether it was already there."""
-
-    file: IngestedFile
-    duplicate: bool = False
 
 
 class APIClient:

@@ -8,13 +8,13 @@ import logging
 import flet as ft
 import httpx
 
-from api.client import (
+from api.client import APIClient
+from api.errors import APIError
+from api.limits import (
     DEFAULT_IMPORTANCE,
     MAX_CONTENT_BYTES,
     MAX_IMPORTANCE,
     MIN_IMPORTANCE,
-    APIClient,
-    APIError,
     content_size,
 )
 from views.proposals import ProposalCard

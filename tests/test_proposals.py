@@ -10,7 +10,9 @@ import pytest
 import respx
 from helpers import mounted
 
-from api.client import APIClient, APIError, Proposal, Rule
+from api.client import APIClient
+from api.errors import APIError
+from api.models import Proposal, Rule
 from views.chat import ChatView
 from views.chat_message import ChatMessage
 from views.memory import MemoryView

@@ -14,14 +14,9 @@ import respx
 from helpers import tab_labels, tab_view
 
 import main as main_module
-from api.client import (
-    APIClient,
-    APIError,
-    Proposal,
-    UserFile,
-    UserFileInfo,
-    UserFileList,
-)
+from api.client import APIClient
+from api.errors import APIError
+from api.models import Proposal, UserFile, UserFileInfo, UserFileList
 from views import user_files as user_files_module
 from views.user_files import (
     NO_FILES_TEXT,

@@ -13,15 +13,9 @@ import httpx
 import pytest
 from helpers import mounted
 
-from api.client import (
-    SUPPORTED_EXTENSIONS,
-    APIError,
-    IngestedFile,
-    Memory,
-    Message,
-    StreamError,
-    UploadResult,
-)
+from api.errors import APIError, StreamError
+from api.limits import SUPPORTED_EXTENSIONS
+from api.models import IngestedFile, Memory, Message, UploadResult
 from state.chat_sessions import (
     ChatSession,
     normalize_chat_sessions,

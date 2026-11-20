@@ -10,7 +10,7 @@ from pathlib import PurePath
 import flet as ft
 import httpx
 
-from api.client import APIError, StreamError
+from api.errors import APIError, StreamError
 
 logger = logging.getLogger(__name__)
 

@@ -9,13 +9,9 @@ from pathlib import Path
 
 import flet as ft
 
-from api.client import (
-    MAX_UPLOAD_BYTES,
-    SUPPORTED_EXTENSIONS,
-    APIClient,
-    IngestedFile,
-    is_supported_file,
-)
+from api.client import APIClient
+from api.limits import MAX_UPLOAD_BYTES, SUPPORTED_EXTENSIONS, is_supported_file
+from api.models import IngestedFile
 from views.ui_utils import (
     confirm_dialog,
     error_detail,

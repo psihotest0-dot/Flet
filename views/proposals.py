@@ -14,7 +14,9 @@ from collections.abc import Callable
 
 import flet as ft
 
-from api.client import APIClient, APIError, Proposal
+from api.client import APIClient
+from api.errors import APIError
+from api.models import Proposal
 from views.ui_utils import (
     describe_error,
     is_unexpected,

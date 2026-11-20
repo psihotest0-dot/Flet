@@ -8,19 +8,16 @@ import respx
 from tenacity import wait_none
 
 import api.client as client_module
-from api.client import (
+from api.client import APIClient
+from api.errors import APIError, StreamError
+from api.limits import (
     MAX_CONTENT_BYTES,
     MAX_UPLOAD_BYTES,
     SUPPORTED_EXTENSIONS,
-    APIClient,
-    APIError,
-    IngestedFile,
-    Memory,
-    StreamError,
-    UploadResult,
     content_size,
     is_supported_file,
 )
+from api.models import IngestedFile, Memory, UploadResult
 
 
 @pytest.fixture
@@ -699,7 +696,7 @@ async def test_stream_chat_sends_the_user_header(client):
 @respx.mock
 @pytest.mark.asyncio
 async def test_stream_chat_error(client):
-    from api.client import StreamError
+    from api.errors import StreamError
 
     async def sse_stream():
         yield b'data: {"content": "Hello"}\n\n'

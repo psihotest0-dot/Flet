@@ -12,7 +12,9 @@ from pathlib import Path
 import flet as ft
 import httpx
 
-from api.client import APIClient, APIError, ChatAttachment, StreamError
+from api.client import APIClient
+from api.errors import APIError, StreamError
+from api.models import ChatAttachment
 from state.chat_sessions import (
     ChatSession,
     ensure_chat_session,

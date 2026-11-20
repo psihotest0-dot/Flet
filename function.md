@@ -9,7 +9,10 @@
 | Файл | Роля |
 |---|---|
 | [main.py](main.py) | Входна точка: логове, настройки, клиент, табове, проверка на връзката |
-| [api/client.py](api/client.py) | Единственото място за HTTP заявки към бекенда, моделите на данните, `APIError` |
+| [api/client.py](api/client.py) | Единственото място за HTTP заявки към бекенда: `APIClient`, повторенията, записът на грешките в лога |
+| [api/models.py](api/models.py) | Моделите на данните от договора (`docs/openapi.yaml`): съобщение, спомен, предложение, файл, правило, запис от журнала на Oracle |
+| [api/errors.py](api/errors.py) | `APIError` (бекендът отговори с грешка) и `StreamError` (грешка по SSE) |
+| [api/limits.py](api/limits.py) | Какво приема бекендът: граници на размера и важността, типове файлове |
 | [state/settings.py](state/settings.py) | `settings.json`: четене, поправка при повреда, атомарен запис |
 | [state/chat_sessions.py](state/chat_sessions.py) | Сесиите на чатовете в настройките: имена, id-та, поправка на повредени записи |
 | [views/ui_utils.py](views/ui_utils.py) | Общи помощници на изгледите: `is_mounted`, `safe_update`, диалози и снекбар, клипборд, връзки, текстове за грешки |
@@ -60,21 +63,26 @@
 | `main.ensure_view(index)` | Връща изгледа на таба, като го създава при нужда и го слага на мястото му в `TabBarView`. |
 | `main.on_tab_change(e)` | При смяна на таб създава изгледа, презарежда паметта и журнала на бота при връщане (`RELOADED_ON_VISIT`) и пуска проверката на статусите на файловете и на журнала само докато техният таб се вижда. Минава и при връщане към „Чат“ — тогава спира двете проверки; затова пазачът не гледа само `factories`, а и `views`. |
 
+## api/limits.py
+
+| Функция | Какво прави |
+|---|---|
+| `content_size(text)` | Размерът на текста в UTF-8 **байтове** — както го мери бекендът (кирилицата е 2 байта на буква). |
+| `is_supported_file(filename)` | Дали бекендът може да прочете файла според разширението му (`SUPPORTED_EXTENSIONS`). |
+
 ## api/client.py
 
 ### Помощни функции
 
 | Функция | Какво прави |
 |---|---|
-| `content_size(text)` | Размерът на текста в UTF-8 **байтове** — както го мери бекендът (кирилицата е 2 байта на буква). |
-| `is_supported_file(filename)` | Дали бекендът може да прочете файла според разширението му (`SUPPORTED_EXTENSIONS`). |
 | `_log_http_error(response, error)` | Записва ред `МЕТОД /път -> HTTP код: текст`. 5xx е `ERROR`, 4xx е `WARNING`. Без query string, защото в него е `session_id`. Пътят минава през `_loggable_path`. |
 | `_loggable_path(path)` | Пътят на заявка така, както може да влезе в лога. Краят на повечето пътища е id (на файл, спомен, правило) и остава. Два не са: `/workspace/files/<име>` завършва с името на файл на потребителя (става `/workspace/files/{name}`), а `/chat/sessions/<id>` — с целия ключ към разговора (остават първите 8 знака и `...`). |
 | `_raise_for_status(response)` | Като `raise_for_status`, но хвърля `APIError` с текста на бекенда и записва грешката в лога. |
 | `_stream_error_text(data)` | Текстът на `event: error`: бекендът праща `{"error": "..."}` (с `request_id` за търсене в неговия лог); обикновен текст се взема както е. |
 | `_is_transient(error)` | Дали повторението може да помогне: 5xx и `httpx.TransportError` — да; 4xx — не. |
 
-### Модели и изключения
+## api/models.py
 
 | Клас | Какво е |
 |---|---|
@@ -88,11 +96,15 @@
 | `OracleDecisionPage` | Страница от журнала (най-новите първо) и `next_before_id` за следващата; `null` вместо списък и вместо номер става празен списък / 0 (валидаторите `_no_decisions_is_an_empty_list` и `_no_next_page_is_zero`). |
 | `IngestedFile` | Качен файл: статус, категория, брой части, `embedding_status`. |
 | `UploadResult` | Резултат от качване: файлът и дали вече е бил качен (`duplicate`). |
+## api/errors.py
+
+| Клас | Какво е |
+|---|---|
 | `StreamError` | Грешка, дошла по SSE (`event: error`). |
 | `APIError(status, message)` | Бекендът е отговорил с грешка. `message` е текстът му, по-къс от 200 знака. |
 | `APIError.from_response(response)` | Прави `APIError` от HTTP отговор; празно тяло става `HTTP 404 Not Found`. |
 
-### APIClient
+## api/client.py — APIClient
 
 | Метод | Адрес | Какво прави |
 |---|---|---|

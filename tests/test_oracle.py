@@ -14,7 +14,9 @@ from helpers import tab_labels, tab_view
 from tenacity import wait_none
 
 import main as main_module
-from api.client import APIClient, APIError, OracleDecision, OracleDecisionPage
+from api.client import APIClient
+from api.errors import APIError
+from api.models import OracleDecision, OracleDecisionPage
 from views import oracle as oracle_module
 from views.oracle import (
     AVAILABILITY_TARGET,

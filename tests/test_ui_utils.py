@@ -10,7 +10,7 @@ import httpx
 import pytest
 from helpers import mounted, real_session
 
-from api.client import APIError, StreamError
+from api.errors import APIError, StreamError
 from views.ui_utils import (
     close_dialog,
     confirm_dialog,

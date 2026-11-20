@@ -16,7 +16,9 @@ from datetime import datetime
 
 import flet as ft
 
-from api.client import APIClient, APIError, UserFileInfo, UserFileList
+from api.client import APIClient
+from api.errors import APIError
+from api.models import UserFileInfo, UserFileList
 from views.files import size_label
 from views.proposals import ProposalCard
 from views.ui_utils import (
