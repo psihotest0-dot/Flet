@@ -17,7 +17,7 @@
 | [state/settings.py](state/settings.py) | `settings.json`: четене, поправка при повреда, атомарен запис |
 | [state/chat_sessions.py](state/chat_sessions.py) | Сесиите на чатовете в настройките: имена, id-та, поправка на повредени записи |
 | [views/ui_utils.py](views/ui_utils.py) | Общи помощници на изгледите: `is_mounted`, `safe_update`, диалози и снекбар, клипборд, връзки, текстове за грешки |
-| [views/chat.py](views/chat.py) | Чатът: съобщения, SSE стрийм, източници, няколко сесии |
+| [views/chat.py](views/chat.py) | Чатът: състоянието, няколко чата, бутонът за модел, историята, полето за съобщение (`ChatView`; другите му части са по-долу) |
 | [views/chat_attachments.py](views/chat_attachments.py) | Прикачените към разговор файлове в чата: чипове, прикачване, предложение при поставен дълъг текст (част от `ChatView`) |
 | [views/chat_scroll.py](views/chat_scroll.py) | Превъртането на чата: към най-новото съобщение и след растящ отговор, но само докато читателят е на дъното (част от `ChatView`) |
 | [views/chat_turns.py](views/chat_turns.py) | Един ход от разговора: изпращане, четене на потока от събития, „Опитай отново“, „Спри“ (част от `ChatView`) |

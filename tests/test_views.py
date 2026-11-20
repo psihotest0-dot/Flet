@@ -380,7 +380,7 @@ async def test_a_frame_with_nothing_to_show_keeps_the_indicator_away(
 ):
     # The model's reasoning is hidden, yet it says that the backend is working: only
     # a stream that is really silent brings the "..." back.
-    monkeypatch.setattr("views.chat_turns.ACTIVITY_INDICATOR_DELAY", 0.2)
+    monkeypatch.setattr("views.chat_turns.ACTIVITY_INDICATOR_DELAY", 0.35)
     shown = MagicMock()
     monkeypatch.setattr(ChatMessage, "show_activity_indicator", shown)
     mock_page.run_task.side_effect = lambda fn, *args: (
@@ -392,11 +392,11 @@ async def test_a_frame_with_nothing_to_show_keeps_the_indicator_away(
 
     async def stream(**_kwargs):
         # Longer than the delay plus one look of the indicator (every 0.25 s).
-        for _ in range(12):
+        for _ in range(16):
             yield Working()
             await asyncio.sleep(0.05)
         shown_while_reasoning.append(shown.call_count)
-        await asyncio.sleep(0.7)
+        await asyncio.sleep(1.0)
         yield TextChunk("answer")
 
     mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: stream(**kw))
