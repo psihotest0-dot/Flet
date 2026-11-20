@@ -13,6 +13,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Callable
+from datetime import datetime
 
 import flet as ft
 
@@ -670,6 +671,7 @@ class ChatView(ChatAttachmentsMixin, ChatScrollMixin, ChatTurnsMixin, ft.Contain
                 msg.content or "",
                 sources=msg.sources,
                 notify=False,
+                created_at=msg.created_at,
             )
 
         # One update + one scroll for the whole history instead of one per message.
@@ -696,7 +698,12 @@ class ChatView(ChatAttachmentsMixin, ChatScrollMixin, ChatTurnsMixin, ft.Contain
             safe_update(self, *changed)
 
     def add_message(
-        self, role: str, text: str, sources: list | None = None, notify: bool = True
+        self,
+        role: str,
+        text: str,
+        sources: list | None = None,
+        notify: bool = True,
+        created_at: datetime | None = None,
     ) -> ChatMessage:
         is_user = role == "user"
         on_regenerate = self.regenerate_last if not is_user else None
@@ -708,6 +715,7 @@ class ChatView(ChatAttachmentsMixin, ChatScrollMixin, ChatTurnsMixin, ft.Contain
             on_regenerate=on_regenerate,
             api_client=self.api_client,
             user_name=self.display_name,
+            created_at=created_at,
         )
 
         container_wrapper = ft.Container(

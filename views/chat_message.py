@@ -8,6 +8,7 @@ is drawn (P20); the sources panel gets its strings from ``views.sources``.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 import flet as ft
 
@@ -18,6 +19,7 @@ from views.links import WEB_PREFIXES, link_host, link_question
 from views.markdown_safety import disarm_images
 from views.proposals import ProposalCard
 from views.sources import as_source, source_details, source_snippet, source_title
+from views.timeline import when_label
 from views.ui_utils import (
     close_dialog,
     confirm_dialog,
@@ -49,9 +51,13 @@ class ChatMessage(ft.Column):
         on_regenerate: callable | None = None,
         api_client: APIClient | None = None,
         user_name: str = DEFAULT_DISPLAY_NAME,
+        created_at: datetime | None = None,
     ):
         super().__init__()
         self.role = role
+        # When the message was written; ``None`` when that is not known (it is then
+        # not shown, rather than guessed).
+        self.created_at = created_at
         self.api_client = api_client
         self.text_value = text
         self.sources = sources or []
@@ -104,7 +110,14 @@ class ChatMessage(ft.Column):
             on_click=self.copy_to_clipboard,
         )
 
-        top_controls = [self.sender_label, self.copy_btn]
+        self.time_label = ft.Text(
+            when_label(created_at) if created_at else "",
+            size=11,
+            color=ft.Colors.GREY_600,
+            visible=created_at is not None,
+        )
+
+        top_controls = [self.sender_label, self.time_label, self.copy_btn]
         if role != "user":
             self.regenerate_btn = ft.IconButton(
                 icon=ft.Icons.REFRESH,

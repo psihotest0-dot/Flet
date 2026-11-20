@@ -25,6 +25,7 @@ from api.errors import APIError, StreamError
 from api.limits import MESSAGE_TOKEN_LIMIT
 from api.stream import ModelUsed, Proposals, Sources, TextChunk
 from views.attachments import estimate_message_tokens
+from views.timeline import now
 from views.ui_utils import describe_error, safe_update, show_snackbar
 
 logger = logging.getLogger(__name__)
@@ -181,8 +182,8 @@ class ChatTurnsMixin:
         if self._last_assistant_msg:
             self._last_assistant_msg.set_regenerate_visible(False)
 
-        self.add_message("user", text, notify=False)
-        chat_message = self.add_message("assistant", "", notify=False)
+        self.add_message("user", text, notify=False, created_at=now())
+        chat_message = self.add_message("assistant", "", notify=False, created_at=now())
         safe_update(self)
         self.scroll_to_bottom()
 
@@ -234,7 +235,9 @@ class ChatTurnsMixin:
         error = None
         try:
             self._set_streaming_ui(True)
-            chat_message = self.add_message("assistant", "", notify=False)
+            chat_message = self.add_message(
+                "assistant", "", notify=False, created_at=now()
+            )
             safe_update(self)
             self.scroll_to_bottom()
             error = await self._stream_response(
