@@ -481,8 +481,6 @@ class OracleView(ft.Container):
             page = await self.api_client.list_oracle_decisions(
                 limit=PAGE_SIZE, symbol=self._symbol
             )
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:
             if generation == self._generation:
                 logger.error(
@@ -512,8 +510,6 @@ class OracleView(ft.Container):
             page = await self.api_client.list_oracle_decisions(
                 limit=PAGE_SIZE, before_id=self._next_before_id, symbol=self._symbol
             )
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:
             if generation == self._generation:
                 logger.error(
@@ -554,8 +550,6 @@ class OracleView(ft.Container):
                     or not self._progress_ready
                 ):
                     await self.refresh_progress()
-            except asyncio.CancelledError:
-                raise
             except Exception as ex:
                 # One line when it starts to fail, not one per poll while the
                 # backend is down; the tab itself says that it is stale.
@@ -622,8 +616,6 @@ class OracleView(ft.Container):
             page_size = PROGRESS_PAGE_SIZE if newest == 0 else PROGRESS_POLL_PAGE_SIZE
             try:
                 fresh = await self._read_journal_since(newest, page_size)
-            except asyncio.CancelledError:
-                raise
             except Exception as ex:
                 if not self._progress_failed:
                     logger.warning(

@@ -478,8 +478,6 @@ class ChatView(ft.Container):
         old_id = self.session_id
         try:
             await self.api_client.delete_session(old_id)
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:
             logger.error(
                 "Failed to delete chat %s on the backend: %s",
@@ -537,8 +535,6 @@ class ChatView(ft.Container):
             return
         try:
             await self.chat_list.scroll_to(offset=-1, duration=duration)
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:  # noqa: BLE001
             logger.debug("The chat was not scrolled: %s", ex)
 
@@ -616,8 +612,6 @@ class ChatView(ft.Container):
             return
         try:
             await self.input_field.focus()
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:  # noqa: BLE001
             logger.debug("The message field was not focused: %s", ex)
 
@@ -645,8 +639,6 @@ class ChatView(ft.Container):
         session_id = self.session_id
         try:
             found = await self.api_client.list_attachments(session_id)
-        except asyncio.CancelledError:
-            raise
         except Exception as e:
             # Not worth a message on screen: the chat works without the row, and the
             # next attach or reload reads the list again.
@@ -685,8 +677,6 @@ class ChatView(ft.Container):
         attachment_id = e.control.data
         try:
             await self.api_client.delete_attachment(attachment_id)
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:
             if isinstance(ex, APIError) and ex.status == 404:
                 # Gone already (another window, or it expired): the list is just stale.
@@ -712,8 +702,6 @@ class ChatView(ft.Container):
                 allow_multiple=True,
                 file_type=ft.FilePickerFileType.ANY,
             )
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:
             logger.error("The file dialog failed: %s", ex, exc_info=is_unexpected(ex))
             show_snackbar(self.page_ref, "Диалогът за избор на файл не се отвори.")
@@ -741,8 +729,6 @@ class ChatView(ft.Container):
                 raw = await asyncio.to_thread(Path(picked.path).read_bytes)
                 text = read_text_file(raw, picked.name)
                 await self._store_attachment(picked.name, text)
-            except asyncio.CancelledError:
-                raise
             except NotAttachable as ex:
                 # The screen names the file; the log only says what kind it was.
                 logger.warning("Skipped %s: %s", file_kind(picked.name), ex.reason)
@@ -826,8 +812,6 @@ class ChatView(ft.Container):
         name = paste_file_name(text, {a.name for a in self.attachments})
         try:
             await self._store_attachment(name, text)
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:
             logger.error(
                 "Failed to attach the pasted text: %s", ex, exc_info=is_unexpected(ex)
@@ -876,8 +860,6 @@ class ChatView(ft.Container):
             messages = await self.api_client.get_messages(
                 session_id=session_id, limit=HISTORY_REQUEST_LIMIT
             )
-        except asyncio.CancelledError:
-            raise
         except Exception as e:
             logger.error(
                 "Failed to load the history of chat %s: %s",

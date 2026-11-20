@@ -344,8 +344,6 @@ class FilesView(ft.Container):
     async def initial_load(self, *_args):
         try:
             files = await self.api_client.list_files()
-        except asyncio.CancelledError:
-            raise
         except Exception as e:
             logger.error("Failed to load files: %s", e, exc_info=is_unexpected(e))
             show_snackbar(self.page_ref, "Неуспешно зареждане на файловете.")
@@ -468,8 +466,6 @@ class FilesView(ft.Container):
         """Refresh many unfinished files with one GET /v1/files."""
         try:
             fresh = await self.api_client.list_files()
-        except asyncio.CancelledError:
-            raise
         except Exception as e:
             logger.warning(
                 "Failed to refresh %d file statuses: %s",
@@ -494,8 +490,6 @@ class FilesView(ft.Container):
                 file_type=ft.FilePickerFileType.CUSTOM,
                 allowed_extensions=list(SUPPORTED_EXTENSIONS),
             )
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:
             logger.error("The file dialog failed: %s", ex, exc_info=is_unexpected(ex))
             show_snackbar(self.page_ref, "Диалогът за избор на файл не се отвори.")
@@ -541,8 +535,6 @@ class FilesView(ft.Container):
                     result = await self.api_client.upload_file(Path(f.path), f.name)
                     if result.duplicate:
                         duplicates.append(f.name)
-                except asyncio.CancelledError:
-                    raise
                 except Exception as ex:
                     logger.error(
                         "Failed to upload %s: %s",
@@ -642,8 +634,6 @@ class FilesView(ft.Container):
                 updated_file = await self.api_client.update_file_category(
                     file_id, new_category
                 )
-            except asyncio.CancelledError:
-                raise
             except Exception as ex:
                 logger.error(
                     "Failed to update category: %s", ex, exc_info=is_unexpected(ex)
@@ -682,8 +672,6 @@ class FilesView(ft.Container):
 
             try:
                 await self.api_client.delete_file(file_id)
-            except asyncio.CancelledError:
-                raise
             except Exception as ex:
                 logger.error(
                     "Failed to delete file: %s", ex, exc_info=is_unexpected(ex)

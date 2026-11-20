@@ -8,7 +8,6 @@ shown as a card with the text and two buttons.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Callable
 
@@ -195,8 +194,6 @@ class ProposalCard(ft.Container):
                 await self.api_client.approve_proposal(self.proposal.id)
             else:
                 await self.api_client.reject_proposal(self.proposal.id)
-        except asyncio.CancelledError:
-            raise
         except APIError as ex:
             if ex.status in CLOSED_STATUSES:
                 # Decided elsewhere (Telegram) or expired: nothing is left to do here.

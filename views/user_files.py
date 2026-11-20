@@ -149,8 +149,6 @@ class UserFilesView(ft.Container):
         safe_update(self, self.progress)
         try:
             listing = await self.api_client.list_user_files()
-        except asyncio.CancelledError:
-            raise
         except APIError as ex:
             if sequence == self._load_seq:
                 if ex.status == 404:
@@ -242,8 +240,6 @@ class UserFilesView(ft.Container):
         """The writes to files that wait for an answer. A failure leaves the list as it was."""
         try:
             proposals = await self.api_client.list_proposals()
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:
             logger.warning(
                 "Failed to load proposals: %s", ex, exc_info=is_unexpected(ex)
@@ -274,8 +270,6 @@ class UserFilesView(ft.Container):
     async def open_file(self, info: UserFileInfo):
         try:
             current = await self.api_client.get_user_file(info.name)
-        except asyncio.CancelledError:
-            raise
         except APIError as ex:
             logger.error("Failed to open a file of the assistant: %s", ex)
             show_snackbar(
@@ -313,8 +307,6 @@ class UserFilesView(ft.Container):
             else:
                 try:
                     previous = await self.api_client.get_user_file(name, previous=True)
-                except asyncio.CancelledError:
-                    raise
                 except APIError as ex:
                     if ex.status != 404:
                         logger.error("Failed to open a previous version: %s", ex)
@@ -380,8 +372,6 @@ class UserFilesView(ft.Container):
 
         try:
             await self.api_client.delete_user_file(info.name)
-        except asyncio.CancelledError:
-            raise
         except APIError as ex:
             if ex.status != 404:  # 404: already gone, the reload below shows it
                 logger.error("Failed to delete a file of the assistant: %s", ex)

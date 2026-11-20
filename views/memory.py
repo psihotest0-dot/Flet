@@ -261,8 +261,6 @@ class MemoryRow(ft.DataRow):
                 status=self.memory.status,
                 importance=new_importance,
             )
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:
             logger.error("Failed to update memory: %s", ex, exc_info=is_unexpected(ex))
             show_snackbar(
@@ -289,8 +287,6 @@ class MemoryRow(ft.DataRow):
                 status="active",
                 importance=importance_or_default(self.memory.importance),
             )
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:
             logger.error(
                 "Failed to activate memory: %s", ex, exc_info=is_unexpected(ex)
@@ -318,8 +314,6 @@ class MemoryRow(ft.DataRow):
 
         try:
             await self.view.api_client.delete_memory(self.memory.id)
-        except asyncio.CancelledError:
-            raise
         except APIError as ex:
             # 404: the memory is gone already (deleted from another client). What the
             # user wanted is true, so the row goes too.
@@ -518,8 +512,6 @@ class MemoryView(ft.Container):
         safe_update(self, self.progress)
         try:
             memories = await self.api_client.list_memories(status=status)
-        except asyncio.CancelledError:
-            raise
         except Exception as e:
             logger.error("Failed to load memories: %s", e, exc_info=is_unexpected(e))
             show_snackbar(self.page_ref, "Неуспешно зареждане на спомените.")
@@ -566,8 +558,6 @@ class MemoryView(ft.Container):
     async def load_proposals(self):
         try:
             proposals = await self.api_client.list_proposals()
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:
             logger.warning(
                 "Failed to load proposals: %s", ex, exc_info=is_unexpected(ex)
@@ -598,8 +588,6 @@ class MemoryView(ft.Container):
     async def load_rules(self):
         try:
             rules = await self.api_client.list_rules()
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:
             logger.warning(
                 "Failed to load global rules: %s", ex, exc_info=is_unexpected(ex)
@@ -650,8 +638,6 @@ class MemoryView(ft.Container):
 
         try:
             await self.api_client.delete_rule(rule.id)
-        except asyncio.CancelledError:
-            raise
         except APIError as ex:
             if ex.status != 404:  # 404: already gone, the reload below shows it
                 logger.error("Failed to delete rule: %s", ex)
@@ -707,8 +693,6 @@ class MemoryView(ft.Container):
                 status=NEW_MEMORY_STATUS,
                 importance=int(self.new_importance.value or DEFAULT_IMPORTANCE),
             )
-        except asyncio.CancelledError:
-            raise
         except APIError as ex:
             logger.error("Failed to create memory: %s", ex)
             # 409: the backend already holds a memory with exactly this text.

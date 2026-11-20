@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import ipaddress
 import logging
 from collections.abc import Callable
@@ -246,8 +245,6 @@ class SettingsDialog:
             # The probe has to use the typed address, not the saved client.
             async with APIClient(base_url=url, user_id=self.user_id) as client:
                 healthy = await client.check_health()
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:
             logger.warning(
                 "Connection check failed: %s", ex, exc_info=is_unexpected(ex)

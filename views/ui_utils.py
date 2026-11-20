@@ -89,8 +89,6 @@ async def copy_text(page: ft.Page | None, text: str) -> bool:
         return False
     try:
         await _service(page, ft.Clipboard).set(text)
-    except asyncio.CancelledError:
-        raise
     except Exception as ex:  # noqa: BLE001
         logger.warning("Could not copy to the clipboard: %s", ex)
         return False
@@ -103,8 +101,6 @@ async def open_url(page: ft.Page | None, url: str) -> bool:
         return False
     try:
         await _service(page, ft.UrlLauncher).launch_url(url)
-    except asyncio.CancelledError:
-        raise
     except Exception as ex:  # noqa: BLE001
         logger.warning("Could not open the link: %s", ex)
         return False

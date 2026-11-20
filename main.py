@@ -126,8 +126,6 @@ async def run_health_checks(probe, on_change, interval: float = HEALTH_CHECK_INT
     while True:
         try:
             is_healthy = await probe()
-        except asyncio.CancelledError:
-            raise
         except Exception as ex:
             logger.warning("Health check failed: %s", ex, exc_info=is_unexpected(ex))
             is_healthy = False
