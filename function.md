@@ -150,7 +150,7 @@
 | `delete_attachment(attachment_id)` | `DELETE /chat/attachments/{id}` | Маха прикачен файл. |
 | `list_files()` | `GET /v1/files` | Списък на файловете. |
 | `get_file_status(file_id)` | `GET /v1/files/{id}` | Текущ статус на един файл. |
-| `update_file_category(file_id, category)` | `PATCH /v1/files/{id}/category` | Сменя категорията (с `manual_override`). |
+| `update_file_category(file_id, category)` | `PATCH /v1/files/{id}/category` | Сменя категорията; че е по избор на потребителя (`manual_override`), бекендът отбелязва сам. |
 | `get_messages(session_id, limit)` | `GET /messages` | Съобщенията на сесия, най-старите първо. |
 | `create_memory(content, status, source_message_id, importance, metadata)` | `POST /memories` | Нов спомен; без зададена важност праща 5. |
 | `list_memories(status)` | `GET /memories` | Спомените, по избор по статус. |

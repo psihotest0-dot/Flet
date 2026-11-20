@@ -274,7 +274,9 @@ class APIClient:
 
     async def update_file_category(self, file_id: str, category: str) -> IngestedFile:
         """Update the category of a file."""
-        payload = {"category": category, "manual_override": True}
+        # Only the category: the backend itself marks the file as set by the user
+        # (``manual_override`` is in the answer, not in the request).
+        payload = {"category": category}
         response = await self.client.patch(
             f"/v1/files/{file_id}/category", json=payload
         )
