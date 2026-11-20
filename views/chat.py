@@ -33,6 +33,7 @@ from state.chat_sessions import (
 )
 from state.settings import Settings, load_settings, save_settings
 from views.chat_attachments import ChatAttachmentsMixin
+from views.chat_export import ChatExportMixin
 from views.chat_message import ChatMessage
 from views.chat_scroll import SCROLL_EVENT_INTERVAL, ChatScrollMixin
 from views.chat_turns import ChatTurnsMixin
@@ -92,7 +93,13 @@ CLOUD_MODE_VIEW = {
 CLOUD_MODE_USE_PAID = {"auto": None, "cloud": True, "home": False}
 
 
-class ChatView(ChatAttachmentsMixin, ChatScrollMixin, ChatTurnsMixin, ft.Container):
+class ChatView(
+    ChatAttachmentsMixin,
+    ChatExportMixin,
+    ChatScrollMixin,
+    ChatTurnsMixin,
+    ft.Container,
+):
     """The main view for the chat interface (the parts are mixins, see the module)."""
 
     def __init__(
@@ -136,6 +143,8 @@ class ChatView(ChatAttachmentsMixin, ChatScrollMixin, ChatTurnsMixin, ft.Contain
         self._follow_bottom = True
         # True while a _scroll_after_layout task is waiting to scroll.
         self._scroll_pending = False
+        # True when the history has older messages than the ones on the screen.
+        self._history_truncated = False
 
         self.expand = True
 
@@ -176,10 +185,20 @@ class ChatView(ChatAttachmentsMixin, ChatScrollMixin, ChatTurnsMixin, ft.Contain
             icon=ft.Icons.EDIT,
             on_click=self.on_rename_click,
         )
+        self.copy_item = ft.PopupMenuItem(
+            content="Копирай разговора",
+            icon=ft.Icons.COPY_ALL,
+            on_click=self.on_copy_conversation_click,
+        )
+        self.export_item = ft.PopupMenuItem(
+            content="Запази като файл (.md)",
+            icon=ft.Icons.SAVE_ALT,
+            on_click=self.on_export_click,
+        )
         self.more_btn = ft.PopupMenuButton(
             icon=ft.Icons.MORE_VERT,
             tooltip="Още за този чат",
-            items=[self.rename_item],
+            items=[self.rename_item, self.copy_item, self.export_item],
         )
 
         self.top_row = ft.Row(
@@ -268,6 +287,7 @@ class ChatView(ChatAttachmentsMixin, ChatScrollMixin, ChatTurnsMixin, ft.Contain
         self._last_assistant_msg = None
         self._last_assistant_row = None
         self._follow_bottom = True
+        self._history_truncated = False
         self.chat_list.controls.clear()
         # The files of the other conversation are not this one's.
         self.attachments = []
@@ -293,9 +313,14 @@ class ChatView(ChatAttachmentsMixin, ChatScrollMixin, ChatTurnsMixin, ft.Contain
         self.send_btn.visible = not streaming
         self.stop_btn.visible = streaming
         self.stop_btn.disabled = False
-        # Removing a chat would cut the answer that is being written into it.
+        # Removing a chat would cut the answer that is being written into it, and
+        # a copy or a file of it would hold half an answer that looks finished.
         self.delete_chat_btn.disabled = streaming
-        safe_update(self, self.send_btn, self.stop_btn, self.delete_chat_btn)
+        self.copy_item.disabled = streaming
+        self.export_item.disabled = streaming
+        safe_update(
+            self, self.send_btn, self.stop_btn, self.delete_chat_btn, self.more_btn
+        )
 
     @staticmethod
     def _dropdown_options(chats: list[ChatSession]) -> list[ft.DropdownOption]:
@@ -654,6 +679,7 @@ class ChatView(ChatAttachmentsMixin, ChatScrollMixin, ChatTurnsMixin, ft.Contain
         self._last_assistant_row = None
 
         truncated = len(messages) > HISTORY_PAGE_SIZE
+        self._history_truncated = truncated
         visible = messages[-HISTORY_PAGE_SIZE:] if truncated else messages
         if truncated:
             self.chat_list.controls.append(
@@ -687,10 +713,8 @@ class ChatView(ChatAttachmentsMixin, ChatScrollMixin, ChatTurnsMixin, ft.Contain
         """Use ``name`` for the user's messages, the ones already on screen too."""
         self.display_name = name
         changed = []
-        for row in self.chat_list.controls:
-            container = row.controls[0] if getattr(row, "controls", None) else None
-            message = getattr(container, "content", None)
-            if isinstance(message, ChatMessage) and message.role == "user":
+        for message in self._messages_on_screen():
+            if message.role == "user":
                 message.sender_name = name
                 message.sender_label.value = name
                 changed.append(message.sender_label)
