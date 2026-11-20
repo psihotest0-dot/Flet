@@ -7,6 +7,7 @@ import pytest
 from helpers import mounted
 
 import views.chat as chat_module
+from api.stream import TextChunk
 from views.chat import BOTTOM_FOLLOW_THRESHOLD, ChatView
 
 
@@ -202,8 +203,8 @@ def scrolls_scheduled(mock_page, view):
 @pytest.mark.asyncio
 async def test_streamed_text_keeps_the_end_in_view(view, mock_api_client, mock_page):
     async def fake_stream(**_kwargs):
-        yield "first "
-        yield "second"
+        yield TextChunk("first ")
+        yield TextChunk("second")
 
     mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: fake_stream(**kw))
     view.scroll_to_bottom = MagicMock()
@@ -221,7 +222,7 @@ async def test_stream_does_not_pull_back_a_reader_who_went_up(
     view, mock_api_client, mock_page
 ):
     async def fake_stream(**_kwargs):
-        yield "text"
+        yield TextChunk("text")
 
     mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: fake_stream(**kw))
     view.scroll_to_bottom = MagicMock()

@@ -15,6 +15,7 @@ from helpers import mounted
 from api.client import APIClient
 from api.errors import APIError
 from api.models import ChatAttachment
+from api.stream import TextChunk
 from views.attachments import (
     MAX_FILE_BYTES,
     MESSAGE_TOKEN_LIMIT,
@@ -710,7 +711,7 @@ async def test_a_message_over_the_limit_that_the_user_keeps_is_not_sent_either(
 @pytest.mark.asyncio
 async def test_a_message_of_exactly_the_limit_is_sent_as_it_is(view, mock_api_client):
     async def stream(**_kwargs):
-        yield "ok"
+        yield TextChunk("ok")
 
     mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: stream(**kw))
     view.input_field.value = "a" * (MESSAGE_TOKEN_LIMIT * 4)
@@ -731,7 +732,7 @@ async def test_a_paste_right_after_sending_is_measured_against_an_empty_field(
     view, mock_api_client
 ):
     async def stream(**_kwargs):
-        yield "ok"
+        yield TextChunk("ok")
 
     mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: stream(**kw))
     view.input_field.value = "ред\n" * 1500  # a long message that was sent

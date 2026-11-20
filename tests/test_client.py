@@ -18,6 +18,7 @@ from api.limits import (
     is_supported_file,
 )
 from api.models import IngestedFile, Memory, UploadResult
+from api.stream import Proposals, Sources, TextChunk, Working
 
 
 @pytest.fixture
@@ -663,9 +664,8 @@ async def test_stream_chat_success(client):
     generator = client.stream_chat(session_id="session-123", content="Hi")
     results = [item async for item in generator]
 
-    assert len(results) == 2
-    assert results[0] == {"content": "Hello"}
-    assert results[1] == {"source": "Doc 1"}
+    # A frame with nothing to show is still an event: the backend is alive.
+    assert results == [TextChunk("Hello"), Working()]
 
 
 @respx.mock
@@ -749,9 +749,7 @@ async def test_stream_chat_json_decode_error(client):
     generator = client.stream_chat(session_id="session-123", content="Hi")
     results = [item async for item in generator]
 
-    assert len(results) == 2
-    assert results[0] == "invalid_json"
-    assert results[1] == {"type": "sources", "data": "invalid_sources_json"}
+    assert results == [TextChunk("invalid_json"), Working()]
 
 
 @respx.mock
@@ -1177,9 +1175,9 @@ async def test_both_chat_endpoints_share_one_reader(client, method, path, args, 
     results = [item async for item in getattr(client, method)(*args)]
 
     assert results == [
-        {"type": "sources", "data": [{"title": "a.pdf"}]},
-        {"content": "Hello"},
-        {"type": "proposals", "data": [{"id": 1}]},
+        Sources([{"title": "a.pdf"}]),
+        TextChunk("Hello"),
+        Proposals([{"id": 1}]),
     ]
     assert json.loads(route.calls[0].request.content) == sent
     assert route.calls[0].request.headers["X-User-ID"] == client.user_id
@@ -1221,7 +1219,10 @@ async def test_stream_chunk_that_is_not_an_object_does_not_crash(client):
         )
     )
 
-    assert [item async for item in client.stream_chat("s1", "Hi")] == [123, "text"]
+    assert [item async for item in client.stream_chat("s1", "Hi")] == [
+        Working(),
+        TextChunk("text"),
+    ]
 
 
 @respx.mock
@@ -1236,7 +1237,7 @@ async def test_undecodable_frame_is_logged_by_size_not_by_content(client, caplog
     with caplog.at_level(logging.ERROR, logger="api.client"):
         results = [item async for item in client.stream_chat("s1", "Hi")]
 
-    assert results == ["private words of the answer"]
+    assert results == [TextChunk("private words of the answer")]
     assert "Could not decode a stream chunk (27 characters)" in caplog.text
     assert "private words" not in caplog.text
 

@@ -13,6 +13,7 @@ from helpers import mounted
 from api.client import APIClient
 from api.errors import APIError
 from api.models import Proposal, Rule
+from api.stream import Proposals, TextChunk
 from views.chat import ChatView
 from views.chat_message import ChatMessage
 from views.memory import MemoryView
@@ -192,8 +193,8 @@ async def test_streams_deliver_the_proposals_event(client, method, path, args):
     results = [item async for item in getattr(client, method)(**args)]
 
     assert results == [
-        {"content": "Предлагам"},
-        {"type": "proposals", "data": [{"id": 17, "summary": "x"}]},
+        TextChunk("Предлагам"),
+        Proposals([{"id": 17, "summary": "x"}]),
     ]
 
 
@@ -211,9 +212,7 @@ async def test_a_malformed_proposals_event_is_skipped(client, data):
 
     results = [item async for item in client.stream_chat(session_id="s", content="hi")]
 
-    assert results == [{"content": "ok"}], (
-        "the answer survives a broken proposals event"
-    )
+    assert results == [TextChunk("ok")], "the answer survives a broken proposals event"
 
 
 # ----------------------------------------------------------------------- card
@@ -431,8 +430,8 @@ async def test_the_stream_puts_the_proposals_under_the_answer(mock_page):
     api_client.list_memories = AsyncMock(return_value=[])
 
     async def stream(**_kwargs):
-        yield {"content": "Предлагам да го запомня."}
-        yield {"type": "proposals", "data": [RULE]}
+        yield TextChunk("Предлагам да го запомня.")
+        yield Proposals([RULE])
 
     api_client.stream_chat = MagicMock(side_effect=lambda **kwargs: stream(**kwargs))
     view = ChatView(mock_page, api_client)

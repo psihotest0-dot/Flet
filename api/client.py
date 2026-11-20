@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -20,7 +19,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from api.errors import APIError, StreamError
+from api.errors import APIError
 from api.limits import DEFAULT_IMPORTANCE, MAX_UPLOAD_BYTES
 from api.models import (
     ChatAttachment,
@@ -34,23 +33,9 @@ from api.models import (
     UserFile,
     UserFileList,
 )
+from api.stream import StreamEvent, parse_frame
 
 logger = logging.getLogger(__name__)
-
-
-def _stream_error_text(data: str) -> str:
-    """The text of an ``event: error`` frame.
-
-    The backend sends ``{"error": "..."}`` (with a ``request_id`` to find the
-    cause in its log); a plain-text frame is used as it is.
-    """
-    try:
-        payload = json.loads(data)
-    except json.JSONDecodeError:
-        return data
-    if isinstance(payload, dict) and payload.get("error"):
-        return str(payload["error"])
-    return data
 
 
 FILES_PATH = "/workspace/files/"
@@ -447,7 +432,7 @@ class APIClient:
 
     def regenerate_chat(
         self, session_id: str, use_paid: bool | None = None
-    ) -> AsyncIterator[Any]:
+    ) -> AsyncIterator[StreamEvent]:
         """Stream a regenerated chat response from the backend using Server-Sent Events (SSE).
 
         ``use_paid`` is the choice of the model, as for :meth:`stream_chat`.
@@ -459,7 +444,7 @@ class APIClient:
 
     def stream_chat(
         self, session_id: str, content: str, use_paid: bool | None = None
-    ) -> AsyncIterator[Any]:
+    ) -> AsyncIterator[StreamEvent]:
         """Stream a chat response from the backend using Server-Sent Events (SSE).
 
         ``use_paid`` is the choice of the model for this turn: ``True`` - the paid
@@ -473,17 +458,13 @@ class APIClient:
 
     async def _stream_sse(
         self, path: str, payload: dict[str, Any]
-    ) -> AsyncIterator[Any]:
-        """POST ``payload`` to ``path`` and yield what the backend streams back.
+    ) -> AsyncIterator[StreamEvent]:
+        """POST ``payload`` to ``path`` and yield the events the backend streams back.
 
-        Both chat endpoints write the same events (``sources``, text chunks,
-        ``proposals``, ``model``, ``[DONE]``, ``error``), so one reader serves them. It
-        yields ``{"type": "sources" | "proposals" | "model", "data": ...}`` for those
-        three events and the decoded chunk for the rest. An ``error`` event raises
-        :class:`StreamError`, a refused request :class:`APIError`.
-
-        What the model wrote and what the documents say never reach the log: an
-        undecodable frame is reported by its size only.
+        Both chat endpoints write the same frames (``sources``, text chunks,
+        ``proposals``, ``model``, ``[DONE]``, ``error``), so one reader serves them;
+        ``api.stream.parse_frame`` turns a frame into typed events. An ``error``
+        frame raises :class:`StreamError`, a refused request :class:`APIError`.
         """
         async with aconnect_sse(
             self.client,
@@ -503,50 +484,5 @@ class APIClient:
             async for sse in event_source.aiter_sse():
                 if sse.data == "[DONE]":
                     break
-
-                if sse.event == "error":
-                    raise StreamError(_stream_error_text(sse.data))
-                elif sse.event == "sources":
-                    try:
-                        yield {"type": "sources", "data": json.loads(sse.data)}
-                    except json.JSONDecodeError as e:
-                        logger.error(
-                            "Could not decode the sources frame (%d characters): %s",
-                            len(sse.data),
-                            e,
-                        )
-                        yield {"type": "sources", "data": sse.data}
-                elif sse.event == "model":
-                    # Who answered; a frame this client cannot read is not worth a failure.
-                    try:
-                        who = json.loads(sse.data)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(who, dict):
-                        yield {"type": "model", "data": who}
-                elif sse.event == "proposals":
-                    try:
-                        proposals = json.loads(sse.data)
-                    except json.JSONDecodeError as e:
-                        logger.error(
-                            "Could not decode the proposals frame (%d characters): %s",
-                            len(sse.data),
-                            e,
-                        )
-                        continue
-                    if isinstance(proposals, list):
-                        yield {"type": "proposals", "data": proposals}
-                else:
-                    try:
-                        chunk = json.loads(sse.data)
-                    except json.JSONDecodeError as e:
-                        logger.error(
-                            "Could not decode a stream chunk (%d characters): %s",
-                            len(sse.data),
-                            e,
-                        )
-                        yield sse.data
-                        continue
-                    if isinstance(chunk, dict) and "error" in chunk:
-                        raise StreamError(str(chunk["error"] or "Unknown error"))
-                    yield chunk
+                for event in parse_frame(sse.event, sse.data):
+                    yield event

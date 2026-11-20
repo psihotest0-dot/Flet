@@ -11,6 +11,7 @@ import pytest
 import respx
 
 from api.client import APIClient
+from api.stream import ModelUsed, TextChunk
 from state.chat_sessions import restart_chat_session
 from state.settings import Settings, load_settings, save_settings
 from views.chat import ChatView
@@ -43,7 +44,7 @@ def make_view(mock_page, mock_api_client, **kwargs) -> ChatView:
 
 async def send(view: ChatView, mock_api_client, text: str = "здравей") -> None:
     async def stream(**_kwargs):
-        yield {"content": "здрасти"}
+        yield TextChunk("здрасти")
 
     mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: stream(**kw))
     view.input_field.value = text
@@ -218,7 +219,7 @@ async def test_the_regeneration_carries_the_choice_too(mock_page, mock_api_clien
     await send(view, mock_api_client)
 
     async def stream(**_kwargs):
-        yield {"content": "ново"}
+        yield TextChunk("ново")
 
     mock_api_client.regenerate_chat = MagicMock(side_effect=lambda **kw: stream(**kw))
     await view.regenerate_last()
@@ -285,11 +286,8 @@ async def test_the_stream_marks_the_message_with_who_answered(
     view = make_view(mock_page, mock_api_client)
 
     async def stream(**_kwargs):
-        yield {"content": "здрасти"}
-        yield {
-            "type": "model",
-            "data": {"provider": "deepseek", "model": "deepseek-flash"},
-        }
+        yield TextChunk("здрасти")
+        yield ModelUsed({"provider": "deepseek", "model": "deepseek-flash"})
 
     mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: stream(**kw))
     view.input_field.value = "здравей"
@@ -355,6 +353,6 @@ async def test_the_client_hands_on_who_answered_and_ignores_a_bad_frame():
     results = [x async for x in client.stream_chat("s", "c")]
 
     assert results == [
-        {"content": "Hi"},
-        {"type": "model", "data": {"provider": "deepseek", "model": "deepseek-flash"}},
+        TextChunk("Hi"),
+        ModelUsed({"provider": "deepseek", "model": "deepseek-flash"}),
     ]

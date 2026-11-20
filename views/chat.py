@@ -15,6 +15,7 @@ import httpx
 from api.client import APIClient
 from api.errors import APIError, StreamError
 from api.models import ChatAttachment
+from api.stream import ModelUsed, Proposals, Sources, TextChunk
 from state.chat_sessions import (
     ChatSession,
     ensure_chat_session,
@@ -1026,46 +1027,26 @@ class ChatView(ft.Container):
             nonlocal pending_text, last_chunk_time
             last_flush_time = time.monotonic()
             try:
-                async for chunk in stream_coro:
+                async for event in stream_coro:
                     last_chunk_time = time.monotonic()
                     chat_message.hide_activity_indicator()
 
                     if self._stop_generation:
                         break
 
-                    if isinstance(chunk, dict):
-                        if chunk.get("type") == "sources":
-                            data = chunk.get("data", {})
-                            if isinstance(data, list):
-                                chat_message.add_sources(data)
-                            elif isinstance(data, dict):
-                                for key in ("facts", "chunks", "sources"):
-                                    if isinstance(data.get(key), list):
-                                        chat_message.add_sources(data[key])
+                    match event:
+                        case Sources(items):
+                            chat_message.add_sources(items)
                             continue
-
-                        if chunk.get("type") == "proposals":
-                            chat_message.add_proposals(chunk.get("data") or [])
+                        case Proposals(items):
+                            chat_message.add_proposals(items)
                             continue
-
-                        if chunk.get("type") == "model":
-                            chat_message.set_model(chunk.get("data") or {})
+                        case ModelUsed(who):
+                            chat_message.set_model(who)
                             continue
-
-                        for key in ("text", "content"):
-                            value = chunk.get(key)
-                            if isinstance(value, str):
-                                pending_text += value
-
-                        if "error" in chunk:
-                            pending_text += f"\n\n**Грешка:** {chunk['error']}"
-
-                        for source_key in ("facts", "chunks", "sources"):
-                            if isinstance(chunk.get(source_key), list):
-                                chat_message.add_sources(chunk[source_key])
-
-                    elif isinstance(chunk, str):
-                        pending_text += chunk
+                        case TextChunk(text):
+                            pending_text += text
+                        # Working: nothing to show, but the stream is alive.
 
                     current_time = time.monotonic()
                     if current_time - last_flush_time >= STREAM_FLUSH_INTERVAL:

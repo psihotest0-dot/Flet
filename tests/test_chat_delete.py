@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from api.errors import APIError
+from api.stream import TextChunk
 from state.chat_sessions import restart_chat_session
 from state.settings import Settings, load_settings, save_settings
 from views.chat import ChatView
@@ -124,7 +125,7 @@ async def test_the_next_message_goes_to_the_new_session(mock_page, mock_api_clie
     new_id = view.session_id
 
     async def stream(**_kwargs):
-        yield {"content": "здрасти"}
+        yield TextChunk("здрасти")
 
     mock_api_client.stream_chat = MagicMock(
         side_effect=lambda **kwargs: stream(**kwargs)

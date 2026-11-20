@@ -16,6 +16,7 @@ from helpers import mounted
 from api.errors import APIError, StreamError
 from api.limits import SUPPORTED_EXTENSIONS
 from api.models import IngestedFile, Memory, Message, UploadResult
+from api.stream import Sources, TextChunk, Working
 from state.chat_sessions import (
     ChatSession,
     normalize_chat_sessions,
@@ -27,6 +28,7 @@ from views.chat import (
     HISTORY_REQUEST_LIMIT,
     ChatView,
 )
+from views.chat_message import ChatMessage
 from views.files import (
     BULK_POLL_THRESHOLD,
     FILTER_ALL,
@@ -338,10 +340,10 @@ async def test_sources_of_a_second_frame_join_the_first_ones(
     }
 
     async def fake_stream(**_kwargs):
-        yield {"type": "sources", "data": [summary]}
-        yield {"type": "sources", "data": [passage]}
-        yield {"type": "sources", "data": [passage]}  # a repeated frame adds nothing
-        yield {"content": "Отговор"}
+        yield Sources([summary])
+        yield Sources([passage])
+        yield Sources([passage])  # a repeated frame adds nothing
+        yield TextChunk("Отговор")
 
     mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: fake_stream(**kw))
     chat_view.input_field.value = "какво пише в книгата"
@@ -359,7 +361,7 @@ async def test_sources_of_a_second_frame_join_the_first_ones(
 async def test_streaming_does_not_update_view_per_chunk(chat_view, mock_api_client):
     async def fake_stream(**_kwargs):
         for _ in range(100):
-            yield "chunk"
+            yield TextChunk("chunk")
 
     mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: fake_stream(**kw))
     chat_view.input_field.value = "hi"
@@ -370,6 +372,40 @@ async def test_streaming_does_not_update_view_per_chunk(chat_view, mock_api_clie
     # One update after adding the two messages, one when the stream ends.
     assert chat_view.update.call_count == 2
     assert chat_view.scroll_to_bottom.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_frame_with_nothing_to_show_keeps_the_indicator_away(
+    chat_view, mock_page, mock_api_client, monkeypatch
+):
+    # The model's reasoning is hidden, yet it says that the backend is working: only
+    # a stream that is really silent brings the "..." back.
+    monkeypatch.setattr("views.chat.ACTIVITY_INDICATOR_DELAY", 0.2)
+    shown = MagicMock()
+    monkeypatch.setattr(ChatMessage, "show_activity_indicator", shown)
+    mock_page.run_task.side_effect = lambda fn, *args: (
+        asyncio.ensure_future(fn(*args))
+        if fn.__name__ == "show_activity_after_delay"
+        else MagicMock()
+    )
+    shown_while_reasoning = []
+
+    async def stream(**_kwargs):
+        # Longer than the delay plus one look of the indicator (every 0.25 s).
+        for _ in range(12):
+            yield Working()
+            await asyncio.sleep(0.05)
+        shown_while_reasoning.append(shown.call_count)
+        await asyncio.sleep(0.7)
+        yield TextChunk("answer")
+
+    mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: stream(**kw))
+    chat_view.input_field.value = "hi"
+
+    await chat_view.send_message_click(None)
+
+    assert shown_while_reasoning == [0]
+    assert shown.called, "the silence that followed did bring it back"
     assert chat_view._is_streaming is False
 
 
@@ -439,10 +475,10 @@ def slow_stream(closed: list, started: asyncio.Event):
 
     async def stream(**_kwargs):
         try:
-            yield {"content": "half of an answ"}
+            yield TextChunk("half of an answ")
             started.set()
             await asyncio.sleep(10)
-            yield {"content": "er that was never finished"}
+            yield TextChunk("er that was never finished")
         finally:
             closed.append(True)
 
@@ -482,7 +518,7 @@ async def test_stop_cuts_the_answer_and_says_that_it_is_not_kept(
 @pytest.mark.asyncio
 async def test_a_finished_answer_has_no_stopped_note(chat_view, mock_api_client):
     async def stream(**_kwargs):
-        yield {"content": "the whole answer"}
+        yield TextChunk("the whole answer")
 
     mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: stream(**kw))
     chat_view.input_field.value = "hi"
@@ -496,7 +532,7 @@ async def test_a_finished_answer_has_no_stopped_note(chat_view, mock_api_client)
 
 @pytest.mark.asyncio
 async def test_a_failed_answer_has_no_stopped_note(chat_view, mock_api_client):
-    mock_api_client.stream_chat = failing_stream(StreamError("boom"), {"content": "x"})
+    mock_api_client.stream_chat = failing_stream(StreamError("boom"), TextChunk("x"))
     chat_view.input_field.value = "hi"
 
     await chat_view.send_message_click(None)
@@ -548,7 +584,7 @@ async def test_leaving_the_chat_stops_the_answer_that_is_being_read(
 async def test_stream_error_is_shown_as_red_text_not_html(chat_view, mock_api_client):
     mock_api_client.stream_chat = failing_stream(
         StreamError("Failed to generate a response (request_id: 1)"),
-        {"content": "partial"},
+        TextChunk("partial"),
     )
     chat_view.input_field.value = "hi"
 
@@ -614,7 +650,7 @@ async def test_regeneration_replaces_the_previous_answer(chat_view, mock_api_cli
     await load_answered_chat(chat_view, mock_api_client)
     question_row, old_row = chat_view.chat_list.controls
     mock_api_client.regenerate_chat = MagicMock(
-        side_effect=lambda **kw: _chunks({"content": "new answer"})
+        side_effect=lambda **kw: _chunks(TextChunk("new answer"))
     )
 
     await chat_view.regenerate_last()
@@ -638,7 +674,7 @@ async def _chunks(*chunks):
         (APIError(500, "boom"), (), "HTTP 500"),
         (httpx.ConnectError("refused"), (), "Бекендът не е достъпен"),
         # Fails after part of the new answer was already painted.
-        (StreamError("boom"), ({"content": "half of a new answ"},), "Нещо се обърка"),
+        (StreamError("boom"), (TextChunk("half of a new answ"),), "Нещо се обърка"),
     ],
     ids=["api-error", "connect-error", "stream-error-after-text"],
 )
@@ -678,10 +714,10 @@ async def test_stopped_regeneration_puts_the_previous_answer_back(
     old_answer = chat_view._last_assistant_msg
 
     async def stream(**_kwargs):
-        yield {"content": "half of a new answ"}
+        yield TextChunk("half of a new answ")
         # The user presses "Стоп" while the new answer is being written.
         await chat_view.stop_generation_click(None)
-        yield {"content": "er that was never finished"}
+        yield TextChunk("er that was never finished")
 
     mock_api_client.regenerate_chat = MagicMock(side_effect=lambda **kw: stream(**kw))
 
