@@ -238,3 +238,64 @@ async def test_stream_does_not_pull_back_a_reader_who_went_up(
     with list_mounted(), patch.object(scroll_module, "SCROLL_SETTLE_DELAY", 0):
         await view._scroll_after_layout()
     view.chat_list.scroll_to.assert_not_called()
+
+
+# ------------------------------------------------------- the "to the newest" button
+def test_the_button_is_not_there_while_the_reader_follows_the_end(view):
+    assert view.to_bottom_btn.visible is False
+
+    view._on_chat_scroll(scroll_event(UPDATE, delta=28, pixels=100, max_extent=1000))
+
+    assert view.to_bottom_btn.visible is False
+
+
+def test_scrolling_up_shows_the_button_and_reaching_the_end_hides_it(view):
+    view._on_chat_scroll(scroll_event(USER, direction=UP, pixels=900))
+    assert view.to_bottom_btn.visible is True
+
+    view._on_chat_scroll(
+        scroll_event(UPDATE, delta=80, pixels=1000 - BOTTOM_FOLLOW_THRESHOLD)
+    )
+    assert view.to_bottom_btn.visible is False
+
+
+def test_scrolling_down_a_little_keeps_the_button(view):
+    view._on_chat_scroll(scroll_event(USER, direction=UP, pixels=900))
+
+    view._on_chat_scroll(scroll_event(UPDATE, delta=80, pixels=300))
+
+    assert view.to_bottom_btn.visible is True
+
+
+def test_only_a_change_of_the_button_is_sent_to_the_client(view):
+    with patch("views.chat_scroll.safe_update") as send:
+        view._on_chat_scroll(scroll_event(USER, direction=UP, pixels=900))
+        view._on_chat_scroll(scroll_event(USER, direction=UP, pixels=800))
+        view._on_chat_scroll(scroll_event(USER, direction=UP, pixels=700))
+
+    send.assert_called_once_with(view, view.to_bottom_btn)
+
+
+@pytest.mark.asyncio
+async def test_the_button_brings_the_newest_message_back(view):
+    view._on_chat_scroll(scroll_event(USER, direction=UP, pixels=900))
+    view.page_ref.run_task.reset_mock()
+
+    with list_mounted():
+        await view.on_to_bottom_click()
+
+    assert view._follow_bottom is True
+    assert view.to_bottom_btn.visible is False
+    view.page_ref.run_task.assert_any_call(view._scroll_to_end, 100)
+
+
+def test_a_new_conversation_takes_the_button_away(view):
+    view._on_chat_scroll(scroll_event(USER, direction=UP, pixels=900))
+
+    view._reset_conversation()
+
+    assert view.to_bottom_btn.visible is False
+
+
+def test_the_button_is_wired_to_its_handler(view):
+    assert view.to_bottom_btn.on_click == view.on_to_bottom_click

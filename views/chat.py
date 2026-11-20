@@ -92,6 +92,14 @@ CLOUD_MODE_VIEW = {
 }
 CLOUD_MODE_USE_PAID = {"auto": None, "cloud": True, "home": False}
 
+# What an empty chat offers to begin with. A click only puts the text into the
+# message field (and the caret after it): nothing is sent until the user does it.
+EMPTY_CHAT_SUGGESTIONS = (
+    "Какво си спомняш за мен?",
+    "Какво пише в моите файлове за ",
+    "Помогни ми да обмисля нещо: ",
+)
+
 
 class ChatView(
     ChatAttachmentsMixin,
@@ -149,7 +157,10 @@ class ChatView(
         self.expand = True
 
         self.chat_list = ft.ListView(
-            expand=True,
+            left=0,
+            top=0,
+            right=0,
+            bottom=0,
             spacing=10,
             auto_scroll=False,
             # Rows built only when they scroll into view have an estimated height
@@ -158,6 +169,63 @@ class ChatView(
             padding=ft.Padding.only(left=20, right=20),
             on_scroll=self._on_chat_scroll,
             scroll_interval=SCROLL_EVENT_INTERVAL,
+        )
+
+        # What an empty conversation says instead of a blank area; see
+        # _show_empty_state. It lies over the list, which is empty then.
+        self.empty_state = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Icon(
+                        ft.Icons.CHAT_BUBBLE_OUTLINE, size=48, color=ft.Colors.GREY_600
+                    ),
+                    ft.Text("Започни разговор с Лили", size=20),
+                    ft.Text(
+                        "Пиши свободно или започни с някой от примерите.",
+                        color=ft.Colors.GREY_500,
+                    ),
+                    ft.Row(
+                        [
+                            ft.Chip(
+                                label=ft.Text(text.strip()),
+                                on_click=lambda e, text=text: self._use_suggestion(
+                                    text
+                                ),
+                            )
+                            for text in EMPTY_CHAT_SUGGESTIONS
+                        ],
+                        wrap=True,
+                        alignment=ft.MainAxisAlignment.CENTER,
+                    ),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=10,
+                tight=True,
+            ),
+            alignment=ft.Alignment.CENTER,
+            left=0,
+            top=0,
+            right=0,
+            bottom=0,
+            visible=False,
+        )
+        # Shown while the reader is above the end of the conversation (see
+        # _on_chat_scroll): one click brings the newest message back into view.
+        self.to_bottom_btn = ft.IconButton(
+            icon=ft.Icons.KEYBOARD_ARROW_DOWN,
+            tooltip="Към най-новото",
+            bgcolor=ft.Colors.BLUE_GREY_700,
+            visible=False,
+            on_click=self.on_to_bottom_click,
+        )
+        self.messages_area = ft.Stack(
+            [
+                self.chat_list,
+                self.empty_state,
+                ft.Container(self.to_bottom_btn, right=24, bottom=12),
+            ],
+            expand=True,
         )
 
         self.new_chat_btn = ft.IconButton(
@@ -272,7 +340,7 @@ class ChatView(
         self.content = ft.Column(
             controls=[
                 self.top_row,
-                self.chat_list,
+                self.messages_area,
                 self.emoji_picker,
                 self.attachments_row,
                 input_row,
@@ -288,6 +356,8 @@ class ChatView(
         self._last_assistant_row = None
         self._follow_bottom = True
         self._history_truncated = False
+        self._show_to_bottom_button(False)
+        self._show_empty_state(False)
         self.chat_list.controls.clear()
         # The files of the other conversation are not this one's.
         self.attachments = []
@@ -308,6 +378,19 @@ class ChatView(
         if self._attachments_task is not None:
             self._attachments_task.cancel()
             self._attachments_task = None
+
+    def _show_empty_state(self, show: bool) -> None:
+        """Show or hide what an empty chat says; only a change is sent to the client."""
+        if self.empty_state.visible == show:
+            return
+        self.empty_state.visible = show
+        safe_update(self, self.empty_state)
+
+    def _use_suggestion(self, text: str) -> None:
+        """Put an example into the message field for the user to finish or send."""
+        self._set_input(text)
+        safe_update(self, self.input_field)
+        self._focus_input()
 
     def _set_streaming_ui(self, streaming: bool):
         self.send_btn.visible = not streaming
@@ -399,6 +482,9 @@ class ChatView(
         self._show_cloud_mode()
         self._reset_conversation()
         self._cancel_running_tasks()
+        if not reload_history:
+            # A new or an emptied chat has no history to wait for.
+            self._show_empty_state(True)
         if reload_history and self.page_ref is not None:
             # The files first, the history last: the history is what the view waits for.
             self._attachments_task = self.page_ref.run_task(self.load_attachments)
@@ -700,6 +786,7 @@ class ChatView(
                 created_at=msg.created_at,
             )
 
+        self._show_empty_state(not self.chat_list.controls)
         # One update + one scroll for the whole history instead of one per message.
         safe_update(self)
         self.scroll_to_bottom()
@@ -759,6 +846,7 @@ class ChatView(
         )
 
         self.chat_list.controls.append(row)
+        self._show_empty_state(False)
         chat_message.row = row
         if notify:
             safe_update(self)

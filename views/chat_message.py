@@ -134,9 +134,14 @@ class ChatMessage(ft.Column):
         if role != "user":
             top_controls.append(self.model_label)
 
+        # The name, the time and the buttons stand over the side the bubble is on.
         self.top_row = ft.Row(
             controls=top_controls,
-            alignment=ft.MainAxisAlignment.START,
+            alignment=(
+                ft.MainAxisAlignment.END
+                if role == "user"
+                else ft.MainAxisAlignment.START
+            ),
         )
 
         self.sources_row = ft.Row(wrap=True, visible=False)

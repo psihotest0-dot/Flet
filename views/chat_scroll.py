@@ -18,7 +18,7 @@ import logging
 
 import flet as ft
 
-from views.ui_utils import is_mounted
+from views.ui_utils import is_mounted, safe_update
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +37,21 @@ SCROLL_SETTLE_DELAY = 0.15
 class ChatScrollMixin:
     """Scrolling of the chat list: to the end, and following a growing answer."""
 
+    def _show_to_bottom_button(self, show: bool) -> None:
+        """Show or hide the "to the newest" button; only a change is sent to the client."""
+        if self.to_bottom_btn.visible == show:
+            return
+        self.to_bottom_btn.visible = show
+        safe_update(self, self.to_bottom_btn)
+
+    async def on_to_bottom_click(self, e=None) -> None:
+        """The button: back to the newest message, and follow the answer again."""
+        self.scroll_to_bottom()
+
     def scroll_to_bottom(self):
         """Jump to the newest message and follow what is appended after it."""
         self._follow_bottom = True
+        self._show_to_bottom_button(False)
         if self.page_ref is not None and is_mounted(self.chat_list):
             self.page_ref.run_task(self._scroll_to_end, 100)
         # New rows are laid out on the client's next frame, after this scroll.
@@ -97,3 +109,4 @@ class ChatScrollMixin:
             self._follow_bottom = False
         elif (e.max_scroll_extent or 0) - (e.pixels or 0) <= BOTTOM_FOLLOW_THRESHOLD:
             self._follow_bottom = True
+        self._show_to_bottom_button(not self._follow_bottom)
