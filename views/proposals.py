@@ -15,7 +15,7 @@ import flet as ft
 
 from api.client import APIClient
 from api.errors import APIError
-from api.models import Proposal
+from api.models import WRITE_FILE_KIND, Proposal
 from views.ui_utils import (
     describe_error,
     is_unexpected,
@@ -74,7 +74,7 @@ def kind_label(proposal: Proposal) -> str:
         return "Правило"
     if proposal.kind == "save_style_note":
         return "Как говорим"
-    if proposal.kind == "write_file":
+    if proposal.kind == WRITE_FILE_KIND:
         return "Запис на файл"
     return "Спомен"
 
@@ -118,7 +118,7 @@ class ProposalCard(ft.Container):
 
         # A write to a file shows what it does, and the whole text on request: the
         # line above has only the beginning, and the user decides on the text.
-        self.is_file_write = proposal.kind == "write_file"
+        self.is_file_write = proposal.kind == WRITE_FILE_KIND
         self.hint = ft.Text(
             FILE_MODE_HINTS.get(proposal.file_mode or "", ""),
             size=12,
@@ -233,7 +233,7 @@ def _api_error_text(error: APIError, proposal: Proposal | None = None) -> str:
     text is the answer.
     """
     if error.status == CANNOT_APPLY_STATUS:
-        if proposal is not None and proposal.kind == "write_file":
+        if proposal is not None and proposal.kind == WRITE_FILE_KIND:
             return error.message
         return "Вече има твърде много глобални правила — първо изтрий някое от таба „Памет“."
     return describe_error(error)

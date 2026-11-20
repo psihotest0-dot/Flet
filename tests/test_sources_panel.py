@@ -6,7 +6,15 @@ import pytest
 from state.settings import Settings, save_settings
 from views.chat import ChatView
 from views.chat_message import ChatMessage
-from views.sources import format_source_score, source_details, source_type_label
+from views.sources import (
+    UNKNOWN_SOURCE_TITLE,
+    as_source,
+    format_source_score,
+    source_details,
+    source_snippet,
+    source_title,
+    source_type_label,
+)
 
 
 def texts_in(control) -> list[str]:
@@ -188,6 +196,49 @@ def test_panel_survives_a_source_that_is_not_a_dict(mock_page):
     shown = opened_panel_texts(mock_page)
     assert "просто текст" in shown
     assert "• Документ • Сходство: N/A" in shown
+
+
+def test_a_source_that_is_not_a_dict_is_its_own_title():
+    assert as_source({"title": "a.pdf"}) == {"title": "a.pdf"}
+    assert as_source("просто текст") == {"title": "просто текст"}
+    assert as_source(5) == {"title": "5"}
+
+
+@pytest.mark.parametrize(
+    ("source", "title"),
+    [
+        ({"title": "Книга", "file_name": "book.pdf"}, "Книга"),
+        ({"file_name": "book.pdf"}, "book.pdf"),
+        ({"title": "", "file_name": "book.pdf"}, "book.pdf"),
+        ({}, UNKNOWN_SOURCE_TITLE),
+    ],
+)
+def test_the_title_of_a_source_falls_back_to_its_file_name(source, title):
+    assert source_title(source) == title
+
+
+@pytest.mark.parametrize(
+    ("source", "snippet"),
+    [
+        ({"content_snippet": "a", "text_snippet": "b", "text": "c"}, "a"),
+        ({"text_snippet": "b", "text": "c"}, "b"),
+        ({"text": "c"}, "c"),
+        ({"title": "no passage"}, ""),
+    ],
+)
+def test_the_passage_of_a_source_is_found_under_any_of_its_names(source, snippet):
+    assert source_snippet(source) == snippet
+
+
+def test_a_source_that_is_not_a_dict_gets_a_chip_with_its_text(mock_page):
+    message = ChatMessage("assistant", "отговор", page=mock_page)
+
+    message.add_sources(["просто текст"])
+    message.add_sources(["просто текст", {"title": "a.pdf"}])  # a repeated frame
+
+    chips = [c for c in message.sources_row.controls if isinstance(c, ft.Chip)]
+    # The repeated text adds nothing; each source is a chip under its own name.
+    assert [chip.label.value for chip in chips] == ["просто текст", "a.pdf"]
 
 
 # ----------------------------------------------------------------- sender name

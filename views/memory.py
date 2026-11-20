@@ -17,6 +17,7 @@ from api.limits import (
     MIN_IMPORTANCE,
     content_size,
 )
+from api.models import MEMORY_ACTIVE, MEMORY_CANDIDATE, STYLE_KIND
 from views.proposals import ProposalCard
 from views.ui_utils import (
     close_dialog,
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 FILTER_ALL = "Всички"
 FILTER_DEBOUNCE = 0.2
-# The list of the notes on how to talk (kind "style" of a rule).
+# The list of the notes on how to talk (``STYLE_KIND`` of a rule).
 STYLE_TITLE = "Как говорим ние двамата"
 
 # Width of the proposal cards and the rule list above the table.
@@ -40,7 +41,7 @@ SECTION_WIDTH = 680
 
 # Status of a memory the user types in by hand. It states a fact on purpose, so
 # it takes effect right away instead of waiting as a "candidate" for activation.
-NEW_MEMORY_STATUS = "active"
+NEW_MEMORY_STATUS = MEMORY_ACTIVE
 IMPORTANCE_OPTIONS = [str(value) for value in range(MIN_IMPORTANCE, MAX_IMPORTANCE + 1)]
 
 
@@ -143,7 +144,7 @@ class MemoryRow(ft.DataRow):
             icon=ft.Icons.CHECK,
             icon_color=ft.Colors.GREEN,
             tooltip="Активирай",
-            visible=memory.status == "candidate",
+            visible=memory.status == MEMORY_CANDIDATE,
             on_click=self._activate,
         )
         self.status_text = ft.Text(memory.status or "")
@@ -218,7 +219,7 @@ class MemoryRow(ft.DataRow):
         self.importance_text.value = self._importance_label(memory)
         self._reset_fields()
         self.status_text.value = memory.status or ""
-        self.activate_btn.visible = memory.status == "candidate"
+        self.activate_btn.visible = memory.status == MEMORY_CANDIDATE
         safe_update(
             self.view,
             self.content_text,
@@ -284,7 +285,7 @@ class MemoryRow(ft.DataRow):
             updated = await self.view.api_client.update_memory(
                 memory_id=self.memory.id,
                 content=self.memory.content,
-                status="active",
+                status=MEMORY_ACTIVE,
                 importance=importance_or_default(self.memory.importance),
             )
         except Exception as ex:
@@ -352,8 +353,8 @@ class MemoryView(ft.Container):
             label="Филтър по статус",
             options=[
                 ft.DropdownOption(FILTER_ALL),
-                ft.DropdownOption("active"),
-                ft.DropdownOption("candidate"),
+                ft.DropdownOption(MEMORY_ACTIVE),
+                ft.DropdownOption(MEMORY_CANDIDATE),
             ],
             value=FILTER_ALL,
             on_select=self.on_filter_change,
@@ -594,8 +595,8 @@ class MemoryView(ft.Container):
             )
             return
 
-        notes = [rule for rule in rules if rule.kind == "style"]
-        rules = [rule for rule in rules if rule.kind != "style"]
+        notes = [rule for rule in rules if rule.kind == STYLE_KIND]
+        rules = [rule for rule in rules if rule.kind != STYLE_KIND]
         self.rules_column.controls = [self._rule_tile(rule) for rule in rules]
         self.rules_tile.title = ft.Text(f"Глобални правила ({len(rules)})")
         self.rules_tile.visible = bool(rules)
@@ -612,7 +613,7 @@ class MemoryView(ft.Container):
             trailing=ft.IconButton(
                 icon=ft.Icons.DELETE_OUTLINE,
                 tooltip="Изтрий бележката"
-                if rule.kind == "style"
+                if rule.kind == STYLE_KIND
                 else "Изтрий правилото",
                 on_click=lambda e, rule=rule: self.page_ref.run_task(
                     self.delete_rule, rule
@@ -621,7 +622,7 @@ class MemoryView(ft.Container):
         )
 
     async def delete_rule(self, rule):
-        note = rule.kind == "style"
+        note = rule.kind == STYLE_KIND
         what = "бележката" if note else "правилото"
         confirmed = await confirm_dialog(
             self.page_ref,

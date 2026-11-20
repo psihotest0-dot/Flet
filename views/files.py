@@ -10,7 +10,12 @@ from pathlib import Path
 import flet as ft
 
 from api.client import APIClient
-from api.limits import MAX_UPLOAD_BYTES, SUPPORTED_EXTENSIONS, is_supported_file
+from api.limits import (
+    MAX_UPLOAD_BYTES,
+    MAX_UPLOAD_MB,
+    SUPPORTED_EXTENSIONS,
+    is_supported_file,
+)
 from api.models import IngestedFile
 from views.ui_utils import (
     confirm_dialog,
@@ -525,11 +530,14 @@ class FilesView(ft.Container):
                     size = await asyncio.to_thread(lambda: Path(f.path).stat().st_size)
                     if size > MAX_UPLOAD_BYTES:
                         logger.warning(
-                            "Skipped %s: %d bytes is over the 100 MB limit.",
+                            "Skipped %s: %d bytes is over the %d MB limit.",
                             file_kind(f.name),
                             size,
+                            MAX_UPLOAD_MB,
                         )
-                        errors.append(f"{f.name}: файлът е по-голям от 100 MB")
+                        errors.append(
+                            f"{f.name}: файлът е по-голям от {MAX_UPLOAD_MB} MB"
+                        )
                         return
                     # Sent from the disk a piece at a time, not read into memory.
                     result = await self.api_client.upload_file(Path(f.path), f.name)

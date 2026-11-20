@@ -20,8 +20,9 @@ from tenacity import (
 )
 
 from api.errors import APIError
-from api.limits import DEFAULT_IMPORTANCE, MAX_UPLOAD_BYTES
+from api.limits import DEFAULT_IMPORTANCE, MAX_UPLOAD_BYTES, MAX_UPLOAD_MB
 from api.models import (
+    MEMORY_CANDIDATE,
     ChatAttachment,
     IngestedFile,
     Memory,
@@ -38,6 +39,9 @@ from api.stream import StreamEvent, parse_frame
 logger = logging.getLogger(__name__)
 
 
+# The paths whose last part is the user's own text: the requests are built from them
+# and the log (``_loggable_path``) recognises them by the same prefix, so a change
+# here cannot leave one without the other.
 FILES_PATH = "/workspace/files/"
 SESSIONS_PATH = "/chat/sessions/"
 
@@ -157,7 +161,7 @@ class APIClient:
         """
         size = await asyncio.to_thread(lambda: path.stat().st_size)
         if size > MAX_UPLOAD_BYTES:
-            raise ValueError("File too large. Maximum size is 100MB.")
+            raise ValueError(f"File too large. Maximum size is {MAX_UPLOAD_MB}MB.")
         source = await asyncio.to_thread(path.open, "rb")
         try:
             response = await self.client.post(
@@ -236,7 +240,7 @@ class APIClient:
         asking twice is safe.
         """
         response = await self.client.delete(
-            f"/chat/sessions/{quote(session_id, safe='')}"
+            f"{SESSIONS_PATH}{quote(session_id, safe='')}"
         )
         _raise_for_status(response)
         # Only the first 8 characters: the full id is the key to the conversation.
@@ -281,7 +285,7 @@ class APIClient:
     async def create_memory(
         self,
         content: str,
-        status: str = "candidate",
+        status: str = MEMORY_CANDIDATE,
         source_message_id: str | None = None,
         importance: int | None = None,
         metadata: dict[str, Any] | None = None,
@@ -387,14 +391,12 @@ class APIClient:
     async def get_user_file(self, name: str, previous: bool = False) -> UserFile:
         """The whole text of a file, or of the version a replacement took the place of."""
         params = {"version": "previous"} if previous else None
-        response = await self._get(
-            f"/workspace/files/{quote(name, safe='')}", params=params
-        )
+        response = await self._get(f"{FILES_PATH}{quote(name, safe='')}", params=params)
         return UserFile(**response.json())
 
     async def delete_user_file(self, name: str) -> None:
         """Remove a file and its previous version. Only the user can; the assistant cannot."""
-        response = await self.client.delete(f"/workspace/files/{quote(name, safe='')}")
+        response = await self.client.delete(f"{FILES_PATH}{quote(name, safe='')}")
         _raise_for_status(response)
         # The name is the user's own text; the log keeps the fact only.
         logger.info("A file of the assistant was deleted.")

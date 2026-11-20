@@ -14,6 +14,7 @@ import httpx
 
 from api.client import APIClient
 from api.errors import APIError, StreamError
+from api.limits import MAX_ATTACHMENT_BYTES, MESSAGE_TOKEN_LIMIT
 from api.models import ChatAttachment
 from api.stream import ModelUsed, Proposals, Sources, TextChunk
 from state.chat_sessions import (
@@ -28,9 +29,9 @@ from state.chat_sessions import (
 )
 from state.settings import Settings, load_settings, save_settings
 from views.attachments import (
-    MAX_FILE_BYTES,
-    MESSAGE_TOKEN_LIMIT,
+    FILE_TOO_BIG_TEXT,
     PASTE_THRESHOLD_CHARS,
+    TOO_MANY_FILES_TEXT,
     NotAttachable,
     estimate_message_tokens,
     inserted_text,
@@ -40,6 +41,7 @@ from views.attachments import (
 from views.chat_message import ChatMessage
 from views.emoji_picker import EmojiPicker
 from views.ui_utils import (
+    SETTINGS_NOT_SAVED_TEXT,
     confirm_dialog,
     describe_error,
     error_for_log,
@@ -351,7 +353,7 @@ class ChatView(ft.Container):
         if not save_settings(settings):
             # The button keeps showing the old mode, so the settings keep it too.
             settings.restore(snapshot)
-            show_snackbar(self.page_ref, "Неуспешно запазване на настройките.")
+            show_snackbar(self.page_ref, SETTINGS_NOT_SAVED_TEXT)
             return
         logger.info(
             "Chat %s: the model of the conversation is %s.",
@@ -412,7 +414,7 @@ class ChatView(ft.Container):
         store_chat_sessions(settings, chats, session_id)
         if not save_settings(settings):
             # The chat still opens, but after a restart the app would forget it.
-            show_snackbar(self.page_ref, "Неуспешно запазване на настройките.")
+            show_snackbar(self.page_ref, SETTINGS_NOT_SAVED_TEXT)
 
         # Re-sync the widget as well: it may have carried a chat name instead
         # of an id, and the options must stay keyed by the saved ids.
@@ -433,7 +435,7 @@ class ChatView(ft.Container):
         store_chat_sessions(settings, chats, new_session)
         if not save_settings(settings):
             # The chat still opens, but after a restart the app would forget it.
-            show_snackbar(self.page_ref, "Неуспешно запазване на настройките.")
+            show_snackbar(self.page_ref, SETTINGS_NOT_SAVED_TEXT)
         logger.info("New chat %s started.", new_session[:8])
 
         self._apply_session_options(chats, new_session)
@@ -500,7 +502,7 @@ class ChatView(ft.Container):
         if not save_settings(settings):
             # The screen stays as it is, so the settings stay as they were.
             settings.restore(snapshot)
-            show_snackbar(self.page_ref, "Неуспешно запазване на настройките.")
+            show_snackbar(self.page_ref, SETTINGS_NOT_SAVED_TEXT)
             return
         logger.info(
             "Chat %s was deleted on the backend, it continues as session %s.",
@@ -721,11 +723,8 @@ class ChatView(ft.Container):
                 size = await asyncio.to_thread(
                     lambda p=picked.path: Path(p).stat().st_size
                 )
-                if size > MAX_FILE_BYTES:
-                    raise NotAttachable(
-                        picked.name,
-                        f"файлът е по-голям от {MAX_FILE_BYTES // 1024} KB",
-                    )
+                if size > MAX_ATTACHMENT_BYTES:
+                    raise NotAttachable(picked.name, FILE_TOO_BIG_TEXT)
                 raw = await asyncio.to_thread(Path(picked.path).read_bytes)
                 text = read_text_file(raw, picked.name)
                 await self._store_attachment(picked.name, text)
@@ -767,9 +766,9 @@ class ChatView(ft.Container):
         """Why the backend would not take a file, in words the user can act on."""
         if isinstance(error, APIError):
             if error.status == 413:
-                return f"файлът е по-голям от {MAX_FILE_BYTES // 1024} KB"
+                return FILE_TOO_BIG_TEXT
             if error.status == 422:
-                return "в разговора вече има 20 файла или файловете му надхвърлят 1 MB"
+                return TOO_MANY_FILES_TEXT
             if error.status < 500:
                 return f"бекендът отказа файла ({error.message})"
         return describe_error(error)

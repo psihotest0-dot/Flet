@@ -17,7 +17,7 @@ from state.settings import DEFAULT_DISPLAY_NAME
 from views.links import WEB_PREFIXES, link_host, link_question
 from views.markdown_safety import disarm_images
 from views.proposals import ProposalCard
-from views.sources import source_details
+from views.sources import as_source, source_details, source_snippet, source_title
 from views.ui_utils import (
     close_dialog,
     confirm_dialog,
@@ -292,15 +292,8 @@ class ChatMessage(ft.Column):
 
     @staticmethod
     def _source_key(source) -> tuple:
-        if not isinstance(source, dict):
-            return (str(source), "")
-        return (
-            source.get("title") or source.get("file_name") or "Unknown",
-            source.get("content_snippet")
-            or source.get("text_snippet")
-            or source.get("text")
-            or "",
-        )
+        source = as_source(source)
+        return (source_title(source), source_snippet(source))
 
     def add_sources(self, sources: list):
         if not sources:
@@ -333,11 +326,7 @@ class ChatMessage(ft.Column):
         # Group sources by filename
         grouped_sources = {}
         for src in self.sources:
-            if isinstance(src, dict):
-                title = src.get("title") or src.get("file_name") or "Unknown"
-            else:
-                title = "Unknown"
-            grouped_sources.setdefault(title, []).append(src)
+            grouped_sources.setdefault(source_title(as_source(src)), []).append(src)
 
         for title, file_sources in grouped_sources.items():
             count = len(file_sources)
@@ -371,16 +360,9 @@ class ChatMessage(ft.Column):
             ft.Text("Източници (RAG)", size=20, weight=ft.FontWeight.BOLD)
         )
 
-        for src in display_list:
-            if not isinstance(src, dict):
-                src = {"title": str(src)}
-            title = src.get("title") or src.get("file_name") or "Unknown"
-            snippet = (
-                src.get("content_snippet")
-                or src.get("text_snippet")
-                or src.get("text")
-                or ""
-            )
+        for src in map(as_source, display_list):
+            title = source_title(src)
+            snippet = source_snippet(src)
 
             item = ft.Container(
                 content=ft.Column(

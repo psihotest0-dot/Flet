@@ -18,7 +18,7 @@ import flet as ft
 
 from api.client import APIClient
 from api.errors import APIError
-from api.models import UserFileInfo, UserFileList
+from api.models import WRITE_FILE_KIND, UserFileInfo, UserFileList
 from views.files import size_label
 from views.proposals import ProposalCard
 from views.ui_utils import (
@@ -33,9 +33,6 @@ from views.ui_utils import (
 )
 
 logger = logging.getLogger(__name__)
-
-# The kind of proposal made by the file tools (the backend's ``write_file``).
-WRITE_FILE_KIND = "write_file"
 
 NOT_ENABLED_TEXT = (
     "Файловете на Лили не са включени. Включват се с FILES_ENABLED=true в .env "

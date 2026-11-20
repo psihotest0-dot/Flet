@@ -8,6 +8,19 @@ from typing import Any
 
 from pydantic import BaseModel, field_validator
 
+# ``Memory.status``: a memory the model proposed waits as a candidate until the user
+# activates it; only an active one is used in answers.
+MEMORY_ACTIVE = "active"
+MEMORY_CANDIDATE = "candidate"
+
+# ``Proposal.kind`` of a write to one of the user's own text files; the other kinds
+# are a global rule, a note on how to talk and a memory.
+WRITE_FILE_KIND = "write_file"
+
+# ``Rule.kind``: an instruction of the user, or a note on how he likes to be talked to.
+RULE_KIND = "rule"
+STYLE_KIND = "style"
+
 
 class Message(BaseModel):
     """Represents a chat message."""
@@ -108,7 +121,7 @@ class Rule(BaseModel):
     """
 
     id: int
-    kind: str = "rule"
+    kind: str = RULE_KIND
     key: str
     value: str
     enabled: bool = True

@@ -14,11 +14,10 @@ from helpers import mounted
 
 from api.client import APIClient
 from api.errors import APIError
+from api.limits import MAX_ATTACHMENT_BYTES, MESSAGE_TOKEN_LIMIT
 from api.models import ChatAttachment
 from api.stream import TextChunk
 from views.attachments import (
-    MAX_FILE_BYTES,
-    MESSAGE_TOKEN_LIMIT,
     PASTE_THRESHOLD_CHARS,
     NotAttachable,
     estimate_message_tokens,
@@ -62,7 +61,7 @@ def test_an_old_windows_1251_file_is_read_too():
         (b"   \n\t ", "празен"),
         (b"", "празен"),
         pytest.param(
-            b"a" * (MAX_FILE_BYTES + 1), "по-голям", id="one byte over the limit"
+            b"a" * (MAX_ATTACHMENT_BYTES + 1), "по-голям", id="one byte over the limit"
         ),
         (b"\x98\xff\xfe", "не е текст в UTF-8"),  # 0x98 is not defined in Windows-1251
     ],
@@ -78,7 +77,10 @@ def test_what_is_not_text_is_refused_with_a_reason(raw, why):
 
 
 def test_a_file_of_exactly_the_limit_is_accepted():
-    assert len(read_text_file(b"a" * MAX_FILE_BYTES, "big.txt")) == MAX_FILE_BYTES
+    assert (
+        len(read_text_file(b"a" * MAX_ATTACHMENT_BYTES, "big.txt"))
+        == MAX_ATTACHMENT_BYTES
+    )
 
 
 @pytest.mark.parametrize(
@@ -439,7 +441,7 @@ async def test_what_cannot_be_attached_is_reported_and_does_not_stop_the_others(
 ):
     files = [
         picked(tmp_path, "program.exe", b"MZ\x00\x01"),
-        picked(tmp_path, "huge.log", b"x" * (MAX_FILE_BYTES + 1)),
+        picked(tmp_path, "huge.log", b"x" * (MAX_ATTACHMENT_BYTES + 1)),
         picked(tmp_path, "empty.txt", b""),
         picked(tmp_path, "ok.py", b"x = 1\n"),
     ]

@@ -1,4 +1,4 @@
-"""What the sources panel says about a source: the type label and the score text (P33).
+"""What the sources panel says about a source: the title, the passage, the type label and the score (P33).
 
 Pure functions over the ``dict`` the backend sends for a source, no Flet. The panel
 itself (``ChatMessage.open_sources_panel``) only lays the strings out.
@@ -26,6 +26,32 @@ SCORE_TYPE_LABELS = {
 }
 DISTANCE_SCORE_TYPE = "distance"
 DEFAULT_SOURCE_LABEL = "Документ"
+# The title of a source that has neither a ``title`` nor a ``file_name``.
+UNKNOWN_SOURCE_TITLE = "Unknown"
+
+
+def as_source(source) -> dict:
+    """A source as a dict: one that came in another shape is just a title.
+
+    The contract has ``SourceInfo`` objects only; this is for a backend that sends
+    something else, which is drawn instead of failing the answer.
+    """
+    return source if isinstance(source, dict) else {"title": str(source)}
+
+
+def source_title(source: dict) -> str:
+    """The name of a source: its title, else the name of its file."""
+    return source.get("title") or source.get("file_name") or UNKNOWN_SOURCE_TITLE
+
+
+def source_snippet(source: dict) -> str:
+    """The passage of a source, under any of the names the backend has used for it."""
+    return (
+        source.get("content_snippet")
+        or source.get("text_snippet")
+        or source.get("text")
+        or ""
+    )
 
 
 def source_type_label(source_type) -> str:

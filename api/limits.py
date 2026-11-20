@@ -1,4 +1,4 @@
-"""What the backend accepts: sizes, ranges and file types."""
+"""What the backend accepts: sizes, counts, ranges and file types."""
 
 from __future__ import annotations
 
@@ -15,7 +15,19 @@ MAX_CONTENT_BYTES = 32000
 
 # The backend's MAX_UPLOAD_MB (100 unless its owner changed it). It is a limit on
 # the whole request, not on the file, so a file just below it can still get a 413.
-MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+MAX_UPLOAD_MB = 100
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+
+# A file attached to one conversation (``/chat/attachments``, internal/attachments):
+# at most 256 KB a file, 20 files and 1 MB for the whole conversation. The backend
+# checks them again (413, 422); the client checks first, to answer in Bulgarian.
+MAX_ATTACHMENT_BYTES = 256 * 1024
+MAX_ATTACHMENTS = 20
+MAX_ATTACHMENTS_TOTAL_BYTES = 1024 * 1024
+
+# The backend refuses a message longer than this (estimated: four bytes a token;
+# ``maxUserMessageTokens`` in internal/agent).
+MESSAGE_TOKEN_LIMIT = 4000
 
 
 def content_size(text: str) -> int:

@@ -110,6 +110,9 @@ async def open_url(page: ft.Page | None, url: str) -> bool:
 # The backend answers 413 in English ("file too large") to a body over its limit.
 TOO_LARGE_TEXT = "над позволения от бекенда размер"
 
+# What a snackbar says when ``save_settings`` returned ``False`` (main and the chat).
+SETTINGS_NOT_SAVED_TEXT = "Неуспешно запазване на настройките."
+
 
 def is_unexpected(error: BaseException) -> bool:
     """Whether ``error`` is a bug rather than something that happens to a client.

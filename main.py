@@ -16,7 +16,12 @@ from views.files import FilesView
 from views.memory import MemoryView
 from views.oracle import OracleView
 from views.settings_dialog import SettingsDialog, is_plain_http_to_another_computer
-from views.ui_utils import is_unexpected, safe_update, show_snackbar
+from views.ui_utils import (
+    SETTINGS_NOT_SAVED_TEXT,
+    is_unexpected,
+    safe_update,
+    show_snackbar,
+)
 from views.user_files import UserFilesView
 
 logger = logging.getLogger(__name__)
@@ -194,7 +199,7 @@ def main(page: ft.Page):
             settings.restore(snapshot)
             # save_settings has logged the reason; this line says what was lost.
             logger.error("The new settings (Base URL %s) were not saved.", new_url)
-            show_snackbar(page, "Неуспешно запазване на настройките.")
+            show_snackbar(page, SETTINGS_NOT_SAVED_TEXT)
             return
         logger.info("Settings saved: Base URL %s.", new_url)
 
