@@ -51,6 +51,12 @@ def safe_update(owner: ft.Control, *controls: ft.Control) -> None:
             control.update()
 
 
+# The dialogs and bottom sheets ``open_dialog`` showed on a page, to ask whether one is
+# still open. Flet keeps its own stack in a private attribute, and a snackbar is not
+# in the way of anything (it goes by itself), so it is not counted.
+_shown: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
 def open_dialog(page: ft.Page | None, dialog: ft.DialogControl) -> None:
     """Show a dialog, a bottom sheet or a snackbar on the page."""
     if page is None:
@@ -60,6 +66,25 @@ def open_dialog(page: ft.Page | None, dialog: ft.DialogControl) -> None:
     except RuntimeError as ex:
         # Still on its way out: the client has not reported the last close yet.
         logger.warning("The dialog was not opened: %s", ex)
+        return
+    if not isinstance(dialog, ft.SnackBar):
+        _shown.setdefault(page, []).append(weakref.ref(dialog))
+
+
+def has_open_dialog(page: ft.Page | None) -> bool:
+    """Whether a dialog or a bottom sheet shown by ``open_dialog`` is still open.
+
+    A key pressed then belongs to the dialog (``Esc`` closes it), not to the chat
+    behind it.
+    """
+    if page is None:
+        return False
+    refs = _shown.get(page)
+    if not refs:
+        return False
+    # The ones that were closed or thrown away are forgotten here.
+    refs[:] = [ref for ref in refs if (d := ref()) is not None and d.open]
+    return bool(refs)
 
 
 def close_dialog(dialog: ft.DialogControl) -> None:

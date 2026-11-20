@@ -18,6 +18,7 @@ from views.oracle import OracleView
 from views.settings_dialog import SettingsDialog, is_plain_http_to_another_computer
 from views.ui_utils import (
     SETTINGS_NOT_SAVED_TEXT,
+    has_open_dialog,
     is_unexpected,
     safe_update,
     show_snackbar,
@@ -378,6 +379,15 @@ def main(page: ft.Page):
                 polled_view.set_active(polled_index == index)
 
     tabs.on_change = on_tab_change
+
+    def on_key(e: ft.KeyboardEvent):
+        """The shortcuts of the chat, while its tab is the open one and no dialog is."""
+        chat = views.get(0)
+        if isinstance(chat, ChatView) and not tabs.selected_index:
+            if not has_open_dialog(page):
+                chat.handle_key(e)
+
+    page.on_keyboard_event = on_key
 
     page.add(tabs)
     keep_the_window_alive(page)

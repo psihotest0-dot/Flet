@@ -38,6 +38,7 @@ from views.chat_message import ChatMessage
 from views.chat_scroll import SCROLL_EVENT_INTERVAL, ChatScrollMixin
 from views.chat_turns import ChatTurnsMixin
 from views.emoji_picker import EmojiPicker
+from views.shortcuts import NEW_CHAT, RENAME, STOP, shortcut_action
 from views.ui_utils import (
     SETTINGS_NOT_SAVED_TEXT,
     close_dialog,
@@ -230,7 +231,7 @@ class ChatView(
 
         self.new_chat_btn = ft.IconButton(
             icon=ft.Icons.ADD_COMMENT,
-            tooltip="Нов чат",
+            tooltip="Нов чат (Ctrl+N)",
             on_click=self.on_new_chat_click,
         )
 
@@ -249,7 +250,7 @@ class ChatView(
 
         # What can be done with the open chat besides opening, starting and deleting.
         self.rename_item = ft.PopupMenuItem(
-            content="Преименувай чата",
+            content="Преименувай чата (F2)",
             icon=ft.Icons.EDIT,
             on_click=self.on_rename_click,
         )
@@ -312,7 +313,7 @@ class ChatView(
         self.stop_btn = ft.IconButton(
             icon=ft.Icons.STOP,
             icon_color=ft.Colors.RED,
-            tooltip="Спри",
+            tooltip="Спри (Esc)",
             visible=False,
             on_click=self.stop_generation_click,
         )
@@ -546,6 +547,23 @@ class ChatView(
         self._apply_session_options(chats, new_session)
         # A brand new chat has no history to fetch, so only the UI is cleared.
         self._activate_session(new_session, reload_history=False)
+
+    def handle_key(self, e) -> bool:
+        """Do what a pressed key says in the chat; ``True`` if it was a shortcut that did.
+
+        ``e`` is Flet's ``KeyboardEvent``. ``Esc`` only means something while an answer
+        is written (it is then the same as "Спри"); the other keys work at any time.
+        """
+        action = shortcut_action(e.key, e.ctrl, e.shift, e.alt, e.meta)
+        if action == STOP and self._is_streaming:
+            self.page_ref.run_task(self.stop_generation_click, None)
+        elif action == NEW_CHAT:
+            self.page_ref.run_task(self.on_new_chat_click, None)
+        elif action == RENAME:
+            self.on_rename_click()
+        else:
+            return False
+        return True
 
     def on_rename_click(self, e=None):
         """Ask for a new name of the open chat; only the name changes, never the id."""
