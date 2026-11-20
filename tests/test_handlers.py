@@ -32,13 +32,13 @@ FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 
 # (file, function) -> why that handler may end a cancellation.
 STOPS_CANCELLATION_ON_PURPOSE = {
-    ("views/chat.py", "show_activity_after_delay"): (
+    ("views/chat_turns.py", "show_activity_after_delay"): (
         "the task is only a timer for the '...' indicator: cancelling it is how it ends"
     ),
     ("views/memory.py", "debounced_load"): (
         "a new keystroke cancels the load that was waiting for it"
     ),
-    ("views/chat.py", "_stream_response"): (
+    ("views/chat_turns.py", "_stream_response"): (
         "'Спри' cancels the task that reads the answer; a cancel of the handler "
         "itself is told apart by ``cancelling()`` and raised again"
     ),

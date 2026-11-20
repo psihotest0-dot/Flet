@@ -380,7 +380,7 @@ async def test_a_frame_with_nothing_to_show_keeps_the_indicator_away(
 ):
     # The model's reasoning is hidden, yet it says that the backend is working: only
     # a stream that is really silent brings the "..." back.
-    monkeypatch.setattr("views.chat.ACTIVITY_INDICATOR_DELAY", 0.2)
+    monkeypatch.setattr("views.chat_turns.ACTIVITY_INDICATOR_DELAY", 0.2)
     shown = MagicMock()
     monkeypatch.setattr(ChatMessage, "show_activity_indicator", shown)
     mock_page.run_task.side_effect = lambda fn, *args: (
@@ -687,7 +687,7 @@ async def test_failed_regeneration_puts_the_previous_answer_back(
     old_answer = chat_view._last_assistant_msg
     mock_api_client.regenerate_chat = failing_stream(error, *chunks)
 
-    with patch("views.chat.show_snackbar") as snackbar:
+    with patch("views.chat_turns.show_snackbar") as snackbar:
         await chat_view.regenerate_last()
 
     # The backend keeps the old answer when regeneration fails, so the screen
@@ -721,7 +721,7 @@ async def test_stopped_regeneration_puts_the_previous_answer_back(
 
     mock_api_client.regenerate_chat = MagicMock(side_effect=lambda **kw: stream(**kw))
 
-    with patch("views.chat.show_snackbar") as snackbar:
+    with patch("views.chat_turns.show_snackbar") as snackbar:
         await chat_view.regenerate_last()
 
     # The backend swaps the stored answer only after a complete new one, so the
