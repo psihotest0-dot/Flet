@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from state.settings import Settings, save_settings
 
 CHAT_SESSION_PREFIX = "Чат"
+# The longest name of a chat: the dropdown that shows it is 200 px wide.
+MAX_CHAT_NAME_CHARS = 40
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,29 @@ def resolve_session_id(chats: list[ChatSession], selected: str | None) -> str | 
         if chat.name.casefold() == value.casefold():
             return chat.id
     return None
+
+
+def rename_chat_session(settings: Settings, session_id: str, name: str) -> str | None:
+    """Give the chat ``session_id`` a new name; return the name it got.
+
+    Only the name changes: the id is the key to the conversation on the backend, and
+    the chat keeps its place in the list and the model it is sent to. Blanks are
+    collapsed and the name is cut to ``MAX_CHAT_NAME_CHARS``; a name another chat
+    already has gets " (2)" (the chat's own name does not count, so keeping it is fine).
+    Returns ``None`` - and changes nothing - for a blank name or an unknown chat.
+    """
+    cleaned = " ".join((name or "").split())[:MAX_CHAT_NAME_CHARS].strip()
+    chats = normalize_chat_sessions(settings)
+    index = next((i for i, chat in enumerate(chats) if chat.id == session_id), None)
+    if not cleaned or index is None:
+        return None
+
+    others = chats[:index] + chats[index + 1 :]
+    chats[index] = ChatSession(session_id, unique_chat_name(cleaned, others))
+    store_chat_sessions(
+        settings, chats, (settings.session_id or "").strip() or session_id
+    )
+    return chats[index].name
 
 
 def restart_chat_session(settings: Settings, session_id: str) -> str | None:

@@ -19,10 +19,12 @@ import flet as ft
 from api.client import APIClient
 from api.models import ChatAttachment
 from state.chat_sessions import (
+    MAX_CHAT_NAME_CHARS,
     ChatSession,
     ensure_chat_session,
     next_chat_name,
     normalize_chat_sessions,
+    rename_chat_session,
     resolve_session_id,
     restart_chat_session,
     store_chat_sessions,
@@ -36,10 +38,12 @@ from views.chat_turns import ChatTurnsMixin
 from views.emoji_picker import EmojiPicker
 from views.ui_utils import (
     SETTINGS_NOT_SAVED_TEXT,
+    close_dialog,
     confirm_dialog,
     describe_error,
     is_mounted,
     is_unexpected,
+    open_dialog,
     safe_update,
     show_snackbar,
 )
@@ -165,9 +169,21 @@ class ChatView(ChatAttachmentsMixin, ChatScrollMixin, ChatTurnsMixin, ft.Contain
             on_select=self.on_session_change,
         )
 
+        # What can be done with the open chat besides opening, starting and deleting.
+        self.rename_item = ft.PopupMenuItem(
+            content="Преименувай чата",
+            icon=ft.Icons.EDIT,
+            on_click=self.on_rename_click,
+        )
+        self.more_btn = ft.PopupMenuButton(
+            icon=ft.Icons.MORE_VERT,
+            tooltip="Още за този чат",
+            items=[self.rename_item],
+        )
+
         self.top_row = ft.Row(
             controls=[
-                self.session_dropdown,
+                ft.Row([self.session_dropdown, self.more_btn], spacing=0),
                 ft.Row([self.delete_chat_btn, self.new_chat_btn], spacing=0),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -418,6 +434,60 @@ class ChatView(ChatAttachmentsMixin, ChatScrollMixin, ChatTurnsMixin, ft.Contain
         self._apply_session_options(chats, new_session)
         # A brand new chat has no history to fetch, so only the UI is cleared.
         self._activate_session(new_session, reload_history=False)
+
+    def on_rename_click(self, e=None):
+        """Ask for a new name of the open chat; only the name changes, never the id."""
+        current = next(
+            (o.text for o in self.session_dropdown.options if o.key == self.session_id),
+            "",
+        )
+        field = ft.TextField(
+            label="Име на чата",
+            value=current,
+            max_length=MAX_CHAT_NAME_CHARS,
+            autofocus=True,
+        )
+
+        def save(_=None):
+            if not (field.value or "").strip():
+                field.error = "Въведи име на чата."
+                safe_update(dialog, field)
+                return
+            self._rename_chat(field.value)
+            close_dialog(dialog)
+
+        field.on_submit = save
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Преименуване на чата"),
+            content=ft.Container(field, width=360),
+            actions=[
+                ft.TextButton("Отказ", on_click=lambda _: close_dialog(dialog)),
+                ft.TextButton("Запази", on_click=save),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        open_dialog(self.page_ref, dialog)
+
+    def _rename_chat(self, name: str) -> None:
+        """Rename the open chat and save it; the screen follows only if the save worked."""
+        settings = self.settings
+        snapshot = settings.snapshot()
+        new_name = rename_chat_session(settings, self.session_id, name)
+        if new_name is None:
+            return
+        if not save_settings(settings):
+            # The screen stays as it is, so the settings stay as they were.
+            settings.restore(snapshot)
+            show_snackbar(self.page_ref, SETTINGS_NOT_SAVED_TEXT)
+            return
+        # Only that it happened: the name of a chat is the user's own text.
+        logger.info("Chat %s was renamed.", self.session_id[:8])
+        self._apply_session_options(normalize_chat_sessions(settings), self.session_id)
+        if new_name != " ".join(name.split())[:MAX_CHAT_NAME_CHARS].strip():
+            show_snackbar(
+                self.page_ref, f"Името вече е заето: чатът се казва „{new_name}“."
+            )
 
     async def on_delete_chat_click(self, e):
         """Delete the open chat's conversation for good and stay in the chat, empty.
