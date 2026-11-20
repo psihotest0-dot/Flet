@@ -30,6 +30,7 @@ from state.settings import Settings, load_settings, save_settings
 from views.attachments import estimate_message_tokens
 from views.chat_attachments import ChatAttachmentsMixin
 from views.chat_message import ChatMessage
+from views.chat_scroll import SCROLL_EVENT_INTERVAL, ChatScrollMixin
 from views.emoji_picker import EmojiPicker
 from views.ui_utils import (
     SETTINGS_NOT_SAVED_TEXT,
@@ -55,16 +56,6 @@ HISTORY_REQUEST_LIMIT = HISTORY_PAGE_SIZE + 1
 STREAM_FLUSH_INTERVAL = 0.12
 # How long the stream may stay silent before the "..." indicator is shown again.
 ACTIVITY_INDICATOR_DELAY = 1.0
-# While an answer streams the chat keeps its end in view, but only as long as the
-# reader is at the bottom (within BOTTOM_FOLLOW_THRESHOLD px of it): scrolling up
-# to re-read something must not be undone by the next chunk. The ListView reports
-# its position at most every SCROLL_EVENT_INTERVAL ms.
-BOTTOM_FOLLOW_THRESHOLD = 40
-SCROLL_EVENT_INTERVAL = 50
-# The client lays a text update out on its next frame, after a scroll_to sent
-# together with it was already handled - so the scroll goes out this long
-# (seconds) after the text, which also caps it at a few scrolls per second.
-SCROLL_SETTLE_DELAY = 0.15
 
 
 # The model a conversation is sent to: what the button shows and what the backend is told.
@@ -99,7 +90,7 @@ CLOUD_MODE_VIEW = {
 CLOUD_MODE_USE_PAID = {"auto": None, "cloud": True, "home": False}
 
 
-class ChatView(ChatAttachmentsMixin, ft.Container):
+class ChatView(ChatAttachmentsMixin, ChatScrollMixin, ft.Container):
     """The main view for the chat interface."""
 
     def __init__(
@@ -507,67 +498,6 @@ class ChatView(ChatAttachmentsMixin, ft.Container):
             "Разговорът е изтрит. Спомените са запазени.",
             success=True,
         )
-
-    def scroll_to_bottom(self):
-        """Jump to the newest message and follow what is appended after it."""
-        self._follow_bottom = True
-        if self.page_ref is not None and is_mounted(self.chat_list):
-            self.page_ref.run_task(self._scroll_to_end, 100)
-        # New rows are laid out on the client's next frame, after this scroll.
-        self._follow_stream()
-
-    async def _scroll_to_end(self, duration: int | None = None) -> None:
-        """Ask the client to show the end of the list.
-
-        The call waits for the client's answer; a list that left the page in the
-        meantime, or a window that was closed, is not worth more than a debug line.
-        """
-        if not is_mounted(self.chat_list):
-            return
-        try:
-            await self.chat_list.scroll_to(offset=-1, duration=duration)
-        except Exception as ex:  # noqa: BLE001
-            logger.debug("The chat was not scrolled: %s", ex)
-
-    def _follow_stream(self):
-        """Keep the end of a growing answer in view, unless the reader left it.
-
-        ``ListView.auto_scroll`` is off on purpose: it only reacts when the list
-        itself is rebuilt (streamed text updates just the Markdown control, so an
-        answer grew past the bottom edge unseen), and once our own scroll_to
-        rebuilt the list it animated slowly against it, leaving the end 1-2 lines
-        out of view. The scroll is deferred (see SCROLL_SETTLE_DELAY) and at most
-        one is waiting at any time.
-        """
-        if self._scroll_pending or not self._follow_bottom or self.page_ref is None:
-            return
-        self._scroll_pending = True
-        self.page_ref.run_task(self._scroll_after_layout)
-
-    async def _scroll_after_layout(self):
-        try:
-            await asyncio.sleep(SCROLL_SETTLE_DELAY)
-        finally:
-            self._scroll_pending = False
-        if self._follow_bottom:
-            await self._scroll_to_end()
-
-    def _on_chat_scroll(self, e: ft.OnScrollEvent):
-        """Track whether the reader is at the bottom of the conversation.
-
-        Our own scrolling only ever moves down, so a user event pointing back
-        (mouse wheel, touch) or a negative delta (dragging the scrollbar) means
-        the reader went up to older text and the stream must stop pulling the
-        view down. Arriving at the bottom again resumes following.
-        """
-        scrolled_up = (
-            e.event_type == ft.ScrollType.USER
-            and e.direction == ft.ScrollDirection.FORWARD
-        ) or (e.event_type == ft.ScrollType.UPDATE and (e.scroll_delta or 0) < 0)
-        if scrolled_up:
-            self._follow_bottom = False
-        elif (e.max_scroll_extent or 0) - (e.pixels or 0) <= BOTTOM_FOLLOW_THRESHOLD:
-            self._follow_bottom = True
 
     def toggle_emoji_picker(self, e=None):
         picker = self.emoji_picker

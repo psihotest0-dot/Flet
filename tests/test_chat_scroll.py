@@ -6,9 +6,10 @@ import flet as ft
 import pytest
 from helpers import mounted
 
-import views.chat as chat_module
+import views.chat_scroll as scroll_module
 from api.stream import TextChunk
-from views.chat import BOTTOM_FOLLOW_THRESHOLD, ChatView
+from views.chat import ChatView
+from views.chat_scroll import BOTTOM_FOLLOW_THRESHOLD
 
 
 @pytest.fixture
@@ -110,7 +111,7 @@ def test_follow_stream_does_nothing_after_the_reader_scrolled_up(view, mock_page
 
 @pytest.mark.asyncio
 async def test_scroll_after_layout_jumps_to_the_end(view, monkeypatch):
-    monkeypatch.setattr(chat_module, "SCROLL_SETTLE_DELAY", 0)
+    monkeypatch.setattr(scroll_module, "SCROLL_SETTLE_DELAY", 0)
     view.chat_list.scroll_to = AsyncMock()
     view._scroll_pending = True
 
@@ -165,7 +166,7 @@ async def test_a_scroll_the_client_did_not_do_is_not_an_error(view, error):
 
 @pytest.mark.asyncio
 async def test_scroll_after_layout_leaves_a_reader_who_scrolled_up(view, monkeypatch):
-    monkeypatch.setattr(chat_module, "SCROLL_SETTLE_DELAY", 0)
+    monkeypatch.setattr(scroll_module, "SCROLL_SETTLE_DELAY", 0)
     view.chat_list.scroll_to = AsyncMock()
     view._follow_bottom = False
     view._scroll_pending = True
@@ -234,6 +235,6 @@ async def test_stream_does_not_pull_back_a_reader_who_went_up(
     # Only the end-of-stream task exists, and it skips the scroll for this reader.
     assert len(scrolls_scheduled(mock_page, view)) == 1
     view.chat_list.scroll_to = AsyncMock()
-    with list_mounted(), patch.object(chat_module, "SCROLL_SETTLE_DELAY", 0):
+    with list_mounted(), patch.object(scroll_module, "SCROLL_SETTLE_DELAY", 0):
         await view._scroll_after_layout()
     view.chat_list.scroll_to.assert_not_called()
