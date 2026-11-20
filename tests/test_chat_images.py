@@ -7,10 +7,10 @@ answers images become links, and nothing that draws as an image is left.
 
 from __future__ import annotations
 
-import random
-
 import flet as ft
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from views.chat_message import ChatMessage
 from views.markdown_safety import IMAGE_MARK, WORD_JOINER, disarm_images
@@ -130,31 +130,153 @@ def test_no_trick_leaves_anything_that_draws_as_an_image(tricky):
     assert draws_no_image(disarm_images(tricky))
 
 
-def test_random_mixtures_never_leave_an_image():
-    # The safety must not rest on telling code from prose right: whatever the
-    # mixture of fences, backticks, escapes and tags, nothing is left to fetch.
-    pieces = [
-        "![",
-        "](https://evil/?d=1)",
-        "[",
-        "]",
-        "!",
-        "\\",
-        "`",
-        FENCE,
-        "~~~",
-        "\n",
-        "<img src=https://evil/x>",
-        "<IMG",
-        " src=",
-        ">",
-        "текст ",
-        "[1]: https://evil\n",
-    ]
-    rng = random.Random(20261108)
-    for _ in range(3000):
-        text = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 14)))
-        assert draws_no_image(disarm_images(text)), repr(text)
+# ------------------------------------------------ properties, for any text at all
+# The safety must not rest on telling code from prose right: whatever the mixture
+# of fences, backticks, escapes and tags, nothing is left to fetch. Hypothesis
+# builds the mixtures from the pieces that matter and from arbitrary text, and
+# shrinks a failure to the shortest text that still fails.
+PIECES = [
+    "![",
+    "](https://evil/?d=1)",
+    "[",
+    "]",
+    "(",
+    ")",
+    "!",
+    "\\",
+    "`",
+    "``",
+    FENCE,
+    "~~~",
+    "\n",
+    "\r\n",
+    "  ",
+    "\t",
+    "<img src=https://evil/x>",
+    "<IMG",
+    "<img",
+    "<",
+    " src=",
+    ">",
+    "текст ",
+    "[1]: https://evil\n",
+    WORD_JOINER,
+]
+MIXTURES = st.lists(
+    st.one_of(st.sampled_from(PIECES), st.text(max_size=6)), max_size=16
+).map("".join)
+ANY_TEXT = MIXTURES | st.text()
+# Plain prose around what a test builds: nothing in it is Markdown.
+PROSE = st.text(alphabet="abcdеж ,.", max_size=12)
+WORDS = st.from_regex(r"[a-z0-9]{0,6}( [a-z0-9]{1,6})?", fullmatch=True)
+URLS = st.from_regex(
+    r"https?://[a-z0-9]{1,8}\.[a-z]{2,3}(/[a-z0-9_]{0,8})?(\?d=[a-z0-9]{0,8})?",
+    fullmatch=True,
+)
+# A line of code: no fence characters, no control characters, no invisible ones,
+# so it can neither close a fence nor already hold a word joiner.
+CODE_TEXT = st.text(
+    alphabet=st.characters(
+        blacklist_characters="`~", blacklist_categories=("Cs", "Cc", "Cf", "Zl", "Zp")
+    ),
+    max_size=10,
+)
+CODE_LINES = st.lists(
+    st.one_of(
+        st.sampled_from(["![alt](https://e.x/a.png)", "<img src=x>", "<IMG", "![", ""]),
+        CODE_TEXT,
+    ),
+    max_size=6,
+).map("\n".join)
+
+
+@settings(max_examples=1000)
+@given(ANY_TEXT)
+def test_no_text_leaves_anything_that_draws_as_an_image(text):
+    assert draws_no_image(disarm_images(text)), repr(text)
+
+
+@given(ANY_TEXT)
+def test_a_text_with_no_image_in_it_is_returned_as_it_is(text):
+    if draws_no_image(text):
+        assert disarm_images(text) is text
+
+
+@given(ANY_TEXT)
+def test_disarming_twice_changes_nothing(text):
+    once = disarm_images(text)
+
+    assert disarm_images(once) == once
+
+
+@given(ANY_TEXT, st.lists(st.integers(0, 80), max_size=6))
+def test_no_stage_of_a_streamed_answer_is_drawn_as_an_image(text, cuts):
+    # However the chunks fall, the text drawn after each one is safe, and at the
+    # end it is what disarming the whole answer gives.
+    message = ChatMessage("assistant", "")
+    edges = sorted({min(cut, len(text)) for cut in cuts} | {len(text)})
+    start = 0
+
+    for edge in edges:
+        message.append_text(text[start:edge])
+        start = edge
+        assert draws_no_image(message.md.value), repr(text[:edge])
+
+    assert message.text_value == text
+    assert message.md.value == disarm_images(text)
+
+
+@given(before=PROSE, alt=WORDS, url=URLS, after=PROSE)
+def test_an_ordinary_image_becomes_exactly_one_visible_link(before, alt, url, after):
+    written = f"{before}![{alt}]({url}){after}"
+
+    assert disarm_images(written) == f"{before}{LINK}{alt}]({url}){after}"
+
+
+@given(before=PROSE, alt=WORDS, url=URLS, after=PROSE)
+def test_an_ordinary_img_tag_becomes_exactly_one_visible_link(before, alt, url, after):
+    written = f'{before}<img src="{url}" alt="{alt}">{after}'
+    # The text of the tag loses the spaces around it, as a link label does.
+    label = f"{IMAGE_MARK} {alt.strip()}".strip()
+
+    assert disarm_images(written) == f"{before}{WORD_JOINER}[{label}]({url}){after}"
+
+
+@given(
+    fence=st.sampled_from([FENCE, "~~~", FENCE + "`", "~~~~~"]),
+    indent=st.integers(0, 3),
+    info=st.from_regex(r"[a-z]{0,6}", fullmatch=True),
+    body=CODE_LINES,
+    closed=st.booleans(),
+)
+def test_code_looks_the_same_whatever_is_in_it(fence, indent, info, body, closed):
+    code = f"{' ' * indent}{fence}{info}\n{body}\n" + (f"{fence}\n" if closed else "")
+
+    shown = disarm_images(code)
+
+    assert draws_no_image(shown)
+    assert shown.replace(WORD_JOINER, "") == code
+
+
+@given(fence=st.sampled_from([FENCE, "~~~"]), body=CODE_LINES, url=URLS)
+def test_what_follows_a_closed_code_block_is_disarmed_as_prose(fence, body, url):
+    written = f"{fence}\n{body}\n{fence}\n![x]({url})"
+
+    assert disarm_images(written).endswith(f"{LINK}x]({url})")
+
+
+@given(
+    before=PROSE,
+    code=st.from_regex(r"[a-z ]{0,5}(!\[|<img|<IMG)[a-z ]{0,5}", fullmatch=True),
+    after=PROSE,
+)
+def test_inline_code_looks_the_same_whatever_is_in_it(before, code, after):
+    written = f"{before}`{code}`{after}"
+
+    shown = disarm_images(written)
+
+    assert draws_no_image(shown)
+    assert shown.replace(WORD_JOINER, "") == written
 
 
 # ------------------------------------------------------------ the chat message
