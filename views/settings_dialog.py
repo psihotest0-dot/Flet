@@ -11,6 +11,7 @@ import flet as ft
 
 from api.client import APIClient
 from state.settings import DEFAULT_DISPLAY_NAME, MAX_DISPLAY_NAME_CHARS
+from views import theme
 from views.ui_utils import (
     close_dialog,
     copy_text,
@@ -119,7 +120,7 @@ class SettingsDialog:
         )
         # Not an error: the address is saved all the same, but the user is told.
         self.base_url_warning = ft.Text(
-            INSECURE_URL_NOTE, size=12, color=ft.Colors.AMBER_300, visible=False
+            INSECURE_URL_NOTE, size=12, color=theme.ATTENTION, visible=False
         )
         self.check_btn = ft.OutlinedButton(
             "Провери връзката",
@@ -167,7 +168,7 @@ class SettingsDialog:
                     self.display_name_field,
                     ft.Divider(),
                     ft.Row([self.user_id_field, self.copy_btn]),
-                    ft.Text(USER_ID_NOTE, size=12, color=ft.Colors.GREY_500),
+                    ft.Text(USER_ID_NOTE, size=12, color=theme.MUTED),
                 ],
                 tight=True,
                 width=480,
@@ -226,7 +227,7 @@ class SettingsDialog:
         if not await copy_text(self.page, self.user_id):
             return
         self.copy_btn.icon = ft.Icons.CHECK
-        self.copy_btn.icon_color = ft.Colors.GREEN
+        self.copy_btn.icon_color = theme.OK
         self.copy_btn.tooltip = "Копирано"
         safe_update(self.dialog, self.copy_btn)
 
@@ -256,9 +257,9 @@ class SettingsDialog:
             "Connection check for %s: %s", url, "ok" if healthy else "no answer"
         )
         if healthy:
-            self._show_result("Връзката е успешна.", ft.Colors.GREEN)
+            self._show_result("Връзката е успешна.", theme.OK)
         else:
-            self._show_result(f"Няма връзка с {url}", ft.Colors.RED)
+            self._show_result(f"Няма връзка с {url}", theme.PROBLEM)
 
     def _set_checking(self, checking: bool) -> None:
         self._checking = checking

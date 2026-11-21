@@ -232,6 +232,47 @@ def test_unusable_display_name_in_the_file_does_not_cost_the_identity(
     assert settings.display_name == "42"
 
 
+def test_the_theme_is_dark_unless_the_user_chose_the_light_one(mock_settings_file):
+    assert Settings().theme == "dark"
+    assert load_settings().theme == "dark"
+
+    save_settings(Settings(theme="light"))
+
+    assert load_settings().theme == "light"
+    assert (
+        json.loads(mock_settings_file.read_text(encoding="utf-8"))["theme"] == "light"
+    )
+
+
+@pytest.mark.parametrize("raw", ["", "Light", "blue", None, True, 3, [], {"a": 1}])
+def test_an_unknown_theme_falls_back_to_the_dark_one(raw):
+    assert Settings(theme=raw).theme == "dark"
+
+
+def test_a_file_from_before_the_light_theme_still_loads(mock_settings_file):
+    mock_settings_file.write_text(
+        json.dumps({"base_url": "http://example.com", "user_id": "u-1"}),
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+
+    assert settings.theme == "dark"
+    assert settings.user_id == "u-1"
+
+
+def test_an_unusable_theme_in_the_file_does_not_cost_the_identity(mock_settings_file):
+    mock_settings_file.write_text(
+        json.dumps({"user_id": "u-1", "session_id": "s-1", "theme": ["light"]}),
+        encoding="utf-8",
+    )
+
+    settings = load_settings()
+
+    assert (settings.user_id, settings.session_id) == ("u-1", "s-1")
+    assert settings.theme == "dark"
+
+
 # ------------------------------------------------------- durable, serial writes
 def test_save_forces_the_text_to_the_disk_before_replacing_the_file(
     mock_settings_file, monkeypatch
@@ -463,12 +504,14 @@ def test_restore_puts_every_field_back_into_the_same_object():
         chat_sessions=[{"id": "s1", "name": "Чат 1"}],
         cloud_modes={"s1": "cloud"},
         display_name="Иван",
+        theme="light",
     )
     same_object = settings
     snapshot = settings.snapshot()
 
     settings.base_url = "http://127.0.0.1:9000"
     settings.display_name = "Мария"
+    settings.theme = "dark"
     settings.chat_sessions.append({"id": "s2", "name": "Чат 2"})
     settings.cloud_modes.clear()
     settings.restore(snapshot)
@@ -480,6 +523,7 @@ def test_restore_puts_every_field_back_into_the_same_object():
     assert settings.cloud_modes == {"s1": "cloud"}
     assert settings.base_url == "http://localhost:8080"
     assert settings.display_name == "Иван"
+    assert settings.theme == "light"
 
 
 def test_a_snapshot_does_not_follow_the_settings_it_was_taken_from():

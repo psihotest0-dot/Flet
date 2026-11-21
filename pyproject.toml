@@ -44,10 +44,10 @@ source = ["api", "state", "views", "main"]
 branch = true
 
 [tool.coverage.report]
-# Measured 93.2 % (statements and branches) on 2026-11-20; the minimum is a
+# Measured 94.0 % (statements and branches) on 2026-11-21; the minimum is a
 # little below it so a small refactor does not turn CI red. Raise it when the
 # number goes up.
-fail_under = 92
+fail_under = 93
 skip_covered = true
 
 [tool.ruff]

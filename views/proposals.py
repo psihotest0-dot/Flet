@@ -16,6 +16,7 @@ import flet as ft
 from api.client import APIClient
 from api.errors import APIError
 from api.models import WRITE_FILE_KIND, Proposal
+from views import theme
 from views.ui_utils import (
     describe_error,
     is_unexpected,
@@ -102,18 +103,18 @@ class ProposalCard(ft.Container):
 
         self.padding = 10
         self.border_radius = 8
-        self.border = ft.Border.all(1, ft.Colors.AMBER_700)
+        self.border = ft.Border.all(1, theme.ATTENTION)
         self.margin = ft.Margin.only(top=4)
 
         self.title = ft.Text(
             f"{kind_label(proposal)} — чака твоето потвърждение",
             size=12,
-            color=ft.Colors.AMBER_200,
+            color=theme.ATTENTION,
         )
         self.body = ft.Text(proposal.summary or "", selectable=True)
         warning = origin_warning(proposal.external_sources)
         self.warning = ft.Text(
-            warning or "", size=12, color=ft.Colors.ORANGE_300, visible=bool(warning)
+            warning or "", size=12, color=theme.ATTENTION, visible=bool(warning)
         )
 
         # A write to a file shows what it does, and the whole text on request: the
@@ -122,7 +123,7 @@ class ProposalCard(ft.Container):
         self.hint = ft.Text(
             FILE_MODE_HINTS.get(proposal.file_mode or "", ""),
             size=12,
-            color=ft.Colors.GREY_400,
+            color=theme.MUTED,
             visible=self.is_file_write and proposal.file_mode in FILE_MODE_HINTS,
         )
         self.full_text = ft.Container(
@@ -133,7 +134,7 @@ class ProposalCard(ft.Container):
             height=160,
             padding=8,
             border_radius=6,
-            border=ft.Border.all(1, ft.Colors.GREY_700),
+            border=ft.Border.all(1, theme.BORDER),
             visible=False,
         )
         self.show_text_btn = ft.TextButton(
@@ -145,7 +146,7 @@ class ProposalCard(ft.Container):
         )
         self.reject_btn = ft.TextButton("Откажи", on_click=self._reject)
         self.buttons = ft.Row([self.approve_btn, self.reject_btn], wrap=True)
-        self.result = ft.Text("", size=12, color=ft.Colors.GREY_400, visible=False)
+        self.result = ft.Text("", size=12, color=theme.MUTED, visible=False)
 
         self.content = ft.Column(
             [

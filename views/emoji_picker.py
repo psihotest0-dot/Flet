@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 import flet as ft
 
+from views import theme
 from views.ui_utils import safe_update
 
 # category name -> (emoji shown on the category button, emoji of the category)
@@ -326,7 +327,7 @@ DEFAULT_CATEGORY = next(iter(EMOJI_CATEGORIES))
 
 CELL_SIZE = 44
 GRID_HEIGHT = 140
-SELECTED_CATEGORY_BGCOLOR = ft.Colors.BLUE_GREY_700
+SELECTED_CATEGORY_BGCOLOR = theme.YOU_BUBBLE
 UNSELECTED_CATEGORY_BGCOLOR = ft.Colors.TRANSPARENT
 
 
@@ -373,7 +374,7 @@ class EmojiPicker(ft.Container):
         self.visible = False
         self.padding = 8
         self.border_radius = 10
-        self.bgcolor = ft.Colors.BLUE_GREY_900
+        self.bgcolor = theme.CARD
         self.content = ft.Column(
             controls=[
                 ft.Row(list(self.category_buttons.values()), spacing=2, wrap=True),

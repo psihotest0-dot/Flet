@@ -23,6 +23,7 @@ from state.chat_sessions import (
     store_chat_sessions,
 )
 from state.settings import Settings, load_settings, save_settings
+from views import theme
 from views.chat import (
     HISTORY_PAGE_SIZE,
     HISTORY_REQUEST_LIMIT,
@@ -597,7 +598,7 @@ async def test_stream_error_is_shown_as_red_text_not_html(chat_view, mock_api_cl
     assert answer.error_text in answer.controls
     assert answer.error_text.visible is True
     assert answer.error_text.value == "Нещо се обърка. Опитай отново."
-    assert answer.error_text.color == ft.Colors.RED
+    assert answer.error_text.color == theme.PROBLEM
     # The backend already stored the user's turn: it is not put back in the input.
     assert chat_view.input_field.value == ""
 
@@ -630,7 +631,7 @@ async def test_chat_tells_the_kinds_of_failure_apart(
     answer = chat_messages(chat_view)[-1]
     assert answer.error_text.visible is True
     assert expected in answer.error_text.value
-    assert answer.error_text.color == ft.Colors.RED
+    assert answer.error_text.color == theme.PROBLEM
     assert chat_view.input_field.value == ("hi" if input_is_restored else "")
 
 
@@ -1053,7 +1054,7 @@ async def test_poll_updates_status_and_embedding_cells(mock_page, mock_api_clien
     safe_update_mock.assert_called_once_with(view, status_cell, embedding_cell)
     assert status_cell.value == "completed"
     assert embedding_cell.value == "Готово · 7 части"
-    assert embedding_cell.color == ft.Colors.GREEN
+    assert embedding_cell.color == theme.OK
     assert view.data_table.rows is rows_before
     assert view.files[0].status == "completed"
     assert view.files[0].chunk_count == 7
@@ -1175,8 +1176,8 @@ def test_update_table_renders_embedding_column(mock_page, mock_api_client):
 @pytest.mark.parametrize(
     ("file", "expected"),
     [
-        (IngestedFile(status="pending"), ("Изчаква", ft.Colors.AMBER)),
-        (IngestedFile(status="processing"), ("Обработва се", ft.Colors.BLUE)),
+        (IngestedFile(status="pending"), ("Изчаква", theme.MUTED)),
+        (IngestedFile(status="processing"), ("Обработва се", theme.ACCENT)),
         (
             IngestedFile(
                 status="completed",
@@ -1184,7 +1185,7 @@ def test_update_table_renders_embedding_column(mock_page, mock_api_client):
                 has_embeddings=True,
                 embedding_status="completed",
             ),
-            ("Готово · 2 части", ft.Colors.GREEN),
+            ("Готово · 2 части", theme.OK),
         ),
         (
             IngestedFile(
@@ -1193,7 +1194,7 @@ def test_update_table_renders_embedding_column(mock_page, mock_api_client):
                 has_embeddings=True,
                 embedding_status="completed",
             ),
-            ("Готово · 1 част", ft.Colors.GREEN),
+            ("Готово · 1 част", theme.OK),
         ),
         (
             IngestedFile(
@@ -1202,11 +1203,11 @@ def test_update_table_renders_embedding_column(mock_page, mock_api_client):
                 has_embeddings=False,
                 embedding_status="empty",
             ),
-            ("Няма текст", ft.Colors.ORANGE),
+            ("Няма текст", theme.ATTENTION),
         ),
-        (IngestedFile(status="failed"), ("Грешка", ft.Colors.RED)),
+        (IngestedFile(status="failed"), ("Грешка", theme.PROBLEM)),
         # Payload from a backend without embedding metadata: fall back to status.
-        (IngestedFile(status="completed"), ("Готово", ft.Colors.GREEN)),
+        (IngestedFile(status="completed"), ("Готово", theme.OK)),
     ],
 )
 def test_embedding_state_maps_backend_statuses(file, expected):

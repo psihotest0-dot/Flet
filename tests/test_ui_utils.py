@@ -11,6 +11,7 @@ import pytest
 from helpers import mounted, real_session
 
 from api.errors import APIError, StreamError
+from views import theme
 from views.ui_utils import (
     close_dialog,
     confirm_dialog,
@@ -291,7 +292,7 @@ def test_close_dialog_of_a_dialog_that_is_not_on_the_page_sends_nothing():
 
 @pytest.mark.parametrize(
     ("success", "color"),
-    [(False, ft.Colors.RED), (True, ft.Colors.GREEN)],
+    [(False, theme.TOAST_PROBLEM), (True, theme.TOAST_OK)],
     ids=["error", "success"],
 )
 def test_snackbar_is_red_for_an_error_and_green_for_a_success(
@@ -345,7 +346,7 @@ async def test_confirm_dialog_marks_only_a_destructive_answer_in_red(mock_page):
         mock_page, 0, confirm_text="Прикачи", destructive=False
     )
 
-    assert destructive.actions[1].style.color == ft.Colors.RED
+    assert destructive.actions[1].style.color == theme.PROBLEM
     assert harmless.actions[1].style is None
 
 

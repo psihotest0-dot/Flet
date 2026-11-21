@@ -15,6 +15,7 @@ import flet as ft
 from api.client import APIClient
 from api.models import Proposal
 from state.settings import DEFAULT_DISPLAY_NAME
+from views import theme
 from views.links import WEB_PREFIXES, link_host, link_question
 from views.markdown_safety import disarm_images
 from views.proposals import ProposalCard
@@ -71,19 +72,15 @@ class ChatMessage(ft.Column):
             ft.CrossAxisAlignment.END if role == "user" else ft.CrossAxisAlignment.START
         )
 
-        self.text_color = (
-            ft.Colors.LIGHT_BLUE_200 if role == "user" else ft.Colors.PINK_200
-        )
+        self.text_color = theme.ACCENT if role == "user" else theme.LILI
         self.sender_name = user_name if role == "user" else "Лили"
-        self.bgcolor = (
-            ft.Colors.BLUE_GREY_800 if role == "user" else ft.Colors.BLUE_GREY_900
-        )
+        self.bgcolor = theme.YOU_BUBBLE if role == "user" else theme.LILI_BUBBLE
 
         self.md = ft.Markdown(
             value=self._shown(self.text_value),
             selectable=True,
             extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
-            code_theme=ft.MarkdownCodeTheme.ATOM_ONE_DARK,
+            code_theme=theme.code_theme(page),
             on_tap_link=self._open_link,
             md_style_sheet=ft.MarkdownStyleSheet(
                 p_text_style=ft.TextStyle(color=self.text_color),
@@ -100,7 +97,7 @@ class ChatMessage(ft.Column):
         self.sender_label = ft.Text(
             value=self.sender_name,
             size=12,
-            color=ft.Colors.GREY_500,
+            color=theme.MUTED,
         )
 
         self.copy_btn = ft.IconButton(
@@ -113,7 +110,7 @@ class ChatMessage(ft.Column):
         self.time_label = ft.Text(
             when_label(created_at) if created_at else "",
             size=11,
-            color=ft.Colors.GREY_600,
+            color=theme.FAINT,
             visible=created_at is not None,
         )
 
@@ -130,7 +127,7 @@ class ChatMessage(ft.Column):
 
         # Who answered, as the backend said at the end of the stream; empty until then
         # (the backend says nothing while it has no paid model).
-        self.model_label = ft.Text("", size=11, color=ft.Colors.GREY_600, visible=False)
+        self.model_label = ft.Text("", size=11, color=theme.FAINT, visible=False)
         if role != "user":
             top_controls.append(self.model_label)
 
@@ -150,13 +147,13 @@ class ChatMessage(ft.Column):
         self._proposal_ids: set[int] = set()
         self.bottom_sheet = None
         self.activity_indicator = ft.Text(
-            "...", size=20, color=ft.Colors.GREY_500, visible=False
+            "...", size=20, color=theme.MUTED, visible=False
         )
         self.error_text = ft.Text(
-            "", color=ft.Colors.RED, selectable=True, visible=False
+            "", color=theme.PROBLEM, selectable=True, visible=False
         )
         self.stopped_note = ft.Text(
-            STOPPED_NOTE, size=11, color=ft.Colors.GREY_500, visible=False
+            STOPPED_NOTE, size=11, color=theme.MUTED, visible=False
         )
 
         self.controls = [
@@ -298,6 +295,11 @@ class ChatMessage(ft.Column):
                 ),
             )
 
+    def restyle(self) -> None:
+        """Give the code blocks the colours that fit the theme that is on now."""
+        self.md.code_theme = theme.code_theme(self.page_ref)
+        safe_update(self, self.md)
+
     def append_text(self, text: str):
         """Append streamed text; only the Markdown control is sent to the client.
 
@@ -338,7 +340,7 @@ class ChatMessage(ft.Column):
             return
         self.sources_row.controls.clear()
         self.sources_row.controls.append(
-            ft.Text("Източници:", size=12, color=ft.Colors.GREY_400)
+            ft.Text("Източници:", size=12, color=theme.MUTED)
         )
 
         # Group sources by filename
@@ -391,19 +393,17 @@ class ChatMessage(ft.Column):
                                 ft.Text(
                                     source_details(src),
                                     size=12,
-                                    color=ft.Colors.GREY_400,
+                                    color=theme.MUTED,
                                 ),
                             ]
                         ),
-                        ft.Text(
-                            snippet, selectable=True, size=14, color=ft.Colors.GREY_300
-                        ),
+                        ft.Text(snippet, selectable=True, size=14),
                     ]
                 ),
-                bgcolor=ft.Colors.BLUE_GREY_900,
+                bgcolor=theme.CARD,
                 padding=15,
                 border_radius=10,
-                border=ft.Border.all(1, ft.Colors.BLUE_GREY_700),
+                border=ft.Border.all(1, theme.BORDER),
             )
             list_view.controls.append(item)
 

@@ -10,7 +10,14 @@ from pathlib import Path
 import flet as ft
 
 from api.client import APIClient
-from state.settings import DEFAULT_DISPLAY_NAME, load_settings, save_settings
+from state.settings import (
+    DEFAULT_DISPLAY_NAME,
+    THEME_DARK,
+    THEME_LIGHT,
+    load_settings,
+    save_settings,
+)
+from views import theme
 from views.chat import ChatView
 from views.files import FilesView
 from views.memory import MemoryView
@@ -146,14 +153,13 @@ async def run_health_checks(probe, on_change, interval: float = HEALTH_CHECK_INT
 def main(page: ft.Page):
     setup_logging()
     page.title = "AI Agent Client"
-    page.theme_mode = ft.ThemeMode.DARK
-    page.theme = ft.Theme(color_scheme_seed=ft.Colors.BLUE)
     page.window.width = 1100
     page.window.height = 800
     page.window.min_width = 720
     page.window.min_height = 520
 
     settings = load_settings()
+    theme.apply_theme(page, settings.theme)
 
     # The stored user_id is the identity that owns the chat, memory and file
     # history on the backend, so it is reused verbatim. Minting a new one (or
@@ -210,6 +216,8 @@ def main(page: ft.Page):
         # "Спри" cancelling on a client that was not streaming.
         if api_client.base_url != settings.base_url:
             api_client.set_base_url(settings.base_url)
+            # The tooltip and the banner name the address.
+            show_connection()
         for view in views.values():
             if isinstance(view, ChatView):
                 view.set_display_name(settings.display_name)
@@ -227,22 +235,118 @@ def main(page: ft.Page):
     def open_settings(e):
         settings_dialog.open(settings.base_url, settings.display_name)
 
-    status_icon = ft.Icon(
-        ft.Icons.CIRCLE, color=ft.Colors.RED, size=14, tooltip="Връзката е прекъсната"
+    # What the last probe found: ``None`` until the first one has answered, then
+    # whether the backend is there. The indicator, its tooltip and the banner are
+    # all drawn from it by ``show_connection``.
+    healthy: bool | None = None
+
+    status_icon = ft.Icon(ft.Icons.CIRCLE, size=16)
+    status_label = ft.Text(size=13)
+    status_pill = ft.Container(
+        content=ft.Row([status_icon, status_label], spacing=6, tight=True),
+        padding=ft.Padding.symmetric(horizontal=10, vertical=4),
+        border_radius=14,
+    )
+    offline_text = ft.Text(color=theme.ON_PROBLEM_BACKGROUND, expand=True)
+    offline_banner = ft.Container(
+        content=ft.Row(
+            [
+                ft.Icon(ft.Icons.CLOUD_OFF, color=theme.ON_PROBLEM_BACKGROUND),
+                offline_text,
+                ft.TextButton("Настройки", on_click=open_settings),
+            ],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        bgcolor=theme.PROBLEM_BACKGROUND,
+        padding=ft.Padding.symmetric(horizontal=16, vertical=4),
+        border_radius=8,
+        visible=False,
     )
 
-    def set_status(healthy: bool):
-        status_icon.color = ft.Colors.GREEN if healthy else ft.Colors.RED
-        status_icon.tooltip = "Свързан" if healthy else "Връзката е прекъсната"
-        # Before the first page update there is nothing to send: the icon goes
-        # out with the page, already in this colour.
-        safe_update(page, status_icon)
+    def show_connection() -> None:
+        """Draw the indicator and the banner from ``healthy`` and the address now set."""
+        url = api_client.base_url
+        if healthy is None:
+            icon_color, label, tip = theme.MUTED, "Връзка…", "Проверявам връзката."
+            label_color, background = theme.MUTED, None
+        elif healthy:
+            icon_color, label, tip = theme.OK, "Свързан", f"Свързан с {url}"
+            label_color, background = theme.MUTED, None
+        else:
+            icon_color, label, tip = (
+                theme.PROBLEM,
+                "Няма връзка",
+                f"Няма връзка с {url}",
+            )
+            label_color, background = (
+                theme.ON_PROBLEM_BACKGROUND,
+                theme.PROBLEM_BACKGROUND,
+            )
+        status_icon.color = icon_color
+        status_label.value = label
+        status_label.color = label_color
+        status_pill.bgcolor = background
+        status_pill.tooltip = tip
+        offline_banner.visible = healthy is False
+        offline_text.value = (
+            f"Няма връзка с бекенда на {url}. Опитвам отново на всеки "
+            f"{HEALTH_CHECK_INTERVAL} секунди."
+        )
+        # Before the first page update there is nothing to send: the controls go
+        # out with the page, already drawn this way.
+        safe_update(page, status_pill, offline_banner)
+
+    def set_status(is_healthy: bool):
+        nonlocal healthy
+        was_offline = healthy is False
+        healthy = is_healthy
+        show_connection()
+        if is_healthy and was_offline:
+            logger.info("The connection to the backend is back.")
+            show_snackbar(page, "Връзката е възстановена.", success=True)
+        elif not is_healthy:
+            logger.warning("The backend does not answer.")
+
+    show_connection()
+
+    def theme_button_look(name: str) -> tuple[str, str]:
+        """``(icon, tooltip)`` of the button that goes to the other theme."""
+        if name == THEME_DARK:
+            return ft.Icons.LIGHT_MODE, "Светла тема"
+        return ft.Icons.DARK_MODE, "Тъмна тема"
+
+    theme_button = ft.IconButton(
+        icon=theme_button_look(settings.theme)[0],
+        tooltip=theme_button_look(settings.theme)[1],
+    )
+
+    def toggle_theme(e) -> None:
+        """Go to the other theme, and keep the choice for the next start."""
+        snapshot = settings.snapshot()
+        settings.theme = THEME_LIGHT if settings.theme == THEME_DARK else THEME_DARK
+        if not save_settings(settings):
+            settings.restore(snapshot)
+            # save_settings has logged the reason; this line says what was lost.
+            logger.error("The choice of the %s theme was not saved.", settings.theme)
+            show_snackbar(page, SETTINGS_NOT_SAVED_TEXT)
+            return
+        logger.info("Theme: %s.", settings.theme)
+        theme.apply_theme(page, settings.theme)
+        theme_button.icon, theme_button.tooltip = theme_button_look(settings.theme)
+        safe_update(page)
+        # The one thing that does not follow the theme by itself.
+        chat_view.restyle_messages()
+
+    theme_button.on_click = toggle_theme
 
     page.appbar = ft.AppBar(
         title=ft.Row(
-            [ft.Text("AI Agent"), status_icon], alignment=ft.MainAxisAlignment.START
+            [ft.Text("AI Agent"), status_pill], alignment=ft.MainAxisAlignment.START
         ),
-        actions=[ft.IconButton(ft.Icons.SETTINGS, on_click=open_settings)],
+        actions=[
+            theme_button,
+            ft.IconButton(ft.Icons.SETTINGS, on_click=open_settings),
+        ],
     )
 
     async def probe_backend() -> bool:
@@ -389,6 +493,8 @@ def main(page: ft.Page):
 
     page.on_keyboard_event = on_key
 
+    # The banner first and the tabs last: the tabs take the rest of the height.
+    page.add(offline_banner)
     page.add(tabs)
     keep_the_window_alive(page)
 

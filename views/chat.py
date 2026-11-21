@@ -32,6 +32,7 @@ from state.chat_sessions import (
     unique_chat_name,
 )
 from state.settings import Settings, load_settings, save_settings
+from views import theme
 from views.chat_attachments import ChatAttachmentsMixin
 from views.chat_export import ChatExportMixin
 from views.chat_message import ChatMessage
@@ -73,21 +74,21 @@ CLOUD_MODE_VIEW = {
     "auto": (
         "auto",
         None,
-        ft.Colors.GREY_500,
+        theme.MUTED,
         "Модел: както е настроено (въпросите към библиотеката могат да отиват в облака). "
         "Натисни, за да пращаш целия разговор в облака.",
     ),
     "cloud": (
         None,
         ft.Icons.CLOUD,
-        ft.Colors.LIGHT_BLUE_300,
+        theme.ACCENT,
         "Целият разговор отива в облака (платеният модел). "
         "Натисни за „само на този компютър“.",
     ),
     "home": (
         None,
         ft.Icons.HOME,
-        ft.Colors.GREEN_300,
+        theme.OK,
         "Само на този компютър: нищо не отива в облака. Натисни за автоматичния избор.",
     ),
 }
@@ -177,13 +178,11 @@ class ChatView(
         self.empty_state = ft.Container(
             content=ft.Column(
                 [
-                    ft.Icon(
-                        ft.Icons.CHAT_BUBBLE_OUTLINE, size=48, color=ft.Colors.GREY_600
-                    ),
+                    ft.Icon(ft.Icons.CHAT_BUBBLE_OUTLINE, size=48, color=theme.FAINT),
                     ft.Text("Започни разговор с Лили", size=20),
                     ft.Text(
                         "Пиши свободно или започни с някой от примерите.",
-                        color=ft.Colors.GREY_500,
+                        color=theme.MUTED,
                     ),
                     ft.Row(
                         [
@@ -216,7 +215,7 @@ class ChatView(
         self.to_bottom_btn = ft.IconButton(
             icon=ft.Icons.KEYBOARD_ARROW_DOWN,
             tooltip="Към най-новото",
-            bgcolor=ft.Colors.BLUE_GREY_700,
+            bgcolor=theme.FLOATING,
             visible=False,
             on_click=self.on_to_bottom_click,
         )
@@ -312,7 +311,7 @@ class ChatView(
 
         self.stop_btn = ft.IconButton(
             icon=ft.Icons.STOP,
-            icon_color=ft.Colors.RED,
+            icon_color=theme.PROBLEM,
             tooltip="Спри (Esc)",
             visible=False,
             on_click=self.stop_generation_click,
@@ -790,7 +789,7 @@ class ChatView(
                 ft.Text(
                     f"Показани са последните {HISTORY_PAGE_SIZE} съобщения.",
                     size=11,
-                    color=ft.Colors.GREY_500,
+                    color=theme.MUTED,
                 )
             )
 
@@ -825,6 +824,11 @@ class ChatView(
                 changed.append(message.sender_label)
         if changed:
             safe_update(self, *changed)
+
+    def restyle_messages(self) -> None:
+        """After a change of theme: the code blocks of the messages on screen."""
+        for message in self._messages_on_screen():
+            message.restyle()
 
     def add_message(
         self,

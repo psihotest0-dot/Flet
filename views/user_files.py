@@ -19,6 +19,7 @@ import flet as ft
 from api.client import APIClient
 from api.errors import APIError
 from api.models import WRITE_FILE_KIND, UserFileInfo, UserFileList
+from views import theme
 from views.files import size_label
 from views.proposals import ProposalCard
 from views.ui_utils import (
@@ -87,12 +88,12 @@ class UserFilesView(ft.Container):
         self._load_seq = 0
 
         self.title = ft.Text("Файлове на Лили", size=20, weight=ft.FontWeight.BOLD)
-        self.usage = ft.Text("", size=12, color=ft.Colors.GREY_400)
+        self.usage = ft.Text("", size=12, color=theme.MUTED)
         self.refresh_btn = ft.IconButton(
             icon=ft.Icons.REFRESH, tooltip="Обнови", on_click=self.on_refresh_click
         )
         self.progress = ft.ProgressBar(visible=False)
-        self.notice = ft.Text("", visible=False, color=ft.Colors.AMBER_200)
+        self.notice = ft.Text("", visible=False, color=theme.ATTENTION)
 
         self.proposals_title = ft.Text(
             "Чакат твоето потвърждение", size=14, weight=ft.FontWeight.BOLD
@@ -201,7 +202,7 @@ class UserFilesView(ft.Container):
         self.list_column.controls = (
             [self._tile(info) for info in self.listing.files]
             if self.listing.files
-            else [ft.Text(NO_FILES_TEXT, color=ft.Colors.GREY_400)]
+            else [ft.Text(NO_FILES_TEXT, color=theme.MUTED)]
         )
         self.notice.visible = False
         safe_update(self, self.usage, self.list_column, self.notice)

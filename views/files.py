@@ -17,6 +17,7 @@ from api.limits import (
     is_supported_file,
 )
 from api.models import IngestedFile
+from views import theme
 from views.ui_utils import (
     confirm_dialog,
     error_detail,
@@ -62,11 +63,11 @@ SORT_NAME, SORT_SIZE, SORT_UPLOADED = 0, 1, 2
 # chunks at all (scanned PDF, empty document) - the API reports that as "empty"
 # so it is not confused with a searchable "completed" file.
 EMBEDDING_STATES = {
-    "pending": ("Изчаква", ft.Colors.AMBER),
-    "processing": ("Обработва се", ft.Colors.BLUE),
-    "completed": ("Готово", ft.Colors.GREEN),
-    "empty": ("Няма текст", ft.Colors.ORANGE),
-    "failed": ("Грешка", ft.Colors.RED),
+    "pending": ("Изчаква", theme.MUTED),
+    "processing": ("Обработва се", theme.ACCENT),
+    "completed": ("Готово", theme.OK),
+    "empty": ("Няма текст", theme.ATTENTION),
+    "failed": ("Грешка", theme.PROBLEM),
 }
 
 EMBEDDING_TOOLTIPS = {
@@ -110,9 +111,7 @@ def embedding_key(file: IngestedFile) -> str:
 def embedding_state(file: IngestedFile) -> tuple[str, str, str]:
     """Return ``(label, color, tooltip)`` describing the file's vectors."""
     status = embedding_key(file)
-    label, color = EMBEDDING_STATES.get(
-        status, (status or "Неизвестно", ft.Colors.GREY)
-    )
+    label, color = EMBEDDING_STATES.get(status, (status or "Неизвестно", theme.MUTED))
     tooltip = EMBEDDING_TOOLTIPS.get(status, UNKNOWN_EMBEDDING_TOOLTIP)
 
     if status == "completed" and file.chunk_count:
@@ -241,7 +240,7 @@ class FilesView(ft.Container):
             dense=True,
             on_select=self._on_filter_change,
         )
-        self.count_text = ft.Text("", size=12, color=ft.Colors.GREY)
+        self.count_text = ft.Text("", size=12, color=theme.MUTED)
 
         self.data_table = ft.DataTable(
             # Newest first, as the backend sends them.

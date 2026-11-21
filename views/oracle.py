@@ -18,6 +18,7 @@ import flet as ft
 
 from api.client import APIClient
 from api.models import OracleDecision, OracleDecisionPage
+from views import theme
 from views.ui_utils import error_detail, is_unexpected, safe_update
 
 logger = logging.getLogger(__name__)
@@ -55,17 +56,17 @@ PROGRESS_BAR_WIDTH = 260
 
 # Verdict -> (label, colour, what it means).
 VERDICTS = {
-    "APPROVE": ("APPROVE", ft.Colors.GREEN, "Моделът би пуснал сделката."),
-    "VETO": ("VETO", ft.Colors.RED_400, "Моделът би спрял сделката."),
+    "APPROVE": ("APPROVE", theme.OK, "Моделът би пуснал сделката."),
+    "VETO": ("VETO", theme.PROBLEM, "Моделът би спрял сделката."),
     "HOLD": (
         "HOLD",
-        ft.Colors.AMBER,
+        theme.ATTENTION,
         "Моделът не дава окончателен отговор; ботът пита пак на следващия такт.",
     ),
 }
 FAILED_VERDICT = (
     "Неуспех",
-    ft.Colors.ORANGE,
+    theme.ATTENTION,
     "Няма вердикт: заявката към модела не е завършила с годен отговор.",
 )
 
@@ -89,7 +90,7 @@ def verdict_cell(decision: OracleDecision) -> tuple[str, str, str]:
     verdict = (decision.verdict or "").strip()
     if verdict in VERDICTS:
         return VERDICTS[verdict]
-    return verdict or "—", ft.Colors.GREY, "Непознат вердикт."
+    return verdict or "—", theme.MUTED, "Непознат вердикт."
 
 
 def mode_cell(mode: str | None) -> tuple[str, str]:
@@ -287,7 +288,7 @@ class OracleView(ft.Container):
             "Решенията на Oracle за сигналите на трейдинг бота. "
             "В сенчест режим ботът само записва отговорите и не ги следва.",
             size=12,
-            color=ft.Colors.GREY_400,
+            color=theme.MUTED,
         )
         self.approve_bar, self.approve_value, approve_row = self._progress_row(
             "APPROVE"
@@ -301,12 +302,10 @@ class OracleView(ft.Container):
             "Пробните сигнали още не се изключват (бекендът не праща версията на "
             "сигнала) — числата може да са завишени.",
             size=12,
-            color=ft.Colors.ORANGE_300,
+            color=theme.ATTENTION,
             visible=False,
         )
-        self.progress_error = ft.Text(
-            "", size=12, color=ft.Colors.RED_300, visible=False
-        )
+        self.progress_error = ft.Text("", size=12, color=theme.PROBLEM, visible=False)
         self.progress_block = ft.Container(
             content=ft.Column(
                 [
@@ -318,7 +317,7 @@ class OracleView(ft.Container):
                         "са по-високи, защото ботът записва „failed“ след своя таймаут, "
                         "а бекендът го води като „answered“.",
                         size=12,
-                        color=ft.Colors.GREY_400,
+                        color=theme.MUTED,
                     ),
                     approve_row,
                     veto_row,
@@ -332,11 +331,11 @@ class OracleView(ft.Container):
             ),
             padding=10,
             border_radius=8,
-            border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
+            border=ft.Border.all(1, theme.BORDER),
         )
-        self.updated_text = ft.Text("", size=12, color=ft.Colors.GREY_400)
-        self.error_text = ft.Text("", size=12, color=ft.Colors.RED_300, visible=False)
-        self.empty_text = ft.Text("", color=ft.Colors.GREY_400, visible=False)
+        self.updated_text = ft.Text("", size=12, color=theme.MUTED)
+        self.error_text = ft.Text("", size=12, color=theme.PROBLEM, visible=False)
+        self.empty_text = ft.Text("", color=theme.MUTED, visible=False)
 
         self.data_table = ft.DataTable(
             columns=[
@@ -668,7 +667,7 @@ class OracleView(ft.Container):
     # ----------------------------------------------------------------- screen
     @staticmethod
     def _progress_row(label: str) -> tuple[ft.ProgressBar, ft.Text, ft.Row]:
-        bar = ft.ProgressBar(value=0, width=PROGRESS_BAR_WIDTH, color=ft.Colors.BLUE)
+        bar = ft.ProgressBar(value=0, width=PROGRESS_BAR_WIDTH, color=theme.ACCENT)
         value = ft.Text("", size=12)
         row = ft.Row(
             [ft.Text(label, width=PROGRESS_LABEL_WIDTH), bar, value],
@@ -683,20 +682,18 @@ class OracleView(ft.Container):
             (self.veto_bar, self.veto_value, progress.veto, VETO_TARGET),
         ):
             bar.value = min(count / target, 1)
-            bar.color = ft.Colors.GREEN if count >= target else ft.Colors.BLUE
+            bar.color = theme.OK if count >= target else theme.ACCENT
             value.value = f"{count} / {target}"
 
         availability = progress.availability
         if availability is None:
             self.availability_bar.value = 0
-            self.availability_bar.color = ft.Colors.BLUE
+            self.availability_bar.color = theme.ACCENT
             self.availability_value.value = "още няма сигнали"
         else:
             self.availability_bar.value = availability
             self.availability_bar.color = (
-                ft.Colors.GREEN
-                if availability >= AVAILABILITY_TARGET
-                else ft.Colors.AMBER
+                theme.OK if availability >= AVAILABILITY_TARGET else theme.ATTENTION
             )
             self.availability_value.value = (
                 f"{availability * 100:.0f} % ({progress.answered} от {progress.asked} "
@@ -775,7 +772,7 @@ class OracleView(ft.Container):
             width=REASON_WIDTH,
             max_lines=2,
             overflow=ft.TextOverflow.ELLIPSIS,
-            color=ft.Colors.ORANGE_200 if decision.status == STATUS_FAILED else None,
+            color=theme.ATTENTION if decision.status == STATUS_FAILED else None,
             tooltip=reason or None,
         )
         mode_label, mode_meaning = mode_cell(decision.mode)

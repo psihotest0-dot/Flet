@@ -18,6 +18,7 @@ from api.limits import (
     content_size,
 )
 from api.models import MEMORY_ACTIVE, MEMORY_CANDIDATE, STYLE_KIND
+from views import theme
 from views.proposals import ProposalCard
 from views.ui_utils import (
     close_dialog,
@@ -142,7 +143,7 @@ class MemoryRow(ft.DataRow):
         )
         self.activate_btn = ft.IconButton(
             icon=ft.Icons.CHECK,
-            icon_color=ft.Colors.GREEN,
+            icon_color=theme.OK,
             tooltip="Активирай",
             visible=memory.status == MEMORY_CANDIDATE,
             on_click=self._activate,
@@ -390,7 +391,7 @@ class MemoryView(ft.Container):
         )
 
         self.empty_hint = ft.Text(
-            "Няма намерени спомени.", color=ft.Colors.GREY_500, visible=False
+            "Няма намерени спомени.", color=theme.MUTED, visible=False
         )
 
         # What the assistant proposed to remember and waits for the user's answer.

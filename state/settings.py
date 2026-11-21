@@ -25,6 +25,12 @@ DEFAULT_BASE_URL = "http://localhost:8080"
 DEFAULT_DISPLAY_NAME = "Ти"
 MAX_DISPLAY_NAME_CHARS = 40
 
+# How the window looks: the dark theme (what the app always had) or the light one.
+THEME_DARK = "dark"
+THEME_LIGHT = "light"
+THEMES = (THEME_DARK, THEME_LIGHT)
+DEFAULT_THEME = THEME_DARK
+
 # Writes go one at a time. Flet 1.x runs every event handler on the event loop,
 # so two saves cannot overlap there any more; the lock stays for a save from a
 # thread (``asyncio.to_thread``, a test), where an interleaved write would cost
@@ -121,6 +127,8 @@ class Settings(BaseModel):
     display_name: str = DEFAULT_DISPLAY_NAME
     # session id -> "cloud" | "home"; see CLOUD_MODES.
     cloud_modes: dict[str, str] = {}
+    # One of THEMES; a file from before the light theme has none.
+    theme: str = DEFAULT_THEME
 
     def snapshot(self) -> Settings:
         """A copy of the settings, for ``restore`` after a change that was not saved."""
@@ -145,6 +153,11 @@ class Settings(BaseModel):
             for key, mode in value.items()
             if isinstance(key, str) and key and mode in CLOUD_MODES
         }
+
+    @field_validator("theme", mode="before")
+    @classmethod
+    def _validate_theme(cls, value: Any) -> str:
+        return value if value in THEMES else DEFAULT_THEME
 
     @field_validator("base_url", mode="before")
     @classmethod

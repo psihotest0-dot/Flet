@@ -5,6 +5,7 @@ import httpx
 import pytest
 import respx
 
+from views import theme
 from views.settings_dialog import (
     INSECURE_URL_NOTE,
     SettingsDialog,
@@ -116,7 +117,7 @@ async def test_open_resets_what_was_typed_and_shown_before(
 ):
     dialog.base_url_field.value = "nonsense"
     dialog._save(None)
-    dialog._show_result("Няма връзка", ft.Colors.RED)
+    dialog._show_result("Няма връзка", theme.PROBLEM)
     await dialog._copy_user_id(None)
     assert dialog.copy_btn.icon == ft.Icons.CHECK
 
@@ -185,7 +186,7 @@ async def test_check_connection_reports_a_reachable_backend(dialog):
     assert route.called
     assert dialog.check_result.visible is True
     assert dialog.check_result.value == "Връзката е успешна."
-    assert dialog.check_result.color == ft.Colors.GREEN
+    assert dialog.check_result.color == theme.OK
     assert dialog.check_btn.disabled is False
     assert dialog.check_progress.visible is False
 
@@ -212,7 +213,7 @@ async def test_check_connection_reports_an_unreachable_backend(dialog, outcome):
 
     assert dialog.check_result.visible is True
     assert dialog.check_result.value == "Няма връзка с http://127.0.0.1:8080"
-    assert dialog.check_result.color == ft.Colors.RED
+    assert dialog.check_result.color == theme.PROBLEM
     assert dialog.check_btn.disabled is False
     assert dialog.check_progress.visible is False
 

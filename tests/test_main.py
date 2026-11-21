@@ -19,6 +19,7 @@ from helpers import real_session, tab_view
 import main as main_module
 from api.client import APIClient
 from state.settings import Settings, load_settings, save_settings
+from views import theme
 from views.files import FilesView
 from views.oracle import OracleView
 
@@ -359,7 +360,7 @@ def test_dialog_is_built_with_the_saved_chat_name_and_reopens_with_it(
     start_app()
     assert settings_dialog_spy["display_name"] == "Иван"
 
-    open_settings = mock_page.appbar.actions[0].on_click
+    open_settings = mock_page.appbar.actions[-1].on_click
     open_settings(None)
     settings_dialog_spy["on_save"]("http://localhost:8080", "Мария")
     open_settings(None)
@@ -789,3 +790,228 @@ def test_the_app_installs_the_guard_once_the_window_is_built(start_app, mock_pag
     # mock_page.session is a mock; the app replaced its ``error`` with a function.
     assert callable(mock_page.session.error)
     assert not isinstance(mock_page.session.error, MagicMock)
+
+
+# ----------------------------------------------------------------------- theme
+def toggle_button(mock_page):
+    """The button that goes to the other theme: first of the actions, then settings."""
+    return mock_page.appbar.actions[0]
+
+
+@pytest.mark.parametrize(
+    ("stored", "mode"),
+    [
+        ("light", ft.ThemeMode.LIGHT),
+        ("dark", ft.ThemeMode.DARK),
+        (None, ft.ThemeMode.DARK),
+    ],
+    ids=["light", "dark", "never-chosen"],
+)
+def test_the_window_starts_in_the_theme_that_was_saved(
+    start_app, mock_page, stored, mode
+):
+    settings = Settings(user_id=USER_ID)
+    if stored:
+        settings.theme = stored
+    save_settings(settings)
+
+    start_app()
+
+    assert mock_page.theme_mode == mode
+    assert mock_page.theme == theme.light_theme()
+    assert mock_page.dark_theme == theme.dark_theme()
+
+
+@pytest.mark.parametrize(
+    ("stored", "icon", "tooltip"),
+    [
+        ("dark", ft.Icons.LIGHT_MODE, "Светла тема"),
+        ("light", ft.Icons.DARK_MODE, "Тъмна тема"),
+    ],
+)
+def test_the_button_offers_the_theme_the_window_is_not_in(
+    start_app, mock_page, stored, icon, tooltip
+):
+    save_settings(Settings(user_id=USER_ID, theme=stored))
+
+    start_app()
+
+    assert (toggle_button(mock_page).icon, toggle_button(mock_page).tooltip) == (
+        icon,
+        tooltip,
+    )
+
+
+def test_the_button_changes_the_theme_and_keeps_the_choice(start_app, mock_page):
+    save_settings(Settings(user_id=USER_ID, session_id="s-1"))
+    start_app()
+    button = toggle_button(mock_page)
+
+    button.on_click(None)
+
+    assert mock_page.theme_mode == ft.ThemeMode.LIGHT
+    assert load_settings().theme == "light"
+    assert (button.icon, button.tooltip) == (ft.Icons.DARK_MODE, "Тъмна тема")
+    # Only the theme changed: the identity is where it was.
+    assert load_settings().user_id == USER_ID
+    assert load_settings().session_id == "s-1"
+
+    button.on_click(None)
+
+    assert mock_page.theme_mode == ft.ThemeMode.DARK
+    assert load_settings().theme == "dark"
+    assert (button.icon, button.tooltip) == (ft.Icons.LIGHT_MODE, "Светла тема")
+
+
+def test_a_theme_that_could_not_be_saved_is_not_switched_to(
+    start_app, mock_page, monkeypatch
+):
+    save_settings(Settings(user_id=USER_ID))
+    tabs = start_app()
+    monkeypatch.setattr(main_module, "save_settings", lambda _settings: False)
+
+    with patch.object(main_module, "show_snackbar") as snackbar:
+        toggle_button(mock_page).on_click(None)
+
+    snackbar.assert_called_once()
+    assert "Неуспешно" in snackbar.call_args.args[1]
+    assert mock_page.theme_mode == ft.ThemeMode.DARK
+    assert tab_view(tabs, 0).settings.theme == "dark"
+    assert toggle_button(mock_page).icon == ft.Icons.LIGHT_MODE
+
+
+def test_the_code_blocks_of_the_chat_follow_a_change_of_theme(start_app, mock_page):
+    save_settings(Settings(user_id=USER_ID))
+    chat = tab_view(start_app(), 0)
+    old = chat.add_message("assistant", "```py\nx = 1\n```", notify=False)
+    assert old.md.code_theme == ft.MarkdownCodeTheme.ATOM_ONE_DARK
+
+    toggle_button(mock_page).on_click(None)
+    new = chat.add_message("assistant", "```py\ny = 2\n```", notify=False)
+
+    # The message that was there and the one that came after.
+    assert old.md.code_theme == ft.MarkdownCodeTheme.ATOM_ONE_LIGHT
+    assert new.md.code_theme == ft.MarkdownCodeTheme.ATOM_ONE_LIGHT
+
+    toggle_button(mock_page).on_click(None)
+
+    assert old.md.code_theme == ft.MarkdownCodeTheme.ATOM_ONE_DARK
+
+
+# ------------------------------------------------------------------ connection
+def connection_parts(mock_page):
+    """``(status pill, offline banner, the callback of the health poll)``."""
+    pill = mock_page.appbar.title.controls[1]
+    banner = mock_page.add.call_args_list[0].args[0]
+    # run_task(run_health_checks, probe, on_change) - the app's first task.
+    on_change = mock_page.run_task.call_args_list[0].args[2]
+    return pill, banner, on_change
+
+
+def pill_texts(pill):
+    icon, label = pill.content.controls
+    return label.value, icon.color, label.color
+
+
+def test_the_banner_goes_over_the_tabs(start_app, mock_page):
+    tabs = start_app()
+
+    _pill, banner, _on_change = connection_parts(mock_page)
+
+    # The tabs are added last: they take what the banner leaves.
+    assert [call.args[0] for call in mock_page.add.call_args_list] == [banner, tabs]
+
+
+def test_until_the_first_answer_the_indicator_only_says_it_is_checking(
+    start_app, mock_page
+):
+    start_app()
+
+    pill, banner, _on_change = connection_parts(mock_page)
+
+    assert pill_texts(pill) == ("Връзка…", theme.MUTED, theme.MUTED)
+    assert pill.bgcolor is None
+    assert banner.visible is False
+
+
+def test_a_lost_connection_shows_the_indicator_in_red_and_the_banner(
+    start_app, mock_page
+):
+    save_settings(Settings(user_id=USER_ID, base_url="http://localhost:8080"))
+    start_app()
+    pill, banner, on_change = connection_parts(mock_page)
+
+    on_change(False)
+
+    assert pill_texts(pill) == (
+        "Няма връзка",
+        theme.PROBLEM,
+        theme.ON_PROBLEM_BACKGROUND,
+    )
+    assert pill.bgcolor == theme.PROBLEM_BACKGROUND
+    assert pill.tooltip == "Няма връзка с http://localhost:8080"
+    assert banner.visible is True
+    text = banner.content.controls[1].value
+    assert "http://localhost:8080" in text
+    assert f"{main_module.HEALTH_CHECK_INTERVAL} секунди" in text
+
+
+def test_a_connection_that_is_there_shows_no_banner(start_app, mock_page):
+    save_settings(Settings(user_id=USER_ID, base_url="http://localhost:8080"))
+    start_app()
+    pill, banner, on_change = connection_parts(mock_page)
+
+    on_change(False)
+    on_change(True)
+
+    assert pill_texts(pill) == ("Свързан", theme.OK, theme.MUTED)
+    assert pill.bgcolor is None
+    assert pill.tooltip == "Свързан с http://localhost:8080"
+    assert banner.visible is False
+
+
+def test_only_a_connection_that_came_back_says_so(start_app, mock_page, caplog):
+    start_app()
+    _pill, _banner, on_change = connection_parts(mock_page)
+    caplog.set_level(logging.INFO, logger="main")
+
+    with patch.object(main_module, "show_snackbar") as snackbar:
+        on_change(True)
+        snackbar.assert_not_called()
+        on_change(False)
+        snackbar.assert_not_called()
+        on_change(True)
+
+    snackbar.assert_called_once_with(
+        mock_page, "Връзката е възстановена.", success=True
+    )
+    assert "The backend does not answer." in caplog.text
+    assert "The connection to the backend is back." in caplog.text
+
+
+def test_the_banner_and_the_tooltip_name_the_address_that_is_set_now(
+    start_app, settings_dialog_spy, mock_page
+):
+    save_settings(Settings(user_id=USER_ID, base_url="http://localhost:8080"))
+    start_app()
+    pill, banner, on_change = connection_parts(mock_page)
+    on_change(False)
+
+    settings_dialog_spy["on_save"]("http://127.0.0.1:9000")
+
+    text = banner.content.controls[1].value
+    assert "http://127.0.0.1:9000" in text
+    assert "localhost" not in text
+    assert pill.tooltip == "Няма връзка с http://127.0.0.1:9000"
+
+
+def test_the_banner_leads_to_the_settings(start_app, settings_dialog_spy, mock_page):
+    save_settings(Settings(user_id=USER_ID, display_name="Иван"))
+    start_app()
+    _pill, banner, _on_change = connection_parts(mock_page)
+
+    banner.content.controls[2].on_click(None)
+
+    assert settings_dialog_spy["dialog"].opened_with == [
+        ("http://localhost:8080", "Иван")
+    ]

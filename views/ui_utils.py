@@ -11,6 +11,7 @@ import flet as ft
 import httpx
 
 from api.errors import APIError, StreamError
+from views import theme
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +210,7 @@ def show_snackbar(page: ft.Page | None, message: str, success: bool = False) -> 
         page,
         ft.SnackBar(
             content=ft.Text(message, color=ft.Colors.WHITE),
-            bgcolor=ft.Colors.GREEN if success else ft.Colors.RED,
+            bgcolor=theme.TOAST_OK if success else theme.TOAST_PROBLEM,
         ),
     )
 
@@ -246,7 +247,7 @@ async def confirm_dialog(
             ft.TextButton(
                 confirm_text,
                 on_click=lambda e: close(True),
-                style=ft.ButtonStyle(color=ft.Colors.RED) if destructive else None,
+                style=ft.ButtonStyle(color=theme.PROBLEM) if destructive else None,
             ),
         ],
         actions_alignment=ft.MainAxisAlignment.END,
