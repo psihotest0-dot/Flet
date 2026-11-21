@@ -13,9 +13,11 @@ from helpers import mounted, real_session
 from api.errors import APIError, StreamError
 from views import theme
 from views.ui_utils import (
+    PollingTab,
     close_dialog,
     confirm_dialog,
     copy_text,
+    delete_on_backend,
     describe_error,
     error_detail,
     error_for_log,
@@ -497,3 +499,77 @@ async def test_any_other_link_in_an_answer_is_refused(mock_page, launcher, caplo
     # Only the scheme: the rest of an address is the model's text.
     assert "alert(1)" not in caplog.text
     assert "calc.exe" not in caplog.text
+
+
+# ------------------------------------------------------------- delete_on_backend
+@pytest.mark.asyncio
+async def test_a_delete_that_worked_is_done_without_a_word(mock_page):
+    delete = AsyncMock()
+
+    assert await delete_on_backend(mock_page, delete, "спомена", "memory m1") is True
+
+    delete.assert_awaited_once()
+    mock_page.show_dialog.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_thing_that_is_gone_already_counts_as_deleted(mock_page, caplog):
+    caplog.set_level("INFO")
+    delete = AsyncMock(side_effect=APIError(404, "not found"))
+
+    assert await delete_on_backend(mock_page, delete, "спомена", "memory m1") is True
+
+    mock_page.show_dialog.assert_not_called()
+    assert "Already deleted on the backend: memory m1" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "detail"),
+    [
+        (APIError(500, "boom"), "boom"),
+        (httpx.ConnectError("refused"), "бекендът не е достъпен"),
+    ],
+)
+async def test_a_failed_delete_is_logged_and_told(mock_page, caplog, error, detail):
+    delete = AsyncMock(side_effect=error)
+
+    assert await delete_on_backend(mock_page, delete, "файла", "a file") is False
+
+    snackbar = mock_page.show_dialog.call_args.args[0]
+    assert snackbar.content.value == f"Грешка при изтриване на файла: {detail}"
+    assert "Failed to delete a file" in caplog.text
+
+
+# -------------------------------------------------------------------- PollingTab
+def test_a_polling_tab_must_name_its_two_jobs():
+    tab = PollingTab()
+
+    with pytest.raises(NotImplementedError):
+        tab._load_job()
+    with pytest.raises(NotImplementedError):
+        tab._poll_job()
+
+
+def test_a_polling_tab_mounted_twice_loads_once(mock_page):
+    class Tab(PollingTab):
+        async def load(self):
+            pass
+
+        async def poll(self):
+            pass
+
+        def _load_job(self):
+            return self.load
+
+        def _poll_job(self):
+            return self.poll
+
+    tab = Tab()
+    tab.page_ref = mock_page
+    tab._init_polling()
+
+    tab.did_mount()
+    tab.did_mount()
+
+    mock_page.run_task.assert_called_once_with(tab.load)

@@ -19,6 +19,7 @@ from api.limits import (
 from api.models import IngestedFile
 from views import theme
 from views.ui_utils import (
+    PollingTab,
     confirm_dialog,
     error_detail,
     error_for_log,
@@ -83,15 +84,14 @@ EMBEDDING_TOOLTIPS = {
 UNKNOWN_EMBEDDING_TOOLTIP = "Няма информация за индексирането на файла."
 
 
-def chunk_label(count: int | None) -> str:
-    """Human readable chunk count using the Bulgarian plural forms."""
-    if count is None:
-        return ""
-    if count == 0:
-        return "няма части"
-    if count == 1:
-        return "1 част"
-    return f"{count} части"
+def chunk_label(count: int) -> str:
+    """ "1 част", "12 части": shown only for a file that has parts at all."""
+    return "1 част" if count == 1 else f"{count} части"
+
+
+def files_label(count: int) -> str:
+    """ "1 файл", "3 файла" - the Bulgarian plural."""
+    return "1 файл" if count == 1 else f"{count} файла"
 
 
 def embedding_key(file: IngestedFile) -> str:
@@ -178,7 +178,7 @@ def visible_files(
     return [f for _v, f in known] + [f for v, f in keyed if v is None]
 
 
-class FilesView(ft.Container):
+class FilesView(PollingTab, ft.Container):
     """The view for uploading, viewing, and managing files."""
 
     def __init__(self, page: ft.Page, api_client: APIClient):
@@ -299,10 +299,7 @@ class FilesView(ft.Container):
             expand=True,
         )
 
-        self._polling = False
-        self._active = False
-        self._load_task = None
-        self._poll_task = None
+        self._init_polling()
         # file_id -> status Text control, so a status change re-sends one cell
         # instead of rebuilding the whole table.
         self._status_cells: dict[str, ft.Text] = {}
@@ -312,34 +309,11 @@ class FilesView(ft.Container):
         self._sort_ascending = False
 
     # -------------------------------------------------------------- lifecycle
-    def did_mount(self):
-        if self._load_task is None:
-            self._load_task = self.page_ref.run_task(self.initial_load)
-        if self._active:
-            self.set_active(True)
+    def _load_job(self):
+        return self.initial_load
 
-    def set_active(self, active: bool):
-        """Poll file statuses only while this tab is the visible one."""
-        self._active = active
-        if active:
-            if self._poll_task is None and self.page_ref is not None:
-                self._polling = True
-                self._poll_task = self.page_ref.run_task(self.poll_statuses)
-        else:
-            self._polling = False
-            if self._poll_task is not None:
-                self._poll_task.cancel()
-                self._poll_task = None
-
-    def will_unmount(self):
-        self._polling = False
-        self._active = False
-        if self._load_task is not None:
-            self._load_task.cancel()
-            self._load_task = None
-        if self._poll_task is not None:
-            self._poll_task.cancel()
-            self._poll_task = None
+    def _poll_job(self):
+        return self.poll_statuses
 
     # ------------------------------------------------------------------- data
     async def on_refresh_click(self, e):
@@ -377,7 +351,7 @@ class FilesView(ft.Container):
         total = len(self.files)
         if self._filtering():
             return f"Показани {shown} от {total}"
-        return f"{total} файла" if total != 1 else "1 файл"
+        return files_label(total)
 
     def _on_filter_change(self, _e=None):
         self.update_table()

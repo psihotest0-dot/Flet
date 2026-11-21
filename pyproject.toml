@@ -25,7 +25,7 @@ dev = [
     "pytest-cov>=7.1,<8",
     "ruff>=0.17,<0.18",
     "respx>=0.23,<0.24",
-    # Property tests (tests/test_markdown_safety_properties.py, tests/test_contract.py).
+    # Property tests (tests/test_chat_images.py, tests/test_contract.py).
     "hypothesis>=6.170,<7",
     # Reads docs/openapi.yaml in tests/contract.py. Not PyYAML: it has no wheel for
     # Python 3.15 yet, and building it needs a C compiler.
@@ -44,10 +44,10 @@ source = ["api", "state", "views", "main"]
 branch = true
 
 [tool.coverage.report]
-# Measured 94.0 % (statements and branches) on 2026-11-21; the minimum is a
+# Measured 95.0 % (statements and branches) on 2026-11-21; the minimum is a
 # little below it so a small refactor does not turn CI red. Raise it when the
 # number goes up.
-fail_under = 93
+fail_under = 94
 skip_covered = true
 
 [tool.ruff]

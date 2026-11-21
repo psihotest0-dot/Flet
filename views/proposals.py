@@ -226,7 +226,7 @@ class ProposalCard(ft.Container):
             self.on_decided(self.proposal, approve)
 
 
-def _api_error_text(error: APIError, proposal: Proposal | None = None) -> str:
+def _api_error_text(error: APIError, proposal: Proposal) -> str:
     """The backend refuses an approval (422) that cannot be done as it stands.
 
     For a rule it is the limit of global rules. For a file write the backend says
@@ -234,7 +234,30 @@ def _api_error_text(error: APIError, proposal: Proposal | None = None) -> str:
     text is the answer.
     """
     if error.status == CANNOT_APPLY_STATUS:
-        if proposal is not None and proposal.kind == WRITE_FILE_KIND:
+        if proposal.kind == WRITE_FILE_KIND:
             return error.message
         return "Вече има твърде много глобални правила — първо изтрий някое от таба „Памет“."
     return describe_error(error)
+
+
+async def proposal_cards(
+    api_client: APIClient,
+    page: ft.Page | None,
+    on_decided: Callable[[Proposal, bool], None],
+    kind: str | None = None,
+) -> list[ProposalCard] | None:
+    """The proposals that wait for an answer, as cards; only those of ``kind`` if given.
+
+    ``None`` when they could not be read: the failure is logged and the tab keeps
+    what it shows, because the proposals are an addition to it, not its content.
+    """
+    try:
+        proposals = await api_client.list_proposals()
+    except Exception as ex:
+        logger.warning("Failed to load proposals: %s", ex, exc_info=is_unexpected(ex))
+        return None
+    return [
+        ProposalCard(proposal, api_client, page=page, on_decided=on_decided)
+        for proposal in proposals
+        if kind is None or proposal.kind == kind
+    ]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import weakref
+from collections.abc import Awaitable, Callable
 from pathlib import PurePath
 
 import flet as ft
@@ -259,3 +260,89 @@ async def confirm_dialog(
     finally:
         if not future.done():
             future.cancel()
+
+
+async def delete_on_backend(
+    page: ft.Page | None,
+    delete: Callable[[], Awaitable[object]],
+    what: str,
+    log_what: str,
+) -> bool:
+    """Run ``delete``; ``True`` when the thing is gone, also when it already was.
+
+    A 404 means it was deleted already (from another client): what the user wanted
+    is true, so it counts as done. Any other failure is logged, shown as
+    "Грешка при изтриване на <what>: ..." and gives ``False``. ``log_what`` names
+    the thing in the log (an id at most, never a name the user gave it).
+    """
+    try:
+        await delete()
+    except APIError as ex:
+        if ex.status != 404:
+            logger.error("Failed to delete %s: %s", log_what, ex)
+            show_snackbar(page, f"Грешка при изтриване на {what}: {error_detail(ex)}")
+            return False
+        logger.info("Already deleted on the backend: %s", log_what)
+    except Exception as ex:
+        logger.error(
+            "Failed to delete %s: %s", log_what, ex, exc_info=is_unexpected(ex)
+        )
+        show_snackbar(page, f"Грешка при изтриване на {what}: {error_detail(ex)}")
+        return False
+    return True
+
+
+class PollingTab:
+    """The lifecycle of a tab that loads once it is mounted and polls while it is seen.
+
+    The view that mixes this in calls :meth:`_init_polling` in its ``__init__``,
+    keeps ``page_ref`` and names its two coroutines in :meth:`_load_job` and
+    :meth:`_poll_job`; the poll loop runs ``while self._polling``. ``main`` calls
+    :meth:`set_active` when the tabs change and ``will_unmount`` when the window
+    closes.
+    """
+
+    page_ref: ft.Page | None
+
+    def _init_polling(self) -> None:
+        self._polling = False
+        self._active = False
+        self._load_task = None
+        self._poll_task = None
+
+    def _load_job(self) -> Callable[..., Awaitable[object]]:
+        """The coroutine that fills the tab once it is on the page."""
+        raise NotImplementedError
+
+    def _poll_job(self) -> Callable[..., Awaitable[object]]:
+        """The loop that refreshes the tab while it is the visible one."""
+        raise NotImplementedError
+
+    def did_mount(self):
+        if self._load_task is None:
+            self._load_task = self.page_ref.run_task(self._load_job())
+        if self._active:
+            self.set_active(True)
+
+    def set_active(self, active: bool):
+        """Poll only while this tab is the visible one."""
+        self._active = active
+        if active:
+            if self._poll_task is None and self.page_ref is not None:
+                self._polling = True
+                self._poll_task = self.page_ref.run_task(self._poll_job())
+        else:
+            self._stop_polling()
+
+    def will_unmount(self):
+        self._active = False
+        self._stop_polling()
+        if self._load_task is not None:
+            self._load_task.cancel()
+            self._load_task = None
+
+    def _stop_polling(self) -> None:
+        self._polling = False
+        if self._poll_task is not None:
+            self._poll_task.cancel()
+            self._poll_task = None

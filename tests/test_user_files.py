@@ -17,15 +17,15 @@ import main as main_module
 from api.client import APIClient
 from api.errors import APIError
 from api.models import Proposal, UserFile, UserFileInfo, UserFileList
+from views import ui_utils as ui_utils_module
 from views import user_files as user_files_module
+from views.files import files_label
 from views.user_files import (
     NO_FILES_TEXT,
     NO_PREVIOUS_TEXT,
     NOT_ENABLED_TEXT,
     UserFilesView,
     file_subtitle,
-    files_label,
-    modified_label,
     usage_label,
 )
 
@@ -230,7 +230,6 @@ def test_the_subtitle_has_the_size_and_the_time_in_local_time():
         .strftime("%d.%m.%Y %H:%M")
     )
     assert file_subtitle(UserFileInfo(name="b.txt", size=5)) == "5 B"
-    assert modified_label(None) == ""
 
 
 # --------------------------------------------------------------------- the view
@@ -251,6 +250,8 @@ def make_api(files: UserFileList | None = None, proposals=None):
 def snackbars(monkeypatch):
     shown = MagicMock()
     monkeypatch.setattr(user_files_module, "show_snackbar", shown)
+    # A failed delete is told by the shared helper (``delete_on_backend``).
+    monkeypatch.setattr(ui_utils_module, "show_snackbar", shown)
     return shown
 
 
@@ -296,7 +297,6 @@ async def test_a_backend_that_does_not_serve_the_files_says_they_are_off(mock_pa
 
     await view.load()
 
-    assert view.enabled is False
     assert view.notice.value == NOT_ENABLED_TEXT
     assert view.notice.visible is True
     assert view.list_column.controls == []
@@ -322,7 +322,6 @@ async def test_a_failed_load_says_so_and_keeps_the_list(mock_page, error):
     assert "Неуспешно зареждане" in view.notice.value
     assert tile_names(view) == ["списък за пазаруване.txt", "plan.md"]
     assert view.progress.visible is False
-    assert view.enabled is True
 
 
 @pytest.mark.asyncio

@@ -19,7 +19,7 @@ import flet as ft
 from api.client import APIClient
 from api.models import OracleDecision, OracleDecisionPage
 from views import theme
-from views.ui_utils import error_detail, is_unexpected, safe_update
+from views.ui_utils import PollingTab, error_detail, is_unexpected, safe_update
 
 logger = logging.getLogger(__name__)
 
@@ -307,7 +307,7 @@ def active_note_text(progress: Progress) -> str:
     return text + "."
 
 
-class OracleView(ft.Container):
+class OracleView(PollingTab, ft.Container):
     """The journal of the Oracle: a filterable table, newest decision first."""
 
     def __init__(self, page: ft.Page, api_client: APIClient):
@@ -327,14 +327,11 @@ class OracleView(ft.Container):
         # (another symbol, the button) belongs to a list that is gone.
         self._generation = 0
         self._loading_more = False
-        self._polling = False
-        self._active = False
+        self._init_polling()
         self._poll_failed = False
         self._progress_failed = False
         # True once the counters were read; until then a poll has to build them.
         self._progress_ready = False
-        self._load_task = None
-        self._poll_task = None
         # Every journal row since EVALUATION_START, by id: the evaluation counts
         # signals, so it needs more than the 50 rows of the table.
         self._progress_rows: dict[int, OracleDecision] = {}
@@ -474,34 +471,11 @@ class OracleView(ft.Container):
         )
 
     # -------------------------------------------------------------- lifecycle
-    def did_mount(self):
-        if self._load_task is None:
-            self._load_task = self.page_ref.run_task(self.refresh)
-        if self._active:
-            self.set_active(True)
+    def _load_job(self):
+        return self.refresh
 
-    def set_active(self, active: bool):
-        """Fetch new decisions only while this tab is the visible one."""
-        self._active = active
-        if active:
-            if self._poll_task is None and self.page_ref is not None:
-                self._polling = True
-                self._poll_task = self.page_ref.run_task(self.poll)
-        else:
-            self._polling = False
-            if self._poll_task is not None:
-                self._poll_task.cancel()
-                self._poll_task = None
-
-    def will_unmount(self):
-        self._polling = False
-        self._active = False
-        if self._load_task is not None:
-            self._load_task.cancel()
-            self._load_task = None
-        if self._poll_task is not None:
-            self._poll_task.cancel()
-            self._poll_task = None
+    def _poll_job(self):
+        return self.poll
 
     # ----------------------------------------------------------------- events
     async def on_refresh_click(self, e):

@@ -19,10 +19,11 @@ from api.limits import (
 )
 from api.models import MEMORY_ACTIVE, MEMORY_CANDIDATE, STYLE_KIND
 from views import theme
-from views.proposals import ProposalCard
+from views.proposals import proposal_cards
 from views.ui_utils import (
     close_dialog,
     confirm_dialog,
+    delete_on_backend,
     error_detail,
     is_unexpected,
     open_dialog,
@@ -314,27 +315,16 @@ class MemoryRow(ft.DataRow):
         if not confirmed:
             return
 
-        try:
-            await self.view.api_client.delete_memory(self.memory.id)
-        except APIError as ex:
-            # 404: the memory is gone already (deleted from another client). What the
-            # user wanted is true, so the row goes too.
-            if ex.status != 404:
-                logger.error("Failed to delete memory: %s", ex)
-                show_snackbar(
-                    self.view.page_ref, f"Грешка при изтриване на спомена: {ex}"
-                )
-                return
-            logger.info("Memory %s was already deleted on the backend.", self.memory.id)
-        except Exception as ex:
-            logger.error("Failed to delete memory: %s", ex, exc_info=is_unexpected(ex))
-            show_snackbar(
-                self.view.page_ref,
-                f"Грешка при изтриване на спомена: {error_detail(ex)}",
-            )
-            return
-
-        self.view.remove_memory_row(self)
+        memory_id = self.memory.id
+        # A 404 counts as done: the memory is gone already (deleted from another
+        # client), so the row goes too.
+        if await delete_on_backend(
+            self.view.page_ref,
+            lambda: self.view.api_client.delete_memory(memory_id),
+            "спомена",
+            f"memory {memory_id}",
+        ):
+            self.view.remove_memory_row(self)
 
 
 class MemoryView(ft.Container):
@@ -558,24 +548,13 @@ class MemoryView(ft.Container):
         await self.load_rules()
 
     async def load_proposals(self):
-        try:
-            proposals = await self.api_client.list_proposals()
-        except Exception as ex:
-            logger.warning(
-                "Failed to load proposals: %s", ex, exc_info=is_unexpected(ex)
-            )
+        cards = await proposal_cards(
+            self.api_client, self.page_ref, self._on_proposal_decided
+        )
+        if cards is None:
             return
-
-        self.proposals_column.controls = [
-            ProposalCard(
-                proposal,
-                self.api_client,
-                page=self.page_ref,
-                on_decided=self._on_proposal_decided,
-            )
-            for proposal in proposals
-        ]
-        self.proposals_section.visible = bool(proposals)
+        self.proposals_column.controls = cards
+        self.proposals_section.visible = bool(cards)
         safe_update(self, self.proposals_section)
 
     def _on_proposal_decided(self, proposal, approved: bool):
@@ -638,19 +617,13 @@ class MemoryView(ft.Container):
         if not confirmed:
             return
 
-        try:
-            await self.api_client.delete_rule(rule.id)
-        except APIError as ex:
-            if ex.status != 404:  # 404: already gone, the reload below shows it
-                logger.error("Failed to delete rule: %s", ex)
-                show_snackbar(self.page_ref, f"Грешка при изтриване на {what}: {ex}")
-                return
-            logger.info("Rule %s was already deleted on the backend.", rule.id)
-        except Exception as ex:
-            logger.error("Failed to delete rule: %s", ex, exc_info=is_unexpected(ex))
-            show_snackbar(
-                self.page_ref, f"Неуспешно изтриване на {what}: {error_detail(ex)}"
-            )
+        # A 404 counts as done: the rule is gone already, the reload below shows it.
+        if not await delete_on_backend(
+            self.page_ref,
+            lambda: self.api_client.delete_rule(rule.id),
+            what,
+            f"rule {rule.id}",
+        ):
             return
 
         show_snackbar(

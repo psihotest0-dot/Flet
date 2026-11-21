@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
 
 import flet as ft
 
@@ -20,12 +19,14 @@ from api.client import APIClient
 from api.errors import APIError
 from api.models import WRITE_FILE_KIND, UserFileInfo, UserFileList
 from views import theme
-from views.files import size_label
-from views.proposals import ProposalCard
+from views.files import files_label, size_label
+from views.proposals import proposal_cards
+from views.timeline import full_label
 from views.ui_utils import (
     close_dialog,
     confirm_dialog,
     copy_text,
+    delete_on_backend,
     error_detail,
     is_unexpected,
     open_dialog,
@@ -45,11 +46,6 @@ NO_FILES_TEXT = (
 NO_PREVIOUS_TEXT = "Няма предишна версия."
 
 
-def files_label(count: int) -> str:
-    """ "1 файл", "3 файла" - the Bulgarian plural."""
-    return "1 файл" if count == 1 else f"{count} файла"
-
-
 def usage_label(listing: UserFileList) -> str:
     """What the files take of what they may: "3 файла · 12 KB от 20,0 MB"."""
     return (
@@ -58,15 +54,9 @@ def usage_label(listing: UserFileList) -> str:
     )
 
 
-def modified_label(modified: datetime | None) -> str:
-    """The time of the last change in local time, day first: "14.11.2026 20:15"."""
-    if modified is None:
-        return ""
-    return modified.astimezone().strftime("%d.%m.%Y %H:%M")
-
-
 def file_subtitle(info: UserFileInfo) -> str:
-    parts = [size_label(info.size), modified_label(info.modified)]
+    modified = full_label(info.modified) if info.modified else ""
+    parts = [size_label(info.size), modified]
     return " · ".join(part for part in parts if part)
 
 
@@ -79,7 +69,6 @@ class UserFilesView(ft.Container):
         self.page_ref = page
         self.api_client = api_client
         self.listing = UserFileList()
-        self.enabled = True
         self.expand = True
         self.alignment = ft.Alignment.TOP_CENTER
         self.padding = 10
@@ -175,7 +164,6 @@ class UserFilesView(ft.Container):
 
         if sequence != self._load_seq:
             return
-        self.enabled = True
         self.listing = listing
         self._show_files()
         await self.load_proposals(sequence)
@@ -186,7 +174,6 @@ class UserFilesView(ft.Container):
         safe_update(self, self.notice)
 
     def _show_disabled(self):
-        self.enabled = False
         self.listing = UserFileList()
         self.usage.value = ""
         self.list_column.controls = []
@@ -236,27 +223,16 @@ class UserFilesView(ft.Container):
 
     async def load_proposals(self, sequence: int | None = None):
         """The writes to files that wait for an answer. A failure leaves the list as it was."""
-        try:
-            proposals = await self.api_client.list_proposals()
-        except Exception as ex:
-            logger.warning(
-                "Failed to load proposals: %s", ex, exc_info=is_unexpected(ex)
-            )
+        cards = await proposal_cards(
+            self.api_client,
+            self.page_ref,
+            self._on_proposal_decided,
+            kind=WRITE_FILE_KIND,
+        )
+        if cards is None or (sequence is not None and sequence != self._load_seq):
             return
-        if sequence is not None and sequence != self._load_seq:
-            return
-
-        writes = [p for p in proposals if p.kind == WRITE_FILE_KIND]
-        self.proposals_column.controls = [
-            ProposalCard(
-                proposal,
-                self.api_client,
-                page=self.page_ref,
-                on_decided=self._on_proposal_decided,
-            )
-            for proposal in writes
-        ]
-        self.proposals_section.visible = bool(writes)
+        self.proposals_column.controls = cards
+        self.proposals_section.visible = bool(cards)
         safe_update(self, self.proposals_section)
 
     def _on_proposal_decided(self, proposal, approved: bool):
@@ -368,23 +344,14 @@ class UserFilesView(ft.Container):
         if not confirmed:
             return
 
-        try:
-            await self.api_client.delete_user_file(info.name)
-        except APIError as ex:
-            if ex.status != 404:  # 404: already gone, the reload below shows it
-                logger.error("Failed to delete a file of the assistant: %s", ex)
-                show_snackbar(self.page_ref, f"Грешка при изтриване на файла: {ex}")
-                return
-            logger.info("A file of the assistant was already deleted.")
-        except Exception as ex:
-            logger.error(
-                "Failed to delete a file of the assistant: %s",
-                ex,
-                exc_info=is_unexpected(ex),
-            )
-            show_snackbar(
-                self.page_ref, f"Неуспешно изтриване на файла: {error_detail(ex)}"
-            )
+        # A 404 counts as done: the file is gone already, the reload below shows it.
+        # The log names no file: the name is the user's own text.
+        if not await delete_on_backend(
+            self.page_ref,
+            lambda: self.api_client.delete_user_file(info.name),
+            "файла",
+            "a file of the assistant",
+        ):
             return
 
         show_snackbar(self.page_ref, "Файлът е изтрит.", success=True)
