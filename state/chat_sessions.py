@@ -18,6 +18,14 @@ from state.settings import Settings, save_settings
 CHAT_SESSION_PREFIX = "Чат"
 # The longest name of a chat: the dropdown that shows it is 200 px wide.
 MAX_CHAT_NAME_CHARS = 40
+# The conversations the bot writes to are ``tg-<chat id>``; the app opens them as chats
+# of its own, so one conversation is shared with Telegram.
+PAIRED_SESSION_PREFIX = "tg-"
+# The backend's longest session id, and the most Telegram chats the app takes in: a
+# list longer than a person has chats is a fault, not a reason to fill the dropdown.
+MAX_SESSION_ID_CHARS = 128
+MAX_PAIRED_SESSIONS = 10
+DEFAULT_PAIRED_NAME = "Telegram"
 
 
 @dataclass(frozen=True)
@@ -176,6 +184,82 @@ def restart_chat_session(settings: Settings, session_id: str) -> str | None:
     if mode is not None:
         settings.cloud_modes[new_id] = mode
     return new_id
+
+
+def is_paired_session(session_id: str | None) -> bool:
+    """Whether ``session_id`` is a conversation shared with Telegram (``tg-<chat id>``)."""
+    return bool(session_id) and str(session_id).startswith(PAIRED_SESSION_PREFIX)
+
+
+def _is_usable_paired_id(session_id: object) -> bool:
+    """A Telegram session id the app may add: ``tg-...``, in the backend's length, no control characters."""
+    return (
+        isinstance(session_id, str)
+        and is_paired_session(session_id)
+        and len(session_id) <= MAX_SESSION_ID_CHARS
+        and session_id.isprintable()
+    )
+
+
+def ensure_paired_sessions(
+    settings: Settings, paired: list[tuple[str, str]]
+) -> list[ChatSession]:
+    """Add the Telegram conversations the settings lack; return the chats added.
+
+    ``paired`` is ``(session id, name)`` as the backend lists them. A chat that is
+    already there is left alone (its name may be the user's own), nothing is ever
+    taken away - a conversation that disappears from the list is not deleted from
+    the app - and the open chat stays the open chat. An id that is not a Telegram
+    session, a duplicate, and whatever is past ``MAX_PAIRED_SESSIONS`` is skipped.
+    The settings are changed in memory only, and only when something is added; saving
+    is the caller's step.
+    """
+    chats = normalize_chat_sessions(settings)
+    known = {chat.id for chat in chats}
+    added: list[ChatSession] = []
+    for session_id, name in paired:
+        if len(added) >= MAX_PAIRED_SESSIONS:
+            break
+        if not _is_usable_paired_id(session_id) or session_id in known:
+            continue
+        cleaned = " ".join((name or "").split())[:MAX_CHAT_NAME_CHARS].strip()
+        chat = ChatSession(
+            session_id, unique_chat_name(cleaned or DEFAULT_PAIRED_NAME, chats)
+        )
+        chats.append(chat)
+        added.append(chat)
+        known.add(session_id)
+
+    if added:
+        active_id = (settings.session_id or "").strip() or chats[0].id
+        store_chat_sessions(settings, chats, active_id)
+    return added
+
+
+def clear_chat_session(settings: Settings, session_id: str) -> str | None:
+    """Empty a chat that keeps its id: the same chat, the same conversation on the backend.
+
+    This is the local half of deleting a conversation shared with Telegram. The id is
+    the key to both channels, so unlike ``restart_chat_session`` it does not change; a
+    new one would cut the app off from the Telegram conversation. Nothing in the
+    settings changes. Returns ``session_id``, or ``None`` when it is not in the list.
+    """
+    chats = normalize_chat_sessions(settings)
+    if not any(chat.id == session_id for chat in chats):
+        return None
+    return session_id
+
+
+def reset_chat_session(settings: Settings, session_id: str) -> str | None:
+    """The id the chat has after its conversation was deleted on the backend.
+
+    A conversation shared with Telegram keeps its id (:func:`clear_chat_session`); any
+    other chat starts over under a new one (:func:`restart_chat_session`). ``None``:
+    the chat is not in the list, nothing was changed.
+    """
+    if is_paired_session(session_id):
+        return clear_chat_session(settings, session_id)
+    return restart_chat_session(settings, session_id)
 
 
 def ensure_chat_session(settings: Settings) -> tuple[str, list[ChatSession]]:
