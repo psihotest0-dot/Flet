@@ -119,7 +119,8 @@ async def test_load_history_batches_updates(chat_view, mock_api_client):
     assert len(chat_view.chat_list.controls) == 50
     # One update and one scroll for the whole history, not one per message.
     assert chat_view.update.call_count == 1
-    assert chat_view.scroll_to_bottom.call_count == 1
+    # The client has not measured these rows: the scroll has to settle at the end.
+    chat_view.scroll_to_bottom.assert_called_once_with(settle=True)
 
 
 @pytest.mark.asyncio

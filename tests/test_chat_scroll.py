@@ -192,6 +192,189 @@ async def test_scroll_after_layout_clears_the_flag_when_cancelled(view):
     assert view._scroll_pending is False
 
 
+# ------------------------------------------------- settling at the end of a history
+def running_task():
+    """Stands in for a page task that has not finished."""
+    return MagicMock(done=MagicMock(return_value=False))
+
+
+def test_a_scroll_to_the_bottom_is_not_settled_unless_asked(view, mock_page):
+    ChatView.scroll_to_bottom(view)
+
+    scheduled = [call.args for call in mock_page.run_task.call_args_list]
+    assert (view._scroll_after_layout,) in scheduled
+    assert (view._settle_at_end,) not in scheduled
+
+
+def test_a_settling_scroll_to_the_bottom_replaces_the_single_deferred_one(
+    view, mock_page
+):
+    ChatView.scroll_to_bottom(view, settle=True)
+
+    scheduled = [call.args for call in mock_page.run_task.call_args_list]
+    assert (view._settle_at_end,) in scheduled
+    assert (view._scroll_after_layout,) not in scheduled
+    assert view._follow_bottom is True
+
+
+def test_starting_to_settle_again_cancels_the_one_that_runs(view, mock_page):
+    old = running_task()
+    view._settle_task = old
+
+    view._start_settling()
+
+    old.cancel.assert_called_once_with()
+    assert view._settle_task is mock_page.run_task.return_value
+
+
+def test_a_settle_task_that_is_over_is_not_cancelled(view):
+    over = MagicMock(done=MagicMock(return_value=True))
+    view._settle_task = over
+
+    view._stop_settling()
+
+    over.cancel.assert_not_called()
+    assert view._settle_task is None
+
+
+def test_closing_the_chat_stops_the_settling(view):
+    task = running_task()
+    view._settle_task = task
+
+    view._cancel_running_tasks()
+
+    task.cancel.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_the_button_settles_at_the_end_too(view):
+    view._on_chat_scroll(scroll_event(USER, direction=UP, pixels=900))
+    view.page_ref.run_task.reset_mock()
+
+    with list_mounted():
+        await view.on_to_bottom_click()
+
+    view.page_ref.run_task.assert_any_call(view._settle_at_end)
+
+
+def jumps_that_move(view, count):
+    """A ``scroll_to`` whose first ``count`` jumps move the list (and so raise events)."""
+    calls = []
+
+    async def scroll_to(**kwargs):
+        calls.append(kwargs)
+        if len(calls) <= count:
+            view._on_chat_scroll(
+                scroll_event(UPDATE, delta=500, pixels=500 * len(calls))
+            )
+
+    view.chat_list.scroll_to = AsyncMock(side_effect=scroll_to)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_settling_jumps_until_a_jump_moves_nothing(view, monkeypatch):
+    # The end the client jumped to was an estimate: it moved on twice (as it did with
+    # a real history of a hundred messages) and the third jump found it where it was.
+    monkeypatch.setattr(scroll_module, "SCROLL_SETTLE_DELAY", 0)
+    calls = jumps_that_move(view, count=2)
+
+    with list_mounted():
+        await view._settle_at_end()
+
+    assert calls == [{"offset": -1, "duration": None}] * 3
+
+
+@pytest.mark.asyncio
+async def test_settling_on_a_list_that_is_already_at_the_end_jumps_once(
+    view, monkeypatch
+):
+    monkeypatch.setattr(scroll_module, "SCROLL_SETTLE_DELAY", 0)
+    calls = jumps_that_move(view, count=0)
+
+    with list_mounted():
+        await view._settle_at_end()
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_settling_gives_up_on_a_list_that_never_stops_moving(view, monkeypatch):
+    monkeypatch.setattr(scroll_module, "SCROLL_SETTLE_DELAY", 0)
+    calls = jumps_that_move(view, count=10_000)
+
+    with list_mounted():
+        await view._settle_at_end()
+
+    assert len(calls) == scroll_module.SETTLE_ROUNDS
+
+
+@pytest.mark.asyncio
+async def test_settling_waits_before_the_first_jump(view, monkeypatch):
+    # The rows were sent just now; the client lays them out on its next frame.
+    import asyncio
+
+    waited = []
+    real_sleep = asyncio.sleep
+
+    async def sleep(seconds):
+        waited.append((seconds, view.chat_list.scroll_to.await_count))
+        await real_sleep(0)
+
+    monkeypatch.setattr(scroll_module.asyncio, "sleep", sleep)
+    jumps_that_move(view, count=0)
+
+    with list_mounted():
+        await view._settle_at_end()
+
+    assert waited[0] == (scroll_module.SCROLL_SETTLE_DELAY, 0)
+
+
+@pytest.mark.asyncio
+async def test_the_reader_scrolling_up_ends_the_settling(view):
+    import asyncio
+
+    view.chat_list.scroll_to = AsyncMock()
+    task = asyncio.ensure_future(view._settle_at_end())
+    view._settle_task = task
+    await asyncio.sleep(0)
+
+    view._on_chat_scroll(scroll_event(USER, direction=UP, pixels=900))
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert view._follow_bottom is False
+    assert view._settle_task is None
+
+
+def test_a_list_sliding_back_while_settling_is_not_the_reader(view):
+    # Sent past its real end, the list slides back by itself in negative steps; the
+    # button must not blink and the following must not stop because of that.
+    view._settle_task = running_task()
+
+    view._on_chat_scroll(
+        scroll_event(UPDATE, delta=-24, pixels=11378, max_extent=10277)
+    )
+
+    assert view._follow_bottom is True
+    assert view.to_bottom_btn.visible is False
+
+
+def test_a_scrollbar_dragged_up_is_the_reader_once_the_settling_is_over(view):
+    view._settle_task = MagicMock(done=MagicMock(return_value=True))
+
+    view._on_chat_scroll(scroll_event(UPDATE, delta=-24, pixels=700))
+
+    assert view._follow_bottom is False
+
+
+def test_every_scroll_event_is_counted(view):
+    view._on_chat_scroll(scroll_event(UPDATE, delta=10, pixels=10))
+    view._on_chat_scroll(scroll_event(USER, direction=DOWN, pixels=20))
+
+    assert view._scroll_events == 2
+
+
 # --------------------------------------------------------------- streaming
 def scrolls_scheduled(mock_page, view):
     return [

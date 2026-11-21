@@ -159,6 +159,11 @@ class ChatView(
         self._follow_bottom = True
         # True while a _scroll_after_layout task is waiting to scroll.
         self._scroll_pending = False
+        # How many scroll events the list has reported, and the task that repeats the
+        # jump to the end until the list has settled (``None``: none); see
+        # ``views.chat_scroll``.
+        self._scroll_events = 0
+        self._settle_task: asyncio.Future | None = None
         # True when the history has older messages than the ones on the screen.
         self._history_truncated = False
         # The ids of the first and of the last message on the screen (``None``: not
@@ -393,6 +398,7 @@ class ChatView(
 
     def _cancel_running_tasks(self):
         self._cancel_stream()
+        self._stop_settling()
         if self._load_task is not None:
             self._load_task.cancel()
             self._load_task = None
@@ -847,8 +853,9 @@ class ChatView(
 
         self._show_empty_state(not self.chat_list.controls)
         # One update + one scroll for the whole history instead of one per message.
+        # The client has not measured these rows yet: the scroll settles at the end.
         safe_update(self)
-        self.scroll_to_bottom()
+        self.scroll_to_bottom(settle=True)
 
         if last_msg_obj and last_msg_obj.role == "assistant":
             self._last_assistant_msg = last_msg_obj

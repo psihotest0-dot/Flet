@@ -8,7 +8,7 @@ chunk.
 It is a part of ``ChatView`` and not a class of its own: it works on the state that
 ``ChatView.__init__`` creates - ``chat_list`` (whose ``on_scroll`` is ``_on_chat_scroll``
 and whose ``scroll_interval`` is ``SCROLL_EVENT_INTERVAL``), ``page_ref``,
-``_follow_bottom`` and ``_scroll_pending``.
+``_follow_bottom``, ``_scroll_pending``, ``_scroll_events`` and ``_settle_task``.
 """
 
 from __future__ import annotations
@@ -32,6 +32,13 @@ SCROLL_EVENT_INTERVAL = 50
 # together with it was already handled - so the scroll goes out this long
 # (seconds) after the text, which also caps it at a few scrolls per second.
 SCROLL_SETTLE_DELAY = 0.15
+# The client does not know how tall the rows are until it has laid them out, and it
+# only does so near where the list is scrolled to. A jump to "the end" therefore
+# goes to the end as it is *estimated*, the rows there are measured, and the real
+# end is further on (a long history ended up 1-2 screens short of it, with no event
+# to tell). After the history is drawn the jump is repeated until one of them moves
+# nothing, but not more than SETTLE_ROUNDS times.
+SETTLE_ROUNDS = 10
 
 
 class ChatScrollMixin:
@@ -46,16 +53,58 @@ class ChatScrollMixin:
 
     async def on_to_bottom_click(self, e=None) -> None:
         """The button: back to the newest message, and follow the answer again."""
-        self.scroll_to_bottom()
+        # The reader may be far from the end, over rows that were never measured.
+        self.scroll_to_bottom(settle=True)
 
-    def scroll_to_bottom(self):
-        """Jump to the newest message and follow what is appended after it."""
+    def scroll_to_bottom(self, settle: bool = False):
+        """Jump to the newest message and follow what is appended after it.
+
+        ``settle`` is for a list that was just filled with many rows, or one the
+        reader is far away from: the jump is repeated until it reaches the real
+        end (see ``_settle_at_end``).
+        """
         self._follow_bottom = True
         self._show_to_bottom_button(False)
         if self.page_ref is not None and is_mounted(self.chat_list):
             self.page_ref.run_task(self._scroll_to_end, 100)
-        # New rows are laid out on the client's next frame, after this scroll.
-        self._follow_stream()
+        if settle:
+            self._start_settling()
+        else:
+            # New rows are laid out on the client's next frame, after this scroll.
+            self._follow_stream()
+
+    def _start_settling(self) -> None:
+        """Start ``_settle_at_end``; one that is still running is replaced."""
+        self._stop_settling()
+        if self.page_ref is not None:
+            self._settle_task = self.page_ref.run_task(self._settle_at_end)
+
+    def _stop_settling(self) -> None:
+        task = self._settle_task
+        self._settle_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _is_settling(self) -> bool:
+        task = self._settle_task
+        return task is not None and not task.done()
+
+    async def _settle_at_end(self) -> None:
+        """Jump to the end again and again, until a jump moves nothing.
+
+        A jump that has nowhere to go raises no scroll event, one that moves the
+        list raises a few: so no new event since the jump means the end was the
+        real one. The pause before each jump is for the client to lay out the rows
+        it was just sent; the reader taking over (see ``_on_chat_scroll``) cancels
+        the task.
+        """
+        await asyncio.sleep(SCROLL_SETTLE_DELAY)
+        for _ in range(SETTLE_ROUNDS):
+            seen = self._scroll_events
+            await self._scroll_to_end()
+            await asyncio.sleep(SCROLL_SETTLE_DELAY)
+            if self._scroll_events == seen:
+                return
 
     async def _scroll_to_end(self, duration: int | None = None) -> None:
         """Ask the client to show the end of the list.
@@ -100,11 +149,24 @@ class ChatScrollMixin:
         (mouse wheel, touch) or a negative delta (dragging the scrollbar) means
         the reader went up to older text and the stream must stop pulling the
         view down. Arriving at the bottom again resumes following.
+
+        While ``_settle_at_end`` runs, a negative delta is not the reader: a list
+        that was sent past its real end slides back by itself. Only a mouse wheel
+        or a touch (the ``USER`` event) takes the reader's side then, and ends the
+        settling.
         """
-        scrolled_up = (
+        self._scroll_events += 1
+        pointed_up = (
             e.event_type == ft.ScrollType.USER
             and e.direction == ft.ScrollDirection.FORWARD
-        ) or (e.event_type == ft.ScrollType.UPDATE and (e.scroll_delta or 0) < 0)
+        )
+        if pointed_up:
+            self._stop_settling()
+        scrolled_up = pointed_up or (
+            e.event_type == ft.ScrollType.UPDATE
+            and (e.scroll_delta or 0) < 0
+            and not self._is_settling()
+        )
         if scrolled_up:
             self._follow_bottom = False
         elif (e.max_scroll_extent or 0) - (e.pixels or 0) <= BOTTOM_FOLLOW_THRESHOLD:
