@@ -23,7 +23,7 @@ import httpx
 
 from api.errors import APIError, StreamError
 from api.limits import MESSAGE_TOKEN_LIMIT
-from api.stream import ModelUsed, Proposals, Sources, TextChunk, Working
+from api.stream import ModelUsed, Proposals, Queued, Sources, TextChunk, Working
 from views.attachments import estimate_message_tokens
 from views.timeline import now
 from views.ui_utils import describe_error, safe_update, show_snackbar
@@ -42,6 +42,10 @@ ACTIVITY_INDICATOR_DELAY = 1.0
 ACTIVITY_THINKING_TEXT = "Лили мисли…"
 ACTIVITY_WORKING_TEXT = "Лили работи…"
 ACTIVITY_SECONDS_FROM = 5
+# The conversation is shared with Telegram and another reply in it is still being written:
+# the request waits for its turn (``event: queued``). Until the first real frame this is
+# what the wheel says, however long it takes.
+ACTIVITY_QUEUED_TEXT = "Чакам друг отговор в този разговор…"
 
 
 def activity_label(silent_for: float) -> str:
@@ -73,6 +77,8 @@ class ChatTurnsMixin:
         # The last frame of any kind, and the last one that changed what is on
         # screen (a frame with nothing to show is a frame, but not a change).
         last_frame_time = last_visible_time = time.monotonic()
+        # True from "queued" until the first frame that is not one: the request waits.
+        queued = False
 
         async def show_activity_after_delay():
             try:
@@ -83,7 +89,9 @@ class ChatTurnsMixin:
                         ACTIVITY_INDICATOR_DELAY
                     ):
                         chat_message.show_activity_indicator(
-                            activity_label(now_ - last_frame_time)
+                            ACTIVITY_QUEUED_TEXT
+                            if queued
+                            else activity_label(now_ - last_frame_time)
                         )
             except asyncio.CancelledError:
                 pass
@@ -102,11 +110,17 @@ class ChatTurnsMixin:
                 self._follow_stream()
 
         async def read_stream():
-            nonlocal pending_text, last_frame_time, last_visible_time
+            nonlocal pending_text, last_frame_time, last_visible_time, queued
             last_flush_time = time.monotonic()
             try:
                 async for event in stream_coro:
                     last_frame_time = time.monotonic()
+                    if isinstance(event, Queued):
+                        # Say so at once; the wheel keeps saying it until the turn begins.
+                        queued = True
+                        chat_message.show_activity_indicator(ACTIVITY_QUEUED_TEXT)
+                        continue
+                    queued = False
                     if not isinstance(event, Working):
                         last_visible_time = last_frame_time
                         chat_message.hide_activity_indicator()
@@ -231,6 +245,8 @@ class ChatTurnsMixin:
                 if stopped:
                     # The backend never stores a half-written answer.
                     chat_message.show_stopped_note()
+                # The turn added messages the screen has no ids for (views.chat_paired).
+                self._forget_tail()
 
     async def regenerate_last(self, *_args):
         if self._is_streaming:
@@ -278,6 +294,8 @@ class ChatTurnsMixin:
             self._stop_generation = False
             self._set_streaming_ui(False)
             if session_id == self.session_id:
+                # A new answer has a new id (views.chat_paired).
+                self._forget_tail()
                 if error is not None or stopped or chat_message is None:
                     self._restore_previous_answer(
                         chat_message, previous_msg, previous_row, position

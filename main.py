@@ -477,9 +477,9 @@ def main(page: ft.Page):
             # do the bot's decisions.
             page.run_task(getattr(view, RELOADED_ON_VISIT[index]))
         for polled_index, polled_view in views.items():
-            if isinstance(polled_view, (FilesView, OracleView)):
-                # Poll file statuses and the bot's journal only while their tab
-                # is the visible one.
+            if isinstance(polled_view, (ChatView, FilesView, OracleView)):
+                # Poll file statuses, the bot's journal and an open Telegram
+                # conversation only while their tab is the visible one.
                 polled_view.set_active(polled_index == index)
 
     tabs.on_change = on_tab_change

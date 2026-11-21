@@ -644,6 +644,20 @@ def test_memory_tab_reloads_each_time_it_is_opened_again(start_app, mock_page):
     assert tab_view(tabs, 1) is memory_view
 
 
+def test_an_open_telegram_conversation_is_watched_only_while_the_chat_tab_is_open(
+    start_app,
+):
+    tabs = start_app()
+    chat = tab_view(tabs, 0)
+    assert chat._paired_active is True, "the chat tab is the one that opens first"
+
+    select_tab(tabs, 1)
+    assert chat._paired_active is False
+
+    select_tab(tabs, 0)
+    assert chat._paired_active is True
+
+
 def test_returning_to_the_chat_tab_stops_the_pollers_of_the_other_tabs(
     start_app, monkeypatch
 ):

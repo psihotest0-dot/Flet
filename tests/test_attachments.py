@@ -288,9 +288,11 @@ def test_did_mount_reads_the_files_before_the_history(mock_page, mock_api_client
     v.did_mount()
 
     calls = [c.args[0] for c in mock_page.run_task.call_args_list]
-    assert calls == [v.load_attachments, v.load_history], (
+    # The Telegram chats and the poll of an open one come before, the history is last.
+    assert calls[-2:] == [v.load_attachments, v.load_history], (
         "the history is what the view waits for, so it is last"
     )
+    assert calls[:-2] == [v.load_paired_sessions, v._poll_paired]
 
 
 @pytest.mark.asyncio

@@ -1,10 +1,12 @@
 """The chat screen: the conversations, the model of each, the history and the input.
 
-``ChatView`` is one class in four files, so that none is longer than a screen can
+``ChatView`` is one class in several files, so that none is longer than a screen can
 hold: this one has the state (``__init__``), the chats (open, new, delete), the model
 button, the history and the message field; the files of a conversation are in
-``views.chat_attachments``, the scrolling in ``views.chat_scroll`` and the sending,
-regenerating and stopping of an answer in ``views.chat_turns``.
+``views.chat_attachments``, the conversations shared with Telegram (their chats, older
+messages, what arrives meanwhile) in ``views.chat_paired``, the scrolling in
+``views.chat_scroll`` and the sending, regenerating and stopping of an answer in
+``views.chat_turns``.
 """
 
 from __future__ import annotations
@@ -23,11 +25,12 @@ from state.chat_sessions import (
     MAX_CHAT_NAME_CHARS,
     ChatSession,
     ensure_chat_session,
+    is_paired_session,
     next_chat_name,
     normalize_chat_sessions,
     rename_chat_session,
+    reset_chat_session,
     resolve_session_id,
-    restart_chat_session,
     store_chat_sessions,
     unique_chat_name,
 )
@@ -36,6 +39,13 @@ from views import theme
 from views.chat_attachments import ChatAttachmentsMixin
 from views.chat_export import ChatExportMixin
 from views.chat_message import ChatMessage
+from views.chat_paired import (
+    EMPTY_TAIL,
+    HISTORY_PAGE_SIZE,
+    HISTORY_REQUEST_LIMIT,
+    OLDER_HINT,
+    ChatPairedMixin,
+)
 from views.chat_scroll import SCROLL_EVENT_INTERVAL, ChatScrollMixin
 from views.chat_turns import ChatTurnsMixin
 from views.emoji_picker import EmojiPicker
@@ -54,13 +64,8 @@ from views.ui_utils import (
 
 logger = logging.getLogger(__name__)
 
-# The chat list builds every row at once (see ``build_controls_on_demand`` below),
-# so a very long history would mean hundreds of markdown widgets. Only the tail
-# is rendered.
-HISTORY_PAGE_SIZE = 100
-# One message more than is shown: its presence is how load_history knows that
-# older messages exist (the backend returns the newest N, oldest first).
-HISTORY_REQUEST_LIMIT = HISTORY_PAGE_SIZE + 1
+# HISTORY_PAGE_SIZE and HISTORY_REQUEST_LIMIT (how much of a long history is drawn, and
+# the one message more that tells there is older) are in ``views.chat_paired``.
 
 
 # The model a conversation is sent to: what the button shows and what the backend is told.
@@ -106,6 +111,7 @@ EMPTY_CHAT_SUGGESTIONS = (
 class ChatView(
     ChatAttachmentsMixin,
     ChatExportMixin,
+    ChatPairedMixin,
     ChatScrollMixin,
     ChatTurnsMixin,
     ft.Container,
@@ -155,6 +161,17 @@ class ChatView(
         self._scroll_pending = False
         # True when the history has older messages than the ones on the screen.
         self._history_truncated = False
+        # The ids of the first and of the last message on the screen (``None``: not
+        # known), the row with the button for older ones, and whether an open Telegram
+        # conversation is being looked at (the chat tab is the visible one); see
+        # ``views.chat_paired``.
+        self._oldest_id: str | None = None
+        self._tail_id: str | None = None
+        self._older_row: ft.Control | None = None
+        self._older_button: ft.TextButton | None = None
+        self._loading_older = False
+        self._paired_active = True
+        self._paired_task: asyncio.Future | None = None
 
         self.expand = True
 
@@ -356,6 +373,10 @@ class ChatView(
         self._last_assistant_row = None
         self._follow_bottom = True
         self._history_truncated = False
+        self._oldest_id = None
+        self._tail_id = None
+        self._older_row = None
+        self._loading_older = False
         self._show_to_bottom_button(False)
         self._show_empty_state(False)
         self.chat_list.controls.clear()
@@ -483,7 +504,8 @@ class ChatView(
         self._reset_conversation()
         self._cancel_running_tasks()
         if not reload_history:
-            # A new or an emptied chat has no history to wait for.
+            # A new or an emptied chat has no history to wait for (and nothing in it).
+            self._tail_id = EMPTY_TAIL
             self._show_empty_state(True)
         if reload_history and self.page_ref is not None:
             # The files first, the history last: the history is what the view waits for.
@@ -642,12 +664,19 @@ class ChatView(
             ),
             "Този чат",
         )
+        shared = is_paired_session(self.session_id)
         confirmed = await confirm_dialog(
             self.page_ref,
             "Изтриване на чата",
             f"Разговорът в „{name}“ ще бъде изтрит завинаги: съобщенията, "
             "резюмето и прикачените файлове. Чатът остава в списъка, но празен. "
-            "Спомените на Лили за теб (дългосрочната памет) не се пипат.",
+            "Спомените на Лили за теб (дългосрочната памет) не се пипат."
+            + (
+                " Това е общият разговор с Telegram: ще се изтрие и там — "
+                "в Telegram също ще започнеш празен разговор."
+                if shared
+                else ""
+            ),
             confirm_text="Изтрий",
         )
         if not confirmed:
@@ -671,7 +700,9 @@ class ChatView(
 
         settings = self.settings
         snapshot = settings.snapshot()
-        new_id = restart_chat_session(settings, old_id)
+        # An ordinary chat starts over under a new id; the conversation shared with
+        # Telegram keeps its id, which is the key to both channels.
+        new_id = reset_chat_session(settings, old_id)
         if new_id is None:
             return
 
@@ -680,11 +711,16 @@ class ChatView(
             settings.restore(snapshot)
             show_snackbar(self.page_ref, SETTINGS_NOT_SAVED_TEXT)
             return
-        logger.info(
-            "Chat %s was deleted on the backend, it continues as session %s.",
-            old_id[:8],
-            new_id[:8],
-        )
+        if new_id == old_id:
+            logger.info(
+                "Chat %s was deleted on the backend, it keeps its session.", old_id[:8]
+            )
+        else:
+            logger.info(
+                "Chat %s was deleted on the backend, it continues as session %s.",
+                old_id[:8],
+                new_id[:8],
+            )
 
         self._apply_session_options(normalize_chat_sessions(settings), new_id)
         # The new session has no history to fetch, so only the screen is cleared.
@@ -734,12 +770,16 @@ class ChatView(
 
     def did_mount(self):
         if self.page_ref is not None:
+            # The Telegram conversations join the dropdown; an open one is watched.
+            self.page_ref.run_task(self.load_paired_sessions)
+            self._start_paired_poll()
             # The files first, the history last: the history is what the view waits for.
             self._attachments_task = self.page_ref.run_task(self.load_attachments)
             self._load_task = self.page_ref.run_task(self.load_history)
 
     def will_unmount(self):
         self._cancel_running_tasks()
+        self._stop_paired_poll()
 
     # ---------------------------------------------------- the message field, history
     def _set_input(self, text: str) -> None:
@@ -784,13 +824,15 @@ class ChatView(
         truncated = len(messages) > HISTORY_PAGE_SIZE
         self._history_truncated = truncated
         visible = messages[-HISTORY_PAGE_SIZE:] if truncated else messages
-        if truncated:
+        self._note_history(visible)
+        self._older_row = None
+        if truncated and self._oldest_id:
+            # The button reads the older ones page by page, from the oldest shown.
+            self.chat_list.controls.append(self._make_older_row())
+        elif truncated:
+            # A backend that sends no ids cannot be asked for "older than this".
             self.chat_list.controls.append(
-                ft.Text(
-                    f"Показани са последните {HISTORY_PAGE_SIZE} съобщения.",
-                    size=11,
-                    color=theme.MUTED,
-                )
+                ft.Text(OLDER_HINT, size=11, color=theme.MUTED)
             )
 
         last_msg_obj = None
@@ -837,7 +879,9 @@ class ChatView(
         sources: list | None = None,
         notify: bool = True,
         created_at: datetime | None = None,
+        index: int | None = None,
     ) -> ChatMessage:
+        """Add a message to the list: at the end, or at ``index`` (older ones go above)."""
         is_user = role == "user"
         on_regenerate = self.regenerate_last if not is_user else None
         chat_message = ChatMessage(
@@ -867,7 +911,10 @@ class ChatView(
             else ft.MainAxisAlignment.START,
         )
 
-        self.chat_list.controls.append(row)
+        if index is None:
+            self.chat_list.controls.append(row)
+        else:
+            self.chat_list.controls.insert(index, row)
         self._show_empty_state(False)
         chat_message.row = row
         if notify:
