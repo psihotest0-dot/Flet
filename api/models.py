@@ -176,6 +176,12 @@ class OracleDecision(BaseModel):
     # recorded).
     signal_version: str | None = None
     prompt_version: str | None = None
+    # Set on the light row of a call that did not reach the model: ``cache`` (the
+    # verdict was given a moment ago for the same signal) or ``joined`` (the call
+    # waited for the one that was on its way). The verdict, reason, model and prompt
+    # label are those of the answer it repeats, ``mode`` is the mode of this call,
+    # and attempts, tokens and latency are 0. Omitted on a row the model was asked for.
+    served_from: str | None = None
 
 
 class OracleDecisionPage(BaseModel):

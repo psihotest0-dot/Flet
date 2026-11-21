@@ -24,12 +24,15 @@ from views.oracle import (
     PAGE_SIZE,
     PROGRESS_PAGE_SIZE,
     PROGRESS_POLL_PAGE_SIZE,
+    SERVED,
     OracleView,
     Progress,
+    active_note_text,
     count_progress,
     decision_details,
     format_latency,
     format_time,
+    latency_cell,
     mode_cell,
     reason_text,
     verdict_cell,
@@ -214,6 +217,30 @@ async def test_the_version_of_the_signal_and_of_the_prompt_are_read_when_present
         ("1.0.0", None),
         (None, None),
     ]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_the_source_of_a_row_that_did_not_reach_the_model_is_read_when_present(
+    client,
+):
+    respx.get(f"{BASE_URL}/oracle/decisions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "decisions": [
+                    {"id": 12, "mode": "active", "served_from": "cache"},
+                    {"id": 11, "mode": "active", "served_from": "joined"},
+                    {"id": 10, "mode": "shadow"},
+                ],
+                "next_before_id": 0,
+            },
+        )
+    )
+
+    result = await client.list_oracle_decisions()
+
+    assert [d.served_from for d in result.decisions] == ["cache", "joined", None]
 
 
 @respx.mock
@@ -1868,3 +1895,242 @@ def test_a_new_base_url_reaches_the_bot_tab(start_app, monkeypatch):
     # The tab keeps its client, which now talks to the new address.
     assert view.api_client is previous
     assert view.api_client.base_url == "http://127.0.0.1:9000"
+
+
+# ------------------------------------- rows that did not reach the model (served)
+def served(id: int, source: str = "cache", **fields) -> OracleDecision:
+    """The light row of a call that was answered from another call's verdict."""
+    values = {
+        "served_from": source,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "latency_ms": 0,
+        "finish_reason": "",
+    }
+    values.update(fields)
+    return decision(id, **values)
+
+
+def test_a_row_that_did_not_reach_the_model_says_where_its_verdict_came_from():
+    text, meaning = latency_cell(served(1, "cache"))
+    assert text == "от кеша"
+    assert "Моделът не е питан" in meaning
+
+    text, meaning = latency_cell(served(2, "joined"))
+    assert text == "общ отговор"
+    assert "изчакала" in meaning
+
+    # "0 ms" would read as a very fast answer.
+    assert "0" not in latency_cell(served(3))[0]
+
+
+def test_a_row_the_model_was_asked_for_shows_its_time_as_before():
+    assert latency_cell(decision(1, latency_ms=1100)) == ("1.1 s", "")
+    assert latency_cell(decision(2, latency_ms=740)) == ("740 ms", "")
+    assert latency_cell(decision(3, latency_ms=None)) == ("", "")
+    # An empty source is no source.
+    assert latency_cell(decision(4, served_from="", latency_ms=1100)) == ("1.1 s", "")
+
+
+def test_a_source_the_tab_does_not_know_is_shown_as_it_came():
+    text, meaning = latency_cell(served(1, "memory"))
+
+    assert text == "memory"
+    assert "Моделът не е питан" in meaning
+    assert "memory" in decision_details(served(1, "memory"))
+
+
+def test_every_source_has_a_label_and_a_meaning():
+    assert set(SERVED) == {"cache", "joined"}
+    for label, meaning in SERVED.values():
+        assert label and meaning
+
+
+def test_details_of_a_served_row_name_the_source_and_leave_out_the_model_work():
+    text = decision_details(
+        served(5, request_id="req-5", prompt_version="3f9a1c0b2d4e")
+    )
+
+    assert "Заявка: req-5" in text
+    assert "Промпт: 3f9a1c0b2d4e" in text
+    assert "по-ранен отговор на същия сигнал (от кеша)" in text
+    assert "Токени" not in text, "no model work was done for this row"
+    assert "Опити" not in text
+    # A row the model was asked for keeps its tokens and has no source line.
+    asked = decision_details(decision(5))
+    assert "Токени: 480 вход, 20 изход" in asked
+    assert "по-ранен отговор" not in asked
+
+
+@pytest.mark.asyncio
+async def test_a_served_row_is_drawn_with_its_source_in_the_time_column(
+    mock_page, mock_api_client
+):
+    view = make_view(
+        mock_page,
+        mock_api_client,
+        served(2, "joined", mode="active"),
+        decision(1),
+    )
+
+    await view.load()
+
+    served_row, asked_row = view.data_table.rows
+    served_latency = served_row.cells[5].content
+    assert served_latency.value == "общ отговор"
+    assert served_latency.italic is True
+    assert "изчакала" in served_latency.tooltip
+    assert served_row.cells[4].content.value == "активен"
+    asked_latency = asked_row.cells[5].content
+    assert asked_latency.value == "1.1 s"
+    assert not asked_latency.italic
+    assert asked_latency.tooltip is None
+
+
+def test_a_shadow_row_that_was_served_counts_as_a_signal_of_the_evaluation_once():
+    # The bot's active container asked this signal first; the shadow ask was answered
+    # from its verdict. The signal is one signal, with that verdict.
+    rows = [
+        signal(1, "APPROVE", signal_version="1.0.0", mode="active", signal_id="s-1"),
+        signal(
+            2,
+            "APPROVE",
+            signal_version="1.0.0",
+            mode="shadow",
+            signal_id="s-1",
+            served_from="cache",
+        ),
+        signal(3, "VETO", signal_version="1.0.0", signal_id="s-2"),
+    ]
+
+    progress = count_progress(rows)
+
+    assert (progress.asked, progress.answered) == (2, 2)
+    assert (progress.approve, progress.veto) == (1, 1)
+
+
+def test_active_rows_are_never_counted_in_the_evaluation():
+    rows = [
+        signal(1, "APPROVE", signal_version="1.0.0", mode="active", signal_id="a-1"),
+        signal(2, "VETO", signal_version="1.0.0", mode="active", signal_id="a-2"),
+    ]
+
+    progress = count_progress(rows)
+
+    assert (progress.asked, progress.answered, progress.approve, progress.veto) == (
+        0,
+        0,
+        0,
+        0,
+    )
+    assert progress.active == 2
+
+
+def test_active_questions_are_counted_by_signal_and_say_how_many_came_from_shadow():
+    rows = [
+        # asked three times, the model was asked once: it reached the model
+        signal(1, "HOLD", signal_version="1.0.0", mode="active", signal_id="a-1"),
+        signal(
+            2,
+            "HOLD",
+            signal_version="1.0.0",
+            mode="active",
+            signal_id="a-1",
+            served_from="cache",
+        ),
+        signal(
+            3,
+            "HOLD",
+            signal_version="1.0.0",
+            mode="active",
+            signal_id="a-1",
+            served_from="cache",
+        ),
+        # only ever answered from the shadow question
+        signal(
+            4,
+            "APPROVE",
+            signal_version="1.0.0",
+            mode="active",
+            signal_id="a-2",
+            served_from="joined",
+        ),
+        # and one that reached the model after being served first
+        signal(
+            5,
+            "APPROVE",
+            signal_version="1.0.0",
+            mode="active",
+            signal_id="a-3",
+            served_from="cache",
+        ),
+        signal(6, "APPROVE", signal_version="1.0.0", mode="active", signal_id="a-3"),
+    ]
+
+    progress = count_progress(rows)
+
+    assert progress.active == 3
+    assert progress.active_from_shadow == 1
+
+
+def test_active_questions_leave_out_probes_and_rows_before_the_evaluation():
+    rows = [
+        signal(1, "VETO", signal_version="oracle-probe", mode="active", signal_id="p"),
+        signal(
+            2,
+            "VETO",
+            signal_version="1.0.0",
+            mode="active",
+            signal_id="old",
+            created_at=EVALUATION_START - timedelta(minutes=1),
+        ),
+        signal(3, "VETO", signal_version="1.0.0", mode="active", signal_id=None),
+        signal(4, "VETO", signal_version="1.0.0", mode="active", signal_id="real"),
+        # a row with no mode at all is neither shadow nor active
+        signal(5, "VETO", signal_version="1.0.0", mode=None, signal_id="nomode"),
+    ]
+
+    progress = count_progress(rows)
+
+    assert progress.active == 1
+    assert progress.asked == 0
+
+
+def test_the_note_about_the_active_questions_says_what_it_counts():
+    assert "още няма" in active_note_text(Progress())
+    assert active_note_text(Progress(active=4)) == (
+        "Активен режим (извън оценката): 4 сигнала."
+    )
+    assert active_note_text(Progress(active=1)).endswith(": 1 сигнал.")
+    text = active_note_text(Progress(active=4, active_from_shadow=3))
+    assert "4 сигнала" in text
+    assert "за 3 от тях вердиктът е от сенчестия въпрос" in text
+
+
+@pytest.mark.asyncio
+async def test_the_active_questions_are_shown_under_the_counters(
+    mock_page, mock_api_client
+):
+    rows = [
+        signal(1, "APPROVE", signal_version="1.0.0", mode="active", signal_id="a-1"),
+        signal(2, "VETO", signal_version="1.0.0", signal_id="s-1"),
+    ]
+    mock_api_client.list_oracle_decisions = AsyncMock(
+        return_value=OracleDecisionPage(decisions=list(reversed(rows)))
+    )
+    view = OracleView(mock_page, mock_api_client)
+
+    await view.refresh_progress(rebuild=True)
+
+    assert view.active_note.value == ("Активен режим (извън оценката): 1 сигнал.")
+    assert view.veto_value.value == "1 / 30"
+    assert view.approve_value.value == "0 / 30"
+
+
+def test_the_note_about_the_active_questions_is_part_of_the_counters_block(
+    mock_page, mock_api_client
+):
+    view = make_view(mock_page, mock_api_client)
+
+    assert view.active_note in view.progress_block.content.controls

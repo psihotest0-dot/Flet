@@ -75,6 +75,23 @@ MODES = {
     "active": ("активен", "Ботът следва отговора на Oracle."),
 }
 
+# Where the verdict of a row that did not reach the model came from (``served_from``) ->
+# (label for the "Отговор след" column, what it means).
+SERVED = {
+    "cache": (
+        "от кеша",
+        "Моделът не е питан за този ред: вердиктът е на отговор, даден преди малко "
+        "за същия сигнал (обикновено в другия режим).",
+    ),
+    "joined": (
+        "общ отговор",
+        "Моделът не е питан за този ред: заявката е изчакала отговора на същия "
+        "сигнал, който вече е бил на път (обикновено в другия режим).",
+    ),
+}
+
+ACTIVE_MODE = "active"
+
 LENGTH_FINISH_REASON = "length"
 
 
@@ -116,6 +133,21 @@ def format_latency(milliseconds: int | None) -> str:
     return f"{milliseconds / 1000:.1f} s"
 
 
+def latency_cell(decision: OracleDecision) -> tuple[str, str]:
+    """``(text, tooltip)`` of the "Отговор след" column.
+
+    A row that did not reach the model has no time of its own; saying "0 ms" would
+    read as a very fast answer, so it says where its verdict came from. A source the
+    tab does not know is shown as it came.
+    """
+    source = (decision.served_from or "").strip()
+    if not source:
+        return format_latency(decision.latency_ms), ""
+    if source in SERVED:
+        return SERVED[source]
+    return source, "Моделът не е питан за този ред."
+
+
 def reason_text(decision: OracleDecision) -> str:
     """What the reason column says: the model's reason, or why there is no verdict."""
     if decision.status == STATUS_FAILED:
@@ -134,9 +166,17 @@ def decision_details(decision: OracleDecision) -> str:
         lines.append(f"Модел: {decision.model}")
     if decision.prompt_version:
         lines.append(f"Промпт: {decision.prompt_version}")
+    if decision.served_from:
+        lines.append(
+            "Вердиктът е взет от по-ранен отговор на същия сигнал "
+            f"({SERVED.get(decision.served_from, (decision.served_from,))[0]}); "
+            "моделът не е питан за този ред"
+        )
     if decision.attempts:
         lines.append(f"Опити: {decision.attempts}")
-    if decision.prompt_tokens is not None or decision.completion_tokens is not None:
+    if not decision.served_from and (
+        decision.prompt_tokens is not None or decision.completion_tokens is not None
+    ):
         lines.append(
             f"Токени: {decision.prompt_tokens or 0} вход, "
             f"{decision.completion_tokens or 0} изход"
@@ -168,6 +208,11 @@ class Progress:
     approve: int = 0
     veto: int = 0
     probes_unmarked: bool = False
+    # Outside the evaluation: signals asked in active mode (the bot's paper container
+    # that follows the verdict), and how many of them only had the verdict of the
+    # shadow question repeated (none of their rows reached the model).
+    active: int = 0
+    active_from_shadow: int = 0
 
     @property
     def availability(self) -> float | None:
@@ -195,11 +240,28 @@ def count_progress(decisions) -> Progress:
     take a final answer back). Only shadow-mode rows from ``EVALUATION_START``
     count, and the probes (``signal_version`` ``oracle-probe``) do not. A signal
     that never got a final answer still counts as asked.
+
+    A shadow row that did not reach the model (``served_from``) is the row of a
+    signal the bot's active container asked first: its verdict is the one that
+    call got, and the signal counts here once, like any other. The active-mode
+    rows are counted apart (``active``), outside the evaluation.
     """
     asked: set[str] = set()
     final: dict[str, OracleDecision] = {}
     versions_known = False
+    # Active-mode signals -> whether one of their rows reached the model.
+    active: dict[str, bool] = {}
     for decision in decisions:
+        if (
+            decision.mode == ACTIVE_MODE
+            and decision.signal_id
+            and decision.created_at is not None
+            and decision.created_at >= EVALUATION_START
+            and decision.signal_version != PROBE_VERSION
+        ):
+            active[decision.signal_id] = active.get(decision.signal_id, False) or (
+                not decision.served_from
+            )
         if (
             decision.mode != SHADOW_MODE
             or not decision.signal_id
@@ -225,7 +287,24 @@ def count_progress(decisions) -> Progress:
         approve=verdicts.count("APPROVE"),
         veto=verdicts.count("VETO"),
         probes_unmarked=bool(asked) and not versions_known,
+        active=len(active),
+        active_from_shadow=sum(
+            1 for reached_model in active.values() if not reached_model
+        ),
     )
+
+
+def active_note_text(progress: Progress) -> str:
+    """The line under the counters about the active-mode questions, which they do not count."""
+    if not progress.active:
+        return "Активен режим (извън оценката): още няма въпроси."
+    noun = "сигнал" if progress.active == 1 else "сигнала"
+    text = f"Активен режим (извън оценката): {progress.active} {noun}"
+    if progress.active_from_shadow:
+        text += (
+            f", за {progress.active_from_shadow} от тях вердиктът е от сенчестия въпрос"
+        )
+    return text + "."
 
 
 class OracleView(ft.Container):
@@ -298,6 +377,7 @@ class OracleView(ft.Container):
             self._progress_row("Наличност")
         )
         self.progress_status = ft.Text("", size=12)
+        self.active_note = ft.Text("", size=12, color=theme.MUTED)
         self.probes_note = ft.Text(
             "Пробните сигнали още не се изключват (бекендът не праща версията на "
             "сигнала) — числата може да са завишени.",
@@ -323,6 +403,7 @@ class OracleView(ft.Container):
                     veto_row,
                     availability_row,
                     self.progress_status,
+                    self.active_note,
                     self.probes_note,
                     self.progress_error,
                 ],
@@ -705,6 +786,7 @@ class OracleView(ft.Container):
             if progress.reached
             else "Под минимума няма присъда: събирането продължава."
         )
+        self.active_note.value = active_note_text(progress)
         self.probes_note.visible = progress.probes_unmarked
         safe_update(
             self,
@@ -715,6 +797,7 @@ class OracleView(ft.Container):
             self.availability_bar,
             self.availability_value,
             self.progress_status,
+            self.active_note,
             self.probes_note,
             self.progress_error,
         )
@@ -776,6 +859,7 @@ class OracleView(ft.Container):
             tooltip=reason or None,
         )
         mode_label, mode_meaning = mode_cell(decision.mode)
+        latency_text, latency_meaning = latency_cell(decision)
         return ft.DataRow(
             cells=[
                 ft.DataCell(ft.Text(format_time(decision.created_at))),
@@ -783,6 +867,12 @@ class OracleView(ft.Container):
                 ft.DataCell(verdict),
                 ft.DataCell(reason_cell),
                 ft.DataCell(ft.Text(mode_label, tooltip=mode_meaning or None)),
-                ft.DataCell(ft.Text(format_latency(decision.latency_ms))),
+                ft.DataCell(
+                    ft.Text(
+                        latency_text,
+                        italic=bool(decision.served_from),
+                        tooltip=latency_meaning or None,
+                    )
+                ),
             ]
         )

@@ -68,7 +68,7 @@ from api.models import (
 )
 from api.stream import ModelUsed, Proposals, Queued, Sources, TextChunk, Working
 from views.files import CATEGORIES, EMBEDDING_STATES, FINAL_STATUSES
-from views.oracle import MODES, STATUS_FAILED, VERDICTS
+from views.oracle import MODES, SERVED, STATUS_FAILED, VERDICTS
 from views.proposals import FILE_MODE_HINTS
 
 BASE = "http://localhost:8080"
@@ -413,6 +413,10 @@ def test_the_oracle_tab_knows_every_verdict_status_and_mode():
     assert set(VERDICTS) == set(enum_of("OracleEvaluation", "verdict"))
     assert STATUS_FAILED in enum_of("OracleEvaluation", "status")
     assert set(MODES) == set(enum_of("OracleRequest", "mode")) - {""}
+
+
+def test_the_oracle_tab_knows_every_source_of_a_row_that_did_not_reach_the_model():
+    assert set(SERVED) == set(enum_of("OracleEvaluation", "served_from"))
 
 
 def stated(text: str, pattern: str) -> tuple[int, ...]:
