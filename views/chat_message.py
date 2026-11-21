@@ -146,8 +146,20 @@ class ChatMessage(ft.Column):
         self.proposals_column = ft.Column(spacing=4, visible=False)
         self._proposal_ids: set[int] = set()
         self.bottom_sheet = None
-        self.activity_indicator = ft.Text(
-            "...", size=20, color=theme.MUTED, visible=False
+        # A wheel and what it says, under the message while Lili is not writing
+        # (thinking, waiting for a tool): so a long silence can be told from a
+        # window that has hung.
+        self.activity_label = ft.Text("", size=12, color=theme.MUTED)
+        self.activity_indicator = ft.Row(
+            [
+                ft.ProgressRing(
+                    width=18, height=18, stroke_width=2.5, color=theme.ACCENT
+                ),
+                self.activity_label,
+            ],
+            spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            visible=False,
         )
         self.error_text = ft.Text(
             "", color=theme.PROBLEM, selectable=True, visible=False
@@ -212,10 +224,15 @@ class ChatMessage(ft.Column):
             # Only the button is re-sent, not the whole markdown block.
             safe_update(self, self.regenerate_btn)
 
-    def show_activity_indicator(self):
+    def show_activity_indicator(self, label: str) -> None:
+        """Show the wheel with ``label``; a label that changed is the only thing re-sent."""
         if not self.activity_indicator.visible:
+            self.activity_label.value = label
             self.activity_indicator.visible = True
             safe_update(self, self.activity_indicator)
+        elif self.activity_label.value != label:
+            self.activity_label.value = label
+            safe_update(self, self.activity_label)
 
     def hide_activity_indicator(self):
         if self.activity_indicator.visible:

@@ -23,7 +23,7 @@ import httpx
 
 from api.errors import APIError, StreamError
 from api.limits import MESSAGE_TOKEN_LIMIT
-from api.stream import ModelUsed, Proposals, Sources, TextChunk
+from api.stream import ModelUsed, Proposals, Sources, TextChunk, Working
 from views.attachments import estimate_message_tokens
 from views.timeline import now
 from views.ui_utils import describe_error, safe_update, show_snackbar
@@ -33,8 +33,25 @@ logger = logging.getLogger(__name__)
 # Upper bound of control updates per second while a response is streaming.
 # Each flush is a diff of the message plus a patch sent to the Flutter client.
 STREAM_FLUSH_INTERVAL = 0.12
-# How long the stream may stay silent before the "..." indicator is shown again.
+# How long nothing may change on screen before the wheel is shown (again).
 ACTIVITY_INDICATOR_DELAY = 1.0
+# What the wheel says. While frames keep coming (the model's hidden reasoning) the
+# backend is plainly alive: "thinking". While nothing comes at all - the model is
+# waiting for a tool, or for its first word, or is stuck - it says "working" and,
+# from ACTIVITY_SECONDS_FROM on, for how long nothing has come.
+ACTIVITY_THINKING_TEXT = "Лили мисли…"
+ACTIVITY_WORKING_TEXT = "Лили работи…"
+ACTIVITY_SECONDS_FROM = 5
+
+
+def activity_label(silent_for: float) -> str:
+    """The text beside the wheel, ``silent_for`` seconds after the last frame."""
+    if silent_for < ACTIVITY_INDICATOR_DELAY:
+        return ACTIVITY_THINKING_TEXT
+    seconds = int(silent_for)
+    if seconds < ACTIVITY_SECONDS_FROM:
+        return ACTIVITY_WORKING_TEXT
+    return f"{ACTIVITY_WORKING_TEXT} {seconds} s"
 
 
 class ChatTurnsMixin:
@@ -53,18 +70,21 @@ class ChatTurnsMixin:
         """
         error_text = None
         stream_open = True
-        last_chunk_time = time.monotonic()
+        # The last frame of any kind, and the last one that changed what is on
+        # screen (a frame with nothing to show is a frame, but not a change).
+        last_frame_time = last_visible_time = time.monotonic()
 
         async def show_activity_after_delay():
             try:
                 while stream_open:
                     await asyncio.sleep(0.25)
-                    if (
-                        stream_open
-                        and (time.monotonic() - last_chunk_time)
-                        >= ACTIVITY_INDICATOR_DELAY
+                    now_ = time.monotonic()
+                    if stream_open and now_ - last_visible_time >= (
+                        ACTIVITY_INDICATOR_DELAY
                     ):
-                        chat_message.show_activity_indicator()
+                        chat_message.show_activity_indicator(
+                            activity_label(now_ - last_frame_time)
+                        )
             except asyncio.CancelledError:
                 pass
 
@@ -82,12 +102,14 @@ class ChatTurnsMixin:
                 self._follow_stream()
 
         async def read_stream():
-            nonlocal pending_text, last_chunk_time
+            nonlocal pending_text, last_frame_time, last_visible_time
             last_flush_time = time.monotonic()
             try:
                 async for event in stream_coro:
-                    last_chunk_time = time.monotonic()
-                    chat_message.hide_activity_indicator()
+                    last_frame_time = time.monotonic()
+                    if not isinstance(event, Working):
+                        last_visible_time = last_frame_time
+                        chat_message.hide_activity_indicator()
 
                     if self._stop_generation:
                         break
@@ -104,7 +126,8 @@ class ChatTurnsMixin:
                             continue
                         case TextChunk(text):
                             pending_text += text
-                        # Working: nothing to show, but the stream is alive.
+                        # Working: nothing to show, so the wheel stays; it only
+                        # changes what it says (see activity_label).
 
                     current_time = time.monotonic()
                     if current_time - last_flush_time >= STREAM_FLUSH_INTERVAL:

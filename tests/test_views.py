@@ -30,6 +30,11 @@ from views.chat import (
     ChatView,
 )
 from views.chat_message import ChatMessage
+from views.chat_turns import (
+    ACTIVITY_THINKING_TEXT,
+    ACTIVITY_WORKING_TEXT,
+    activity_label,
+)
 from views.files import (
     BULK_POLL_THRESHOLD,
     FILTER_ALL,
@@ -375,39 +380,162 @@ async def test_streaming_does_not_update_view_per_chunk(chat_view, mock_api_clie
     assert chat_view.scroll_to_bottom.call_count == 1
 
 
-@pytest.mark.asyncio
-async def test_a_frame_with_nothing_to_show_keeps_the_indicator_away(
-    chat_view, mock_page, mock_api_client, monkeypatch
+@pytest.mark.parametrize(
+    ("silent_for", "expected"),
+    [
+        (0.0, ACTIVITY_THINKING_TEXT),
+        (0.99, ACTIVITY_THINKING_TEXT),
+        (1.0, ACTIVITY_WORKING_TEXT),
+        (4.9, ACTIVITY_WORKING_TEXT),
+        (5.0, f"{ACTIVITY_WORKING_TEXT} 5 s"),
+        (61.7, f"{ACTIVITY_WORKING_TEXT} 61 s"),
+    ],
+)
+def test_the_wheel_says_thinking_while_frames_come_and_how_long_it_is_silent_after(
+    silent_for, expected
 ):
-    # The model's reasoning is hidden, yet it says that the backend is working: only
-    # a stream that is really silent brings the "..." back.
+    assert activity_label(silent_for) == expected
+
+
+async def run_stream_with_the_wheel_recorded(
+    chat_view, mock_page, mock_api_client, monkeypatch, stream, done
+):
+    """Send "hi" over ``stream``; what is done to the wheel goes into ``done``, in order."""
     monkeypatch.setattr("views.chat_turns.ACTIVITY_INDICATOR_DELAY", 0.35)
-    shown = MagicMock()
-    monkeypatch.setattr(ChatMessage, "show_activity_indicator", shown)
+    monkeypatch.setattr("views.chat_turns.ACTIVITY_SECONDS_FROM", 1)
+    monkeypatch.setattr(
+        ChatMessage,
+        "show_activity_indicator",
+        lambda self, label: done.append(("show", label)),
+    )
+    monkeypatch.setattr(
+        ChatMessage,
+        "hide_activity_indicator",
+        lambda self: done.append(("hide", None)),
+    )
     mock_page.run_task.side_effect = lambda fn, *args: (
         asyncio.ensure_future(fn(*args))
         if fn.__name__ == "show_activity_after_delay"
         else MagicMock()
     )
-    shown_while_reasoning = []
-
-    async def stream(**_kwargs):
-        # Longer than the delay plus one look of the indicator (every 0.25 s).
-        for _ in range(16):
-            yield Working()
-            await asyncio.sleep(0.05)
-        shown_while_reasoning.append(shown.call_count)
-        await asyncio.sleep(1.0)
-        yield TextChunk("answer")
-
     mock_api_client.stream_chat = MagicMock(side_effect=lambda **kw: stream(**kw))
     chat_view.input_field.value = "hi"
 
     await chat_view.send_message_click(None)
 
-    assert shown_while_reasoning == [0]
-    assert shown.called, "the silence that followed did bring it back"
+
+@pytest.mark.asyncio
+async def test_hidden_reasoning_keeps_the_wheel_on_and_says_the_model_is_thinking(
+    chat_view, mock_page, mock_api_client, monkeypatch
+):
+    # Nothing changes on screen while the model reasons, so the wheel is there; and
+    # frames keep coming, which is what it says: thinking, not waiting.
+    done = []
+
+    async def stream(**_kwargs):
+        # Longer than the delay plus one look of the wheel (every 0.25 s).
+        for _ in range(16):
+            yield Working()
+            await asyncio.sleep(0.05)
+        yield TextChunk("answer")
+
+    await run_stream_with_the_wheel_recorded(
+        chat_view, mock_page, mock_api_client, monkeypatch, stream, done
+    )
+
+    shows = [label for what, label in done if what == "show"]
+    assert shows, "the reasoning did not bring the wheel"
+    assert set(shows) == {ACTIVITY_THINKING_TEXT}
+    # The reasoning frames did not take it away: only the answer did.
+    assert done.index(("hide", None)) > done.index(("show", ACTIVITY_THINKING_TEXT))
     assert chat_view._is_streaming is False
+
+
+@pytest.mark.asyncio
+async def test_a_stream_that_says_nothing_shows_the_wheel_and_how_long(
+    chat_view, mock_page, mock_api_client, monkeypatch
+):
+    # A tool that takes its time, or a model that has not begun: no frame at all.
+    done = []
+
+    async def stream(**_kwargs):
+        await asyncio.sleep(1.7)
+        yield TextChunk("answer")
+
+    await run_stream_with_the_wheel_recorded(
+        chat_view, mock_page, mock_api_client, monkeypatch, stream, done
+    )
+
+    shows = [label for what, label in done if what == "show"]
+    assert ACTIVITY_THINKING_TEXT not in shows
+    assert shows[0].startswith(ACTIVITY_WORKING_TEXT)
+    assert any(label.endswith(" s") for label in shows), shows
+
+
+@pytest.mark.asyncio
+async def test_a_change_on_screen_takes_the_wheel_away_and_an_empty_frame_does_not(
+    chat_view, mock_page, mock_api_client, monkeypatch
+):
+    done = []
+    after_the_empty_frame = []
+
+    async def stream(**_kwargs):
+        await asyncio.sleep(0.6)  # the wheel comes
+        yield Working()
+        # The generator goes on only after the frame above was handled.
+        after_the_empty_frame.extend(done)
+        yield Sources([{"file_name": "book.pdf"}])
+
+    await run_stream_with_the_wheel_recorded(
+        chat_view, mock_page, mock_api_client, monkeypatch, stream, done
+    )
+
+    assert any(what == "show" for what, _label in after_the_empty_frame), (
+        "the wheel was not there before the empty frame"
+    )
+    assert ("hide", None) not in after_the_empty_frame
+    # The sources did change what is on screen: they took it away.
+    assert ("hide", None) in done[len(after_the_empty_frame) :]
+
+
+def test_the_wheel_is_a_spinning_ring_that_is_hidden_until_it_is_needed():
+    message = ChatMessage("assistant", "")
+    ring = message.activity_indicator.controls[0]
+
+    assert message.activity_indicator.visible is False
+    assert isinstance(ring, ft.ProgressRing)
+    # No value: it spins without claiming to know how far the answer is.
+    assert ring.value is None
+
+
+def test_showing_the_wheel_sets_what_it_says_and_a_new_label_sends_only_the_label():
+    message = ChatMessage("assistant", "")
+
+    with patch("views.chat_message.safe_update") as send:
+        message.show_activity_indicator("Лили мисли…")
+        message.show_activity_indicator("Лили мисли…")
+        message.show_activity_indicator("Лили работи… 7 s")
+
+    assert message.activity_indicator.visible is True
+    assert message.activity_label.value == "Лили работи… 7 s"
+    # Once for the wheel to appear, once for the text that changed; the same text
+    # again sends nothing.
+    assert [call.args[1] for call in send.call_args_list] == [
+        message.activity_indicator,
+        message.activity_label,
+    ]
+
+
+def test_hiding_the_wheel_and_an_error_take_it_away():
+    message = ChatMessage("assistant", "")
+    message.show_activity_indicator("Лили работи…")
+
+    message.hide_activity_indicator()
+    assert message.activity_indicator.visible is False
+
+    message.show_activity_indicator("Лили работи…")
+    message.finalize_with_error("грешка")
+    assert message.activity_indicator.visible is False
 
 
 @pytest.mark.asyncio
