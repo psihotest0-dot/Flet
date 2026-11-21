@@ -36,6 +36,23 @@ class Message(BaseModel):
     sources: list[dict[str, Any]] | None = None
 
 
+class TelegramSession(BaseModel):
+    """A Telegram conversation the app can open (``GET /telegram/sessions``).
+
+    ``session_id`` is the session the bot writes to, ``tg-<chat id>``; the app opens
+    it as a chat of its own, so one conversation is shared by both channels.
+    """
+
+    session_id: str
+    name: str
+
+
+class TelegramSessionList(BaseModel):
+    """The answer of ``GET /telegram/sessions``: possibly no conversation at all."""
+
+    sessions: list[TelegramSession] = []
+
+
 class Memory(BaseModel):
     """Represents a piece of memory stored in the system."""
 

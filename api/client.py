@@ -30,6 +30,8 @@ from api.models import (
     OracleDecisionPage,
     Proposal,
     Rule,
+    TelegramSession,
+    TelegramSessionList,
     UploadResult,
     UserFile,
     UserFileList,
@@ -314,17 +316,31 @@ class APIClient:
         return memory
 
     async def get_messages(
-        self, session_id: str, limit: int | None = None
+        self, session_id: str, limit: int | None = None, before: str | None = None
     ) -> list[Message]:
         """Get chat messages for a session (oldest first).
 
-        Without ``limit`` the backend returns only its default page (50).
+        Without ``limit`` the backend returns only its default page (50). ``before`` is
+        the id of the oldest message the caller already has: the page is then the
+        messages older than it (an empty list: there are none), so a long conversation
+        can be read backwards. An id the backend does not know is a 404.
         """
         params: dict[str, Any] = {"session_id": session_id}
         if limit is not None:
             params["limit"] = limit
+        if before:
+            params["before"] = before
         response = await self._get("/messages", params=params)
         return [Message(**item) for item in response.json()]
+
+    async def list_telegram_sessions(self) -> list[TelegramSession]:
+        """The Telegram conversations of the user (``tg-<chat id>``), possibly none.
+
+        A backend that does not have the endpoint answers 404, as for any unknown path:
+        the caller treats that as "no Telegram conversation".
+        """
+        response = await self._get("/telegram/sessions")
+        return TelegramSessionList(**response.json()).sessions
 
     async def list_memories(self, status: str | None = None) -> list[Memory]:
         """List memories for the user, optionally filtered by status."""
@@ -441,7 +457,7 @@ class APIClient:
 
         ``use_paid`` is the choice of the model, as for :meth:`stream_chat`.
         """
-        payload: dict[str, Any] = {"session_id": session_id}
+        payload: dict[str, Any] = {"session_id": session_id, "queue_events": True}
         if use_paid is not None:
             payload["use_paid"] = use_paid
         return self._stream_sse("/chat/regenerate", payload)
@@ -454,8 +470,16 @@ class APIClient:
         ``use_paid`` is the choice of the model for this turn: ``True`` - the paid
         one, ``False`` - the local one only, ``None`` (left out of the request) - what
         the backend is set to do.
+
+        The request asks to be told when it has to wait for another reply in the same
+        conversation (the one shared with Telegram): ``queue_events``. A backend that
+        does not know the field ignores it and never sends the frame.
         """
-        payload: dict[str, Any] = {"session_id": session_id, "content": content}
+        payload: dict[str, Any] = {
+            "session_id": session_id,
+            "content": content,
+            "queue_events": True,
+        }
         if use_paid is not None:
             payload["use_paid"] = use_paid
         return self._stream_sse("/chat/stream", payload)

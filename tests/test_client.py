@@ -18,7 +18,7 @@ from api.limits import (
     is_supported_file,
 )
 from api.models import IngestedFile, Memory, UploadResult
-from api.stream import Proposals, Sources, TextChunk, Working
+from api.stream import Proposals, Queued, Sources, TextChunk, Working
 
 
 @pytest.fixture
@@ -798,6 +798,128 @@ async def test_get_messages_omits_limit_by_default(client):
     await client.get_messages("session-123")
 
     assert "limit" not in route.calls.last.request.url.params
+    assert "before" not in route.calls.last.request.url.params
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_messages_asks_for_the_ones_before_a_message(client):
+    route = respx.get("http://localhost:8080/messages").mock(
+        return_value=httpx.Response(
+            200, json=[{"id": "m1", "role": "user", "content": "older"}]
+        )
+    )
+
+    result = await client.get_messages("session-123", limit=101, before="m2")
+
+    params = route.calls.last.request.url.params
+    assert params["before"] == "m2"
+    assert params["session_id"] == "session-123"
+    assert params["limit"] == "101"
+    assert [m.content for m in result] == ["older"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_get_messages_before_an_unknown_message_is_a_404(client):
+    respx.get("http://localhost:8080/messages").mock(
+        return_value=httpx.Response(404, text="message not found")
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        await client.get_messages("session-123", before="gone")
+
+    assert exc_info.value.status == 404
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_list_telegram_sessions_reads_the_conversations(client):
+    route = respx.get("http://localhost:8080/telegram/sessions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "sessions": [
+                    {"session_id": "tg-1", "name": "Telegram"},
+                    {"session_id": "tg-2", "name": "Telegram 2"},
+                ]
+            },
+        )
+    )
+
+    result = await client.list_telegram_sessions()
+
+    assert route.called
+    assert [(s.session_id, s.name) for s in result] == [
+        ("tg-1", "Telegram"),
+        ("tg-2", "Telegram 2"),
+    ]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_list_telegram_sessions_may_be_empty(client):
+    respx.get("http://localhost:8080/telegram/sessions").mock(
+        return_value=httpx.Response(200, json={"sessions": []})
+    )
+
+    assert await client.list_telegram_sessions() == []
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_list_telegram_sessions_on_an_older_backend_is_a_404(client):
+    respx.get("http://localhost:8080/telegram/sessions").mock(
+        return_value=httpx.Response(404)
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        await client.list_telegram_sessions()
+
+    assert exc_info.value.status == 404
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_chat_request_asks_to_be_told_that_it_waits(client):
+    async def sse_stream():
+        yield b"data: [DONE]\n\n"
+
+    stream = respx.post("http://localhost:8080/chat/stream").mock(
+        return_value=httpx.Response(
+            200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}
+        )
+    )
+    regenerate = respx.post("http://localhost:8080/chat/regenerate").mock(
+        return_value=httpx.Response(
+            200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}
+        )
+    )
+
+    _ = [e async for e in client.stream_chat("session-123", "Hi")]
+    _ = [e async for e in client.regenerate_chat("session-123")]
+
+    assert json.loads(stream.calls.last.request.content)["queue_events"] is True
+    assert json.loads(regenerate.calls.last.request.content)["queue_events"] is True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_the_waiting_frame_is_an_event_of_its_own(client):
+    async def sse_stream():
+        yield b"event: queued\ndata: {}\n\n"
+        yield b'data: {"content": "Hello"}\n\n'
+        yield b"data: [DONE]\n\n"
+
+    respx.post("http://localhost:8080/chat/stream").mock(
+        return_value=httpx.Response(
+            200, content=sse_stream(), headers={"Content-Type": "text/event-stream"}
+        )
+    )
+
+    events = [e async for e in client.stream_chat("session-123", "Hi")]
+
+    assert events == [Queued(), TextChunk("Hello")]
 
 
 # ------------------------------------------------------------------- APIError
@@ -1153,9 +1275,14 @@ def _sse_response(*frames: bytes) -> httpx.Response:
             "stream_chat",
             "/chat/stream",
             ("s1", "Hi"),
-            {"session_id": "s1", "content": "Hi"},
+            {"session_id": "s1", "content": "Hi", "queue_events": True},
         ),
-        ("regenerate_chat", "/chat/regenerate", ("s1",), {"session_id": "s1"}),
+        (
+            "regenerate_chat",
+            "/chat/regenerate",
+            ("s1",),
+            {"session_id": "s1", "queue_events": True},
+        ),
     ],
 )
 @respx.mock

@@ -11,7 +11,7 @@
 | [main.py](main.py) | Входна точка: логове, настройки, клиент, тема, табове, проверка на връзката и банерът при липса на връзка |
 | [api/client.py](api/client.py) | Единственото място за HTTP заявки към бекенда: `APIClient`, повторенията, записът на грешките в лога |
 | [api/models.py](api/models.py) | Моделите на данните от договора (`docs/openapi.yaml`): съобщение, спомен, предложение, файл, правило, запис от журнала на Oracle |
-| [api/stream.py](api/stream.py) | Събитията на един ход от чата (`TextChunk`, `Sources`, `Proposals`, `ModelUsed`, `Working`) и `parse_frame`, който превръща един SSE кадър в тях |
+| [api/stream.py](api/stream.py) | Събитията на един ход от чата (`TextChunk`, `Sources`, `Proposals`, `ModelUsed`, `Working`, `Queued`) и `parse_frame`, който превръща един SSE кадър в тях |
 | [api/errors.py](api/errors.py) | `APIError` (бекендът отговори с грешка) и `StreamError` (грешка по SSE) |
 | [api/limits.py](api/limits.py) | Какво приема бекендът: граници на размера и важността, типове файлове |
 | [state/settings.py](state/settings.py) | `settings.json`: четене, поправка при повреда, атомарен запис |
@@ -94,6 +94,7 @@
 | `Sources(items)` | Източниците на отговора (`SourceInfo`, както ги е пратил бекендът); по-късен кадър добавя още. |
 | `Proposals(items)` | Записите, които асистентът иска да потвърдиш; неразбираемите записи се отсяват в `ChatMessage.add_proposals`. |
 | `ModelUsed(who)` | Кой е отговорил: `{"provider": "local"}` или `{"provider": "deepseek", "model": ...}`. |
+| `Queued()` | `event: queued`: заявката чака, защото друг отговор в същия разговор още се пише (разговорът е общ с Telegram). Праща се само на заявка с `queue_events` и преди всичко друго; отговорът идва, когато другият свърши. |
 | `Working()` | Кадър без нищо за показване (разсъжденията на модела, които клиентът скрива): бекендът е жив и само това казва. Чатът не го брои за промяна на екрана: колелото на „Лили работи“ остава, а надписът му става „Лили мисли…“ (кадри идват, значи бекендът е жив). |
 
 | Функция | Какво прави |
@@ -121,6 +122,7 @@
 | Клас | Какво е |
 |---|---|
 | `Message` | Съобщение от чата (с `sources` на асистентските отговори). |
+| `TelegramSession` / `TelegramSessionList` | Telegram разговор, който приложението може да отвори (`session_id` = `tg-<chat id>`, `name`), и отговорът на `GET /telegram/sessions` (възможно празен списък). |
 | `ChatAttachment` | Файл, прикачен към един разговор: име, размер, редове, ~токени, версия; `created`/`replaced`/`unchanged` само в отговора на качване. |
 | `Memory` | Спомен: съдържание, статус, важност 1–10, метаданни. Само полетата, които бекендът праща (`MemoryDTO`): вектор и хеш на съдържанието не идват по мрежата, затова ги няма. |
 | `Proposal` | Предложение на асистента (правило, бележка „как говорим“, спомен или запис във файл), което чака потребителя. `external_sources` казва откъде идва текстът (интернет, документи, файлове). За запис във файл (`kind=write_file`): `file_name`, `file_mode` (`create` / `replace` / `append`) и текстът в `content`. |
@@ -155,7 +157,8 @@
 | `list_files()` | `GET /v1/files` | Списък на файловете. |
 | `get_file_status(file_id)` | `GET /v1/files/{id}` | Текущ статус на един файл. |
 | `update_file_category(file_id, category)` | `PATCH /v1/files/{id}/category` | Сменя категорията; че е по избор на потребителя (`manual_override`), бекендът отбелязва сам. |
-| `get_messages(session_id, limit)` | `GET /messages` | Съобщенията на сесия, най-старите първо. |
+| `get_messages(session_id, limit, before=None)` | `GET /messages` | Съобщенията на сесия, най-старите първо. `before` е `id` на най-старото съобщение, което вече имаш: страницата е тогава по-старите от него (празен списък — няма по-стари); непознат `id` е 404. |
+| `list_telegram_sessions()` | `GET /telegram/sessions` | Telegram разговорите на потребителя (`tg-<chat id>`), възможно никакви. Минава през `_get` (до 3 опита). `404` значи по-стар бекенд: извикващият го взема за „няма“. |
 | `create_memory(content, status, source_message_id, importance, metadata)` | `POST /memories` | Нов спомен; без зададена важност праща 5. |
 | `list_memories(status)` | `GET /memories` | Спомените, по избор по статус. |
 | `update_memory(memory_id, content, status, importance, metadata)` | `PUT /memories/{id}` | Променя спомен. |
@@ -169,8 +172,8 @@
 | `list_oracle_decisions(limit, before_id, symbol)` | `GET /oracle/decisions` | Страница от журнала на Oracle. `before_id` 0/липсва и празен `symbol` не се пращат. Четенето не се записва в лога (табът го пита на всеки няколко секунди, а причината е текст на модела). |
 | `list_rules()` | `GET /rules` | Глобалните правила. Минава през `_get`, т.е. с до 3 опита. |
 | `delete_rule(rule_id)` | `DELETE /rules/{id}` | Изтрива правило. |
-| `stream_chat(session_id, content, use_paid=None)` | `POST /chat/stream` | Връща асинхронен генератор над SSE (през `_stream_sse`): дава събития от `api/stream.py`. Край на `[DONE]`. `use_paid` е изборът на модела за хода (`True` — платеният, `False` — само локалният, `None` — не се праща и решава бекендът); кадърът `model` казва кой е отговорил (`{"provider": "local"}` или `{"provider": "deepseek", "model": ...}`) и идва само докато бекендът има платен модел. |
-| `regenerate_chat(session_id, use_paid=None)` | `POST /chat/regenerate` | Същото за наново генериран отговор. |
+| `stream_chat(session_id, content, use_paid=None)` | `POST /chat/stream` | Връща асинхронен генератор над SSE (през `_stream_sse`): дава събития от `api/stream.py`. Край на `[DONE]`. Заявката винаги праща `queue_events: true` (иска да бъде уведомена с `event: queued`, когато чака друг отговор в разговора; по-стар бекенд полето не знае и кадъра не праща). `use_paid` е изборът на модела за хода (`True` — платеният, `False` — само локалният, `None` — не се праща и решава бекендът); кадърът `model` казва кой е отговорил (`{"provider": "local"}` или `{"provider": "deepseek", "model": ...}`) и идва само докато бекендът има платен модел. |
+| `regenerate_chat(session_id, use_paid=None)` | `POST /chat/regenerate` | Същото за наново генериран отговор (също с `queue_events`). |
 | `_stream_sse(path, payload)` | — | Общият четец на двата стрийма (бекендът пише еднакви събития и в двата): за всеки кадър вика `parse_frame` и подава събитията му. Грешка в `event: error` става `StreamError`, отказана заявка — `APIError`. |
 
 Успешните промени (качване, изтриване, създаване и промяна на спомен, решение за предложение) се записват в лога с id-та, без текст.

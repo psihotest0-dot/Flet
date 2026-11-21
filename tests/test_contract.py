@@ -60,11 +60,13 @@ from api.models import (
     OracleDecisionPage,
     Proposal,
     Rule,
+    TelegramSession,
+    TelegramSessionList,
     UserFile,
     UserFileInfo,
     UserFileList,
 )
-from api.stream import ModelUsed, Proposals, Sources, TextChunk, Working
+from api.stream import ModelUsed, Proposals, Queued, Sources, TextChunk, Working
 from views.files import CATEGORIES, EMBEDDING_STATES, FINAL_STATUSES
 from views.oracle import MODES, STATUS_FAILED, VERDICTS
 from views.proposals import FILE_MODE_HINTS
@@ -125,6 +127,12 @@ CASES = [
     ),
     case("get_messages", "all", lambda c, d: c.get_messages(SESSION)),
     case("get_messages", "limited", lambda c, d: c.get_messages(SESSION, limit=200)),
+    case(
+        "get_messages",
+        "before",
+        lambda c, d: c.get_messages(SESSION, limit=101, before=ID),
+    ),
+    case("list_telegram_sessions", "plain", lambda c, d: c.list_telegram_sessions()),
     case("list_memories", "all", lambda c, d: c.list_memories()),
     case("list_memories", "active", lambda c, d: c.list_memories("active")),
     case("list_memories", "candidate", lambda c, d: c.list_memories("candidate")),
@@ -226,6 +234,7 @@ async def test_the_frames_the_contract_describes_become_events():
     proposal = example(schema_named("Proposal"))
     who = {"provider": "deepseek", "model": "deepseek-flash"}
     body = sse(
+        ("queued", {}),
         ("sources", [source]),
         (None, {"reasoning_content": "мисля"}),
         (None, {"content": "Дунав "}),
@@ -245,6 +254,7 @@ async def test_the_frames_the_contract_describes_become_events():
             events = await drain(client.stream_chat(SESSION, "въпрос"))
 
     assert events == [
+        Queued(),
         Sources([source]),
         Working(),
         TextChunk("Дунав "),
@@ -277,6 +287,8 @@ PAIRS = [
     (Proposal, "Proposal"),
     (UserFileInfo, "UserFileInfo"),
     (UserFileList, "UserFileList"),
+    (TelegramSession, "TelegramSession"),
+    (TelegramSessionList, "TelegramSessionList"),
     (UserFile, "UserFile"),
     (Rule, "Rule"),
     (OracleDecision, "OracleEvaluation"),

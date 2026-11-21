@@ -8,6 +8,7 @@ into typed events, so that the chat never has to tell a dict from a string:
 * :class:`Sources` - the documents and memories it is based on (more may follow);
 * :class:`Proposals` - the writes the assistant asks the user to confirm;
 * :class:`ModelUsed` - who gave the answer (only while a paid model is configured);
+* :class:`Queued` - the request waits for another reply in the same conversation;
 * :class:`Working` - a frame with nothing to show (the model's reasoning, which
   clients hide): the backend is alive, and that is all it says.
 
@@ -68,7 +69,16 @@ class Working:
     """A frame with nothing to show; the stream is alive."""
 
 
-StreamEvent = TextChunk | Sources | Proposals | ModelUsed | Working
+@dataclass(frozen=True)
+class Queued:
+    """The request waits: another reply in the same conversation is still being written.
+
+    Only a request that asked for it (``queue_events``) is sent this, and before anything
+    else; the answer follows when the other one is done.
+    """
+
+
+StreamEvent = TextChunk | Sources | Proposals | ModelUsed | Working | Queued
 
 
 def _stream_error_text(data: str) -> str:
@@ -171,4 +181,6 @@ def parse_frame(event: str | None, data: str) -> list[StreamEvent]:
         return _model_frame(data)
     if event == "proposals":
         return _proposals_frame(data)
+    if event == "queued":
+        return [Queued()]
     return _data_frame(data)

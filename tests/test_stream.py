@@ -8,6 +8,7 @@ from api.errors import StreamError
 from api.stream import (
     ModelUsed,
     Proposals,
+    Queued,
     Sources,
     TextChunk,
     Working,
@@ -141,3 +142,15 @@ def test_a_model_frame_this_client_cannot_read_gives_nothing(data, caplog):
 
     # Not worth a line in the log.
     assert not caplog.records
+
+
+def test_the_waiting_frame_is_queued_whatever_its_data_is():
+    # ``event: queued`` carries ``{}``; an older client would have taken it for text.
+    assert parse_frame("queued", "{}") == [Queued()]
+    assert parse_frame("queued", "") == [Queued()]
+    assert parse_frame("queued", "not json at all") == [Queued()]
+
+
+def test_data_without_the_event_name_is_not_the_waiting_frame():
+    assert parse_frame(None, "{}") == [Working()]
+    assert parse_frame("message", "{}") == [Working()]
