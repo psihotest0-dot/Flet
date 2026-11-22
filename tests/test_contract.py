@@ -66,7 +66,15 @@ from api.models import (
     UserFileInfo,
     UserFileList,
 )
-from api.stream import ModelUsed, Proposals, Queued, Sources, TextChunk, Working
+from api.stream import (
+    ModelUsed,
+    Proposals,
+    Queued,
+    Remembered,
+    Sources,
+    TextChunk,
+    Working,
+)
 from views.files import CATEGORIES, EMBEDDING_STATES, FINAL_STATUSES
 from views.oracle import MODES, SERVED, STATUS_FAILED, VERDICTS
 from views.proposals import FILE_MODE_HINTS
@@ -241,6 +249,7 @@ async def test_the_frames_the_contract_describes_become_events():
         (None, {"content": "е граница."}),
         ("proposals", [proposal]),
         ("model", who),
+        ("plan", {"remembered": ["почива на дивана"]}),
         (None, "[DONE]"),
     )
 
@@ -261,6 +270,7 @@ async def test_the_frames_the_contract_describes_become_events():
         TextChunk("е граница."),
         Proposals([proposal]),
         ModelUsed(who),
+        Remembered(["почива на дивана"]),
     ]
     assert Proposal(**proposal).id == proposal["id"]
 

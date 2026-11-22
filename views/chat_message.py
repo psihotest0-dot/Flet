@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 STOPPED_NOTE = (
     "Спряно. Недописаният отговор не се запазва — „Опитай отново“ го пише наново."
 )
+# Before the memories a planned answer used (``remembered`` of the backend).
+REMEMBERED_PREFIX = "Лили си спомни: "
 
 
 class ChatMessage(ft.Column):
@@ -53,6 +55,7 @@ class ChatMessage(ft.Column):
         api_client: APIClient | None = None,
         user_name: str = DEFAULT_DISPLAY_NAME,
         created_at: datetime | None = None,
+        remembered: list[str] | None = None,
     ):
         super().__init__()
         self.role = role
@@ -164,6 +167,11 @@ class ChatMessage(ft.Column):
         self.error_text = ft.Text(
             "", color=theme.PROBLEM, selectable=True, visible=False
         )
+        # The person's memories a planned answer used ("Лили си спомни: …"), quietly
+        # under the bubble; hidden for every other message.
+        self.remembered_label = ft.Text(
+            "", size=11, color=theme.MUTED, italic=True, selectable=True, visible=False
+        )
         self.stopped_note = ft.Text(
             STOPPED_NOTE, size=11, color=theme.MUTED, visible=False
         )
@@ -171,6 +179,7 @@ class ChatMessage(ft.Column):
         self.controls = [
             self.top_row,
             self.msg_container,
+            self.remembered_label,
             self.error_text,
             self.stopped_note,
             self.activity_indicator,
@@ -180,6 +189,7 @@ class ChatMessage(ft.Column):
         # The sources a stored message came with are drawn with the message: the
         # row goes out in the patch that adds it, without an update of its own.
         self._render_sources()
+        self._render_remembered(remembered)
 
     def _shown(self, text: str) -> str:
         """What the Markdown control draws: Lili's images only as links."""
@@ -254,6 +264,22 @@ class ChatMessage(ft.Column):
         """Say that this answer was cut off by the user and will not be kept."""
         self.stopped_note.visible = True
         safe_update(self, self.stopped_note)
+
+    def _render_remembered(self, remembered: list[str] | None) -> bool:
+        """Fill the line "Лили си спомни"; ``True`` when it changed."""
+        items = [
+            m.strip() for m in remembered or [] if isinstance(m, str) and m.strip()
+        ]
+        if self.role == "user" or not items:
+            return False
+        self.remembered_label.value = REMEMBERED_PREFIX + " · ".join(items)
+        self.remembered_label.visible = True
+        return True
+
+    def set_remembered(self, remembered: list[str]) -> None:
+        """Show the person's memories this answer used, as the stream told them."""
+        if self._render_remembered(remembered):
+            safe_update(self, self.remembered_label)
 
     def set_model(self, who: dict) -> None:
         """Show who gave this answer: the cloud (with the model) or this computer."""

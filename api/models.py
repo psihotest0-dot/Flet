@@ -34,6 +34,9 @@ class Message(BaseModel):
     # Where an assistant answer came from (same shape as the SSE ``sources``
     # event); stored with the message so the references survive a reload.
     sources: list[dict[str, Any]] | None = None
+    # The memories a planned answer used (the backend's plan of an answer to a personal
+    # message): the start of each, for the line "Лили си спомни" under the answer.
+    remembered: list[str] | None = None
 
 
 class TelegramSession(BaseModel):

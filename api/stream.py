@@ -9,6 +9,8 @@ into typed events, so that the chat never has to tell a dict from a string:
 * :class:`Proposals` - the writes the assistant asks the user to confirm;
 * :class:`ModelUsed` - who gave the answer (only while a paid model is configured);
 * :class:`Queued` - the request waits for another reply in the same conversation;
+* :class:`Remembered` - the person's memories a planned answer used (only for a request
+  that asked for them, ``plan_events``);
 * :class:`Working` - a frame with nothing to show (the model's reasoning, which
   clients hide): the backend is alive, and that is all it says.
 
@@ -78,7 +80,16 @@ class Queued:
     """
 
 
-StreamEvent = TextChunk | Sources | Proposals | ModelUsed | Working | Queued
+@dataclass(frozen=True)
+class Remembered:
+    """The memories a planned answer used: the start of each, for "Лили си спомни"."""
+
+    items: list[str]
+
+
+StreamEvent = (
+    TextChunk | Sources | Proposals | ModelUsed | Working | Queued | Remembered
+)
 
 
 def _stream_error_text(data: str) -> str:
@@ -129,6 +140,19 @@ def _model_frame(data: str) -> list[StreamEvent]:
     except json.JSONDecodeError:
         return []
     return [ModelUsed(who)] if isinstance(who, dict) else []
+
+
+def _plan_frame(data: str) -> list[StreamEvent]:
+    # The memories the answer used; a frame this client cannot read is not worth a failure.
+    try:
+        plan = json.loads(data)
+    except json.JSONDecodeError:
+        return []
+    items = plan.get("remembered") if isinstance(plan, dict) else None
+    if not isinstance(items, list):
+        return []
+    remembered = [item for item in items if isinstance(item, str) and item.strip()]
+    return [Remembered(remembered)] if remembered else []
 
 
 def _proposals_frame(data: str) -> list[StreamEvent]:
@@ -183,4 +207,6 @@ def parse_frame(event: str | None, data: str) -> list[StreamEvent]:
         return _proposals_frame(data)
     if event == "queued":
         return [Queued()]
+    if event == "plan":
+        return _plan_frame(data)
     return _data_frame(data)

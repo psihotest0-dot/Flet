@@ -901,6 +901,8 @@ async def test_a_chat_request_asks_to_be_told_that_it_waits(client):
 
     assert json.loads(stream.calls.last.request.content)["queue_events"] is True
     assert json.loads(regenerate.calls.last.request.content)["queue_events"] is True
+    assert json.loads(stream.calls.last.request.content)["plan_events"] is True
+    assert json.loads(regenerate.calls.last.request.content)["plan_events"] is True
 
 
 @respx.mock
@@ -1275,13 +1277,18 @@ def _sse_response(*frames: bytes) -> httpx.Response:
             "stream_chat",
             "/chat/stream",
             ("s1", "Hi"),
-            {"session_id": "s1", "content": "Hi", "queue_events": True},
+            {
+                "session_id": "s1",
+                "content": "Hi",
+                "queue_events": True,
+                "plan_events": True,
+            },
         ),
         (
             "regenerate_chat",
             "/chat/regenerate",
             ("s1",),
-            {"session_id": "s1", "queue_events": True},
+            {"session_id": "s1", "queue_events": True, "plan_events": True},
         ),
     ],
 )

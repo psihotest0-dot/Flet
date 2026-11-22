@@ -170,6 +170,7 @@ class ChatPairedMixin:
                     notify=False,
                     created_at=msg.created_at,
                     index=first + offset,
+                    remembered=msg.remembered,
                 )
             self._oldest_id = shown[0].id
             # The reader is up in the old text, not at the end of the conversation.
@@ -297,6 +298,7 @@ class ChatPairedMixin:
                 sources=msg.sources,
                 notify=False,
                 created_at=msg.created_at,
+                remembered=msg.remembered,
             )
         self._tail_id = new[-1].id
         self._show_empty_state(False)

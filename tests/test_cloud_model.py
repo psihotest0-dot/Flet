@@ -310,7 +310,12 @@ async def test_the_client_sends_the_choice_only_when_there_is_one():
             headers={"Content-Type": "text/event-stream"},
         )
     )
-    base = {"session_id": "s", "content": "c", "queue_events": True}
+    base = {
+        "session_id": "s",
+        "content": "c",
+        "queue_events": True,
+        "plan_events": True,
+    }
     for args, expected in [
         ({}, base),
         ({"use_paid": True}, {**base, "use_paid": True}),
@@ -330,6 +335,7 @@ async def test_the_client_sends_the_choice_only_when_there_is_one():
     assert json.loads(regen.calls.last.request.content) == {
         "session_id": "s",
         "queue_events": True,
+        "plan_events": True,
         "use_paid": False,
     }
 

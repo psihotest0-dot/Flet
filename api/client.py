@@ -457,7 +457,11 @@ class APIClient:
 
         ``use_paid`` is the choice of the model, as for :meth:`stream_chat`.
         """
-        payload: dict[str, Any] = {"session_id": session_id, "queue_events": True}
+        payload: dict[str, Any] = {
+            "session_id": session_id,
+            "queue_events": True,
+            "plan_events": True,
+        }
         if use_paid is not None:
             payload["use_paid"] = use_paid
         return self._stream_sse("/chat/regenerate", payload)
@@ -472,13 +476,15 @@ class APIClient:
         the backend is set to do.
 
         The request asks to be told when it has to wait for another reply in the same
-        conversation (the one shared with Telegram): ``queue_events``. A backend that
-        does not know the field ignores it and never sends the frame.
+        conversation (the one shared with Telegram): ``queue_events``; and which of the
+        person's memories a planned answer used: ``plan_events``. A backend that does
+        not know a field ignores it and never sends the frame.
         """
         payload: dict[str, Any] = {
             "session_id": session_id,
             "content": content,
             "queue_events": True,
+            "plan_events": True,
         }
         if use_paid is not None:
             payload["use_paid"] = use_paid
@@ -490,7 +496,7 @@ class APIClient:
         """POST ``payload`` to ``path`` and yield the events the backend streams back.
 
         Both chat endpoints write the same frames (``sources``, text chunks,
-        ``proposals``, ``model``, ``[DONE]``, ``error``), so one reader serves them;
+        ``proposals``, ``model``, ``plan``, ``[DONE]``, ``error``), so one reader serves them;
         ``api.stream.parse_frame`` turns a frame into typed events. An ``error``
         frame raises :class:`StreamError`, a refused request :class:`APIError`.
         """

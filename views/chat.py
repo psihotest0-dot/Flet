@@ -849,6 +849,7 @@ class ChatView(
                 sources=msg.sources,
                 notify=False,
                 created_at=msg.created_at,
+                remembered=msg.remembered,
             )
 
         self._show_empty_state(not self.chat_list.controls)
@@ -887,6 +888,7 @@ class ChatView(
         notify: bool = True,
         created_at: datetime | None = None,
         index: int | None = None,
+        remembered: list[str] | None = None,
     ) -> ChatMessage:
         """Add a message to the list: at the end, or at ``index`` (older ones go above)."""
         is_user = role == "user"
@@ -900,6 +902,7 @@ class ChatView(
             api_client=self.api_client,
             user_name=self.display_name,
             created_at=created_at,
+            remembered=remembered,
         )
 
         container_wrapper = ft.Container(

@@ -23,7 +23,15 @@ import httpx
 
 from api.errors import APIError, StreamError
 from api.limits import MESSAGE_TOKEN_LIMIT
-from api.stream import ModelUsed, Proposals, Queued, Sources, TextChunk, Working
+from api.stream import (
+    ModelUsed,
+    Proposals,
+    Queued,
+    Remembered,
+    Sources,
+    TextChunk,
+    Working,
+)
 from views.attachments import estimate_message_tokens
 from views.timeline import now
 from views.ui_utils import describe_error, safe_update, show_snackbar
@@ -137,6 +145,9 @@ class ChatTurnsMixin:
                             continue
                         case ModelUsed(who):
                             chat_message.set_model(who)
+                            continue
+                        case Remembered(items):
+                            chat_message.set_remembered(items)
                             continue
                         case TextChunk(text):
                             pending_text += text
