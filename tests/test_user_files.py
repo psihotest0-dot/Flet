@@ -16,7 +16,13 @@ from helpers import tab_labels, tab_view
 import main as main_module
 from api.client import APIClient
 from api.errors import APIError
-from api.models import Proposal, UserFile, UserFileInfo, UserFileList
+from api.models import (
+    LibraryAddResult,
+    Proposal,
+    UserFile,
+    UserFileInfo,
+    UserFileList,
+)
 from views import ui_utils as ui_utils_module
 from views import user_files as user_files_module
 from views.files import files_label
@@ -26,6 +32,7 @@ from views.user_files import (
     NOT_ENABLED_TEXT,
     UserFilesView,
     file_subtitle,
+    library_error_text,
     usage_label,
 )
 
@@ -398,12 +405,15 @@ async def test_the_row_buttons_open_and_delete_through_the_page(mock_page):
     await view.load()
     tile = view.list_column.controls[0]
     info = view.listing.files[0]
-    open_btn, delete_btn = tile.trailing.controls
+    open_btn, library_btn, delete_btn = tile.trailing.controls
 
     tile.on_click(None)
     mock_page.run_task.assert_called_with(view.open_file, info)
     open_btn.on_click(None)
     mock_page.run_task.assert_called_with(view.open_file, info)
+    library_btn.on_click(None)
+    mock_page.run_task.assert_called_with(view.add_to_library, info)
+    assert library_btn.tooltip == "Запази в библиотеката"
     delete_btn.on_click(None)
     mock_page.run_task.assert_called_with(view.delete_file, info)
 
@@ -753,3 +763,147 @@ async def test_flet_accepts_the_view_its_list_and_its_dialog(monkeypatch):
     user_files_module.close_dialog(dialog)
     assert dialog.open is False
     assert [message.body.id for message in connection.sent] == [dialog._i]
+
+
+# -------------------------------------------------------------------- library
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_file_goes_into_the_library_and_the_log_names_no_file(client, caplog):
+    route = respx.post(
+        f"{BASE}/workspace/files/%D1%81%D1%82%D0%B0%D1%82%D0%B8%D1%8F.md/library"
+    ).mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "file_id": "f-1",
+                "file_name": "статия.md",
+                "duplicate": False,
+                "size": 12,
+            },
+        )
+    )
+    caplog.set_level(logging.INFO, logger="api.client")
+
+    result = await client.add_user_file_to_library("статия.md")
+
+    assert result == LibraryAddResult(file_id="f-1", file_name="статия.md", size=12)
+    assert route.calls.last.request.headers["X-User-ID"] == USER_ID
+    assert "went into the library (duplicate: False)" in caplog.text
+    assert "статия" not in caplog.text, "the name is the user's own text"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_file_the_library_has_says_so_and_errors_carry_the_status(client):
+    respx.post(f"{BASE}/workspace/files/a.md/library").mock(
+        return_value=httpx.Response(
+            200, json={"file_id": "f-1", "file_name": "a.md", "duplicate": True}
+        )
+    )
+    assert (await client.add_user_file_to_library("a.md")).duplicate is True
+
+    respx.post(f"{BASE}/workspace/files/b.md/library").mock(
+        return_value=httpx.Response(413, text="too large")
+    )
+    with pytest.raises(APIError) as exc_info:
+        await client.add_user_file_to_library("b.md")
+    assert exc_info.value.status == 413
+
+
+def test_the_library_errors_are_told_in_bulgarian():
+    assert library_error_text(APIError(404, "no such file")) == "Файлът вече го няма."
+    assert "рестартирай" in library_error_text(APIError(404, "404 page not found"))
+    assert "рестартирай" in library_error_text(APIError(405, "Method Not Allowed"))
+    assert "по-голям" in library_error_text(APIError(413, "x"))
+    assert "не е достъпна" in library_error_text(APIError(503, "x"))
+    assert library_error_text(APIError(500, "boom")).startswith("Грешка при запазване")
+
+
+@pytest.mark.asyncio
+async def test_saving_in_the_library_asks_first_and_says_it_is_done(
+    mock_page, snackbars, monkeypatch
+):
+    api_client = make_api()
+    api_client.add_user_file_to_library = AsyncMock(
+        return_value=LibraryAddResult(file_id="f", file_name="a.md", size=3)
+    )
+    confirm = AsyncMock(return_value=True)
+    monkeypatch.setattr(user_files_module, "confirm_dialog", confirm)
+    view = UserFilesView(mock_page, api_client)
+
+    await view.add_to_library(UserFileInfo(name="a.md"))
+
+    assert "„a.md“" in confirm.call_args.args[2]
+    assert "не се променя" in confirm.call_args.args[2]
+    api_client.add_user_file_to_library.assert_awaited_once_with("a.md")
+    assert "е в библиотеката" in snackbars.call_args.args[1]
+    assert snackbars.call_args.kwargs.get("success") is True
+
+
+@pytest.mark.asyncio
+async def test_saving_in_the_library_can_be_left(mock_page, snackbars, monkeypatch):
+    api_client = make_api()
+    api_client.add_user_file_to_library = AsyncMock()
+    monkeypatch.setattr(
+        user_files_module, "confirm_dialog", AsyncMock(return_value=False)
+    )
+    view = UserFilesView(mock_page, api_client)
+
+    await view.add_to_library(UserFileInfo(name="a.md"))
+
+    api_client.add_user_file_to_library.assert_not_awaited()
+    snackbars.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_text_the_library_has_is_said_so(mock_page, snackbars, monkeypatch):
+    api_client = make_api()
+    api_client.add_user_file_to_library = AsyncMock(
+        return_value=LibraryAddResult(file_id="f", file_name="a.md", duplicate=True)
+    )
+    monkeypatch.setattr(
+        user_files_module, "confirm_dialog", AsyncMock(return_value=True)
+    )
+    view = UserFilesView(mock_page, api_client)
+
+    await view.add_to_library(UserFileInfo(name="a.md"))
+
+    assert snackbars.call_args.args[1] == "Библиотеката вече има същия текст."
+
+
+@pytest.mark.asyncio
+async def test_a_file_that_is_gone_is_said_so_and_the_list_is_read_again(
+    mock_page, snackbars, monkeypatch
+):
+    api_client = make_api(UserFileList(**LISTING))
+    api_client.add_user_file_to_library = AsyncMock(
+        side_effect=APIError(404, "no such file")
+    )
+    monkeypatch.setattr(
+        user_files_module, "confirm_dialog", AsyncMock(return_value=True)
+    )
+    view = UserFilesView(mock_page, api_client)
+
+    await view.add_to_library(UserFileInfo(name="a.md"))
+
+    assert snackbars.call_args.args[1] == "Файлът вече го няма."
+    api_client.list_user_files.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_save_in_the_library_is_an_error(
+    mock_page, snackbars, monkeypatch
+):
+    api_client = make_api()
+    api_client.add_user_file_to_library = AsyncMock(
+        side_effect=httpx.ConnectError("down")
+    )
+    monkeypatch.setattr(
+        user_files_module, "confirm_dialog", AsyncMock(return_value=True)
+    )
+    view = UserFilesView(mock_page, api_client)
+
+    await view.add_to_library(UserFileInfo(name="a.md"))
+
+    assert snackbars.call_args.args[1].startswith("Неуспешно запазване в библиотеката")
+    api_client.list_user_files.assert_not_awaited()

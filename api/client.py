@@ -25,6 +25,7 @@ from api.models import (
     MEMORY_CANDIDATE,
     ChatAttachment,
     IngestedFile,
+    LibraryAddResult,
     Memory,
     Message,
     OracleDecisionPage,
@@ -418,6 +419,25 @@ class APIClient:
         _raise_for_status(response)
         # The name is the user's own text; the log keeps the fact only.
         logger.info("A file of the assistant was deleted.")
+
+    async def add_user_file_to_library(self, name: str) -> LibraryAddResult:
+        """Put the text of a file of the assistant's folder into the library.
+
+        The file stays in the folder, where it can still be changed or deleted; the
+        library keeps its own copy, which is not changed from there. A backend without
+        the route answers 404 or 405.
+        """
+        response = await self.client.post(
+            f"{FILES_PATH}{quote(name, safe='')}/library", timeout=120.0
+        )
+        _raise_for_status(response)
+        result = LibraryAddResult(**response.json())
+        # The name is the user's own text; the log keeps the fact only.
+        logger.info(
+            "A file of the assistant went into the library (duplicate: %s).",
+            result.duplicate,
+        )
+        return result
 
     async def list_rules(self) -> list[Rule]:
         """The global rules of the user, newest first."""

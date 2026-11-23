@@ -4,8 +4,12 @@ They are not the library of books (the "Файлове" tab). The assistant writ
 asked, in a folder of its own on the backend; here the user sees them, reads them,
 looks at the version a replacement took the place of, and removes them - the
 assistant cannot remove anything. A write that waits for the user's answer (it would
-replace a file, or the message had used text from outside) is shown as a card above
-the list.
+replace a file, or the message had used text from outside - a whole page the
+assistant saved with save_page too) is shown as a card above the list.
+
+Two stores (the owner, 2026-11-23): this folder, where a file can be read, changed and
+deleted, and the library, where "Запази в библиотеката" puts a copy that is not changed
+from here again.
 """
 
 from __future__ import annotations
@@ -52,6 +56,20 @@ def usage_label(listing: UserFileList) -> str:
         f"{files_label(len(listing.files))} · {size_label(listing.total_bytes)} "
         f"от {size_label(listing.max_total_bytes)}"
     )
+
+
+def library_error_text(ex: APIError) -> str:
+    """What the user is told when a file could not go into the library."""
+    if ex.status == 404 and ex.message == "no such file":
+        return "Файлът вече го няма."
+    if ex.status in (404, 405):
+        # No such route: a backend older than the button.
+        return "Бекендът още не може това — рестартирай го с новия код."
+    if ex.status == 413:
+        return "Файлът е по-голям от това, което библиотеката приема."
+    if ex.status == 503:
+        return "Библиотеката не е достъпна от файловете."
+    return f"Грешка при запазване в библиотеката: {ex}"
 
 
 def file_subtitle(info: UserFileInfo) -> str:
@@ -209,6 +227,13 @@ class UserFilesView(ft.Container):
                         ),
                     ),
                     ft.IconButton(
+                        icon=ft.Icons.LIBRARY_ADD_OUTLINED,
+                        tooltip="Запази в библиотеката",
+                        on_click=lambda e, info=info: self.page_ref.run_task(
+                            self.add_to_library, info
+                        ),
+                    ),
+                    ft.IconButton(
                         icon=ft.Icons.DELETE_OUTLINE,
                         tooltip="Изтрий",
                         on_click=lambda e, info=info: self.page_ref.run_task(
@@ -333,6 +358,48 @@ class UserFilesView(ft.Container):
             actions_alignment=ft.MainAxisAlignment.END,
         )
         open_dialog(self.page_ref, dialog)
+
+    # ------------------------------------------------------------- library
+    async def add_to_library(self, info: UserFileInfo):
+        """The second store: a copy of the file goes into the library, where it stays as
+        it is; the file here can still be changed or deleted."""
+        confirmed = await confirm_dialog(
+            self.page_ref,
+            "Запазване в библиотеката",
+            f"Да запазя ли „{info.name}“ в библиотеката? Там копието не се променя; "
+            "файлът тук остава и можеш да го редактираш или изтриеш.",
+        )
+        if not confirmed:
+            return
+        try:
+            result = await self.api_client.add_user_file_to_library(info.name)
+        except APIError as ex:
+            logger.error(
+                "Failed to put a file of the assistant into the library: %s", ex
+            )
+            show_snackbar(self.page_ref, library_error_text(ex))
+            if ex.status == 404 and ex.message == "no such file":
+                await self.load()
+            return
+        except Exception as ex:
+            logger.error(
+                "Failed to put a file of the assistant into the library: %s",
+                ex,
+                exc_info=is_unexpected(ex),
+            )
+            show_snackbar(
+                self.page_ref,
+                f"Неуспешно запазване в библиотеката: {error_detail(ex)}",
+            )
+            return
+        if result.duplicate:
+            show_snackbar(self.page_ref, "Библиотеката вече има същия текст.")
+        else:
+            show_snackbar(
+                self.page_ref,
+                f"„{result.file_name}“ е в библиотеката — обработва се.",
+                success=True,
+            )
 
     # -------------------------------------------------------------- delete
     async def delete_file(self, info: UserFileInfo):

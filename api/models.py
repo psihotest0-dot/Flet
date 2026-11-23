@@ -96,6 +96,9 @@ class Proposal(BaseModel):
     # A file write only: the name, and ``create``, ``replace`` or ``append``.
     file_name: str | None = None
     file_mode: str | None = None
+    # A whole page the server saved (``save_page``): where it came from; ``content`` is
+    # then only its start, and the approval writes all of it.
+    source: str | None = None
     external_sources: list[str] = []
     created_at: datetime | None = None
 
@@ -130,6 +133,19 @@ class UserFile(BaseModel):
     content: str = ""
     size: int | None = None
     modified: datetime | None = None
+
+
+class LibraryAddResult(BaseModel):
+    """A file of the assistant's folder put into the library
+    (``POST /workspace/files/{name}/library``).
+
+    ``duplicate``: the library had the same text already; nothing was added.
+    """
+
+    file_id: str
+    file_name: str
+    duplicate: bool = False
+    size: int = 0
 
 
 class Rule(BaseModel):

@@ -164,6 +164,11 @@ CASES = [
         lambda c, d: c.get_user_file("списък [1] а/б.txt", previous=True),
     ),
     case("delete_user_file", "plain", lambda c, d: c.delete_user_file("бележки.md")),
+    case(
+        "add_user_file_to_library",
+        "plain",
+        lambda c, d: c.add_user_file_to_library("статия.md"),
+    ),
     case("list_rules", "plain", lambda c, d: c.list_rules()),
     case("delete_rule", "plain", lambda c, d: c.delete_rule(4)),
     case("list_oracle_decisions", "newest", lambda c, d: c.list_oracle_decisions()),
