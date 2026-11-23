@@ -39,6 +39,11 @@ SCROLL_SETTLE_DELAY = 0.15
 # to tell). After the history is drawn the jump is repeated until one of them moves
 # nothing, but not more than SETTLE_ROUNDS times.
 SETTLE_ROUNDS = 10
+# The client builds the page of a tab anew each time the tab is opened, and the list
+# of messages with it - at its top. The jump back to the end waits this long
+# (seconds) for the tabs to slide into place (their ``animation_duration`` in
+# ``main.py`` is 300 ms) and for the rows to be laid out.
+TAB_RETURN_DELAY = 0.45
 
 
 class ChatScrollMixin:
@@ -73,11 +78,27 @@ class ChatScrollMixin:
             # New rows are laid out on the client's next frame, after this scroll.
             self._follow_stream()
 
-    def _start_settling(self) -> None:
+    def return_to_end(self) -> None:
+        """The chat tab was opened again: show the end of the conversation.
+
+        The client built the list anew, at its top, and said nothing about it: the
+        view still thought the reader was at the end, so the "to the newest" button
+        stayed hidden and the next answer was followed from the wrong place.
+        Where the reader was before the tab was left is lost on the client anyway.
+        """
+        self._follow_bottom = True
+        self._show_to_bottom_button(False)
+        self._start_settling(delay=TAB_RETURN_DELAY)
+
+    def _start_settling(self, delay: float | None = None) -> None:
         """Start ``_settle_at_end``; one that is still running is replaced."""
         self._stop_settling()
-        if self.page_ref is not None:
+        if self.page_ref is None:
+            return
+        if delay is None:
             self._settle_task = self.page_ref.run_task(self._settle_at_end)
+        else:
+            self._settle_task = self.page_ref.run_task(self._settle_at_end, delay)
 
     def _stop_settling(self) -> None:
         task = self._settle_task
@@ -89,16 +110,16 @@ class ChatScrollMixin:
         task = self._settle_task
         return task is not None and not task.done()
 
-    async def _settle_at_end(self) -> None:
+    async def _settle_at_end(self, delay: float | None = None) -> None:
         """Jump to the end again and again, until a jump moves nothing.
 
         A jump that has nowhere to go raises no scroll event, one that moves the
         list raises a few: so no new event since the jump means the end was the
         real one. The pause before each jump is for the client to lay out the rows
         it was just sent; the reader taking over (see ``_on_chat_scroll``) cancels
-        the task.
+        the task. ``delay`` replaces the first pause (``SCROLL_SETTLE_DELAY``).
         """
-        await asyncio.sleep(SCROLL_SETTLE_DELAY)
+        await asyncio.sleep(SCROLL_SETTLE_DELAY if delay is None else delay)
         for _ in range(SETTLE_ROUNDS):
             seen = self._scroll_events
             await self._scroll_to_end()

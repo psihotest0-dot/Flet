@@ -17,6 +17,7 @@ from flet.messaging.protocol import MessageAction
 from helpers import real_session, tab_view
 
 import main as main_module
+import views.chat_scroll as chat_scroll_module
 from api.client import APIClient
 from state.settings import Settings, load_settings, save_settings
 from views import theme
@@ -639,6 +640,8 @@ def test_memory_tab_reloads_each_time_it_is_opened_again(start_app, mock_page):
     mock_page.run_task.assert_not_called()
 
     select_tab(tabs, 0)
+    # The chat tab, opened again, goes back to the end of its conversation.
+    mock_page.run_task.reset_mock()
     select_tab(tabs, 1)
     mock_page.run_task.assert_called_once_with(memory_view.load_memories)
     assert tab_view(tabs, 1) is memory_view
@@ -1029,3 +1032,18 @@ def test_the_banner_leads_to_the_settings(start_app, settings_dialog_spy, mock_p
     assert settings_dialog_spy["dialog"].opened_with == [
         ("http://localhost:8080", "Иван")
     ]
+
+
+def test_coming_back_to_the_chat_tab_returns_to_the_end_of_the_chat(
+    start_app, mock_page
+):
+    tabs = start_app()
+    chat = tab_view(tabs, 0)
+    select_tab(tabs, 1)
+    mock_page.run_task.reset_mock()
+
+    select_tab(tabs, 0)
+
+    mock_page.run_task.assert_any_call(
+        chat._settle_at_end, chat_scroll_module.TAB_RETURN_DELAY
+    )

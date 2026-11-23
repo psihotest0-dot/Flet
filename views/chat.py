@@ -738,8 +738,14 @@ class ChatView(
         )
 
     def toggle_emoji_picker(self, e=None):
+        self._show_emoji_picker(not self.emoji_picker.visible)
+
+    def _show_emoji_picker(self, show: bool) -> None:
+        """Show or hide the emoji picker; only a change is sent to the client."""
         picker = self.emoji_picker
-        picker.visible = not picker.visible
+        if picker.visible == show:
+            return
+        picker.visible = show
         self.emoji_btn.icon = (
             ft.Icons.EMOJI_EMOTIONS
             if picker.visible
@@ -753,10 +759,12 @@ class ChatView(
         """Add ``emoji`` to the message being typed.
 
         The caret position of a TextField is not known to Python, so the emoji
-        goes at the end of the text.
+        goes at the end of the text. The picker closes after the pick.
         """
         self._set_input((self.input_field.value or "") + emoji)
         safe_update(self, self.input_field)
+        # One emoji is what a pick is for; the button opens the picker again.
+        self._show_emoji_picker(False)
         self._focus_input()
 
     def _focus_input(self) -> None:
@@ -773,6 +781,18 @@ class ChatView(
             await self.input_field.focus()
         except Exception as ex:  # noqa: BLE001
             logger.debug("The message field was not focused: %s", ex)
+
+    def set_active(self, active: bool) -> None:
+        """The main screen says whether the chat tab is the visible one.
+
+        Coming back to the tab, the reader is taken to the end of the conversation
+        (see ``return_to_end``); the open Telegram conversation is watched only
+        while the tab is visible (``ChatPairedMixin.set_active``).
+        """
+        came_back = active and not self._paired_active
+        super().set_active(active)
+        if came_back:
+            self.return_to_end()
 
     def did_mount(self):
         if self.page_ref is not None:

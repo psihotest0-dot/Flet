@@ -198,3 +198,31 @@ async def test_a_field_that_left_the_page_is_not_focused(chat_view):
     await chat_view._request_input_focus()
 
     chat_view.input_field.focus.assert_not_awaited()
+
+
+def test_the_picker_closes_after_a_pick(chat_view):
+    chat_view.toggle_emoji_picker()
+    closed_icon = ft.Icons.EMOJI_EMOTIONS_OUTLINED
+
+    click(chat_view.emoji_picker.grid.controls[0])
+
+    assert chat_view.emoji_picker.visible is False
+    assert chat_view.emoji_btn.icon == closed_icon
+    # The button opens it again with one click.
+    chat_view.toggle_emoji_picker()
+    assert chat_view.emoji_picker.visible is True
+
+
+def test_a_pick_sends_the_closed_picker_to_the_client(chat_view):
+    chat_view.toggle_emoji_picker()
+    chat_view.emoji_picker.update = MagicMock()
+    chat_view.emoji_btn.update = MagicMock()
+    with (
+        mounted(ChatView),
+        mounted(ft.IconButton),
+        mounted(type(chat_view.emoji_picker)),
+    ):
+        chat_view.insert_emoji("👍")
+
+    chat_view.emoji_picker.update.assert_called_once_with()
+    chat_view.emoji_btn.update.assert_called_once_with()

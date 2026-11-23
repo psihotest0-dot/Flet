@@ -482,3 +482,49 @@ def test_a_new_conversation_takes_the_button_away(view):
 
 def test_the_button_is_wired_to_its_handler(view):
     assert view.to_bottom_btn.on_click == view.on_to_bottom_click
+
+
+# --------------------------------------------------- coming back to the chat tab
+def test_coming_back_to_the_chat_tab_settles_at_the_end(view, mock_page):
+    # The client built the list anew, at its top: the reader went up as far as
+    # the view knows, and the button had to come back with the end.
+    view._on_chat_scroll(scroll_event(USER, direction=UP, pixels=900))
+    view.set_active(False)
+    mock_page.run_task.reset_mock()
+
+    view.set_active(True)
+
+    assert view._follow_bottom is True
+    assert view.to_bottom_btn.visible is False
+    mock_page.run_task.assert_called_once_with(
+        view._settle_at_end, scroll_module.TAB_RETURN_DELAY
+    )
+
+
+def test_a_chat_tab_that_stays_open_is_not_scrolled(view, mock_page):
+    view.set_active(True)
+
+    mock_page.run_task.assert_not_called()
+
+
+def test_leaving_the_chat_tab_does_not_scroll(view, mock_page):
+    view.set_active(False)
+
+    mock_page.run_task.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_return_to_the_end_waits_for_the_tab_first(view, monkeypatch):
+    pauses: list[float] = []
+
+    async def sleep(seconds):
+        pauses.append(seconds)
+
+    monkeypatch.setattr(scroll_module.asyncio, "sleep", sleep)
+    jumps_that_move(view, count=0)
+
+    with list_mounted():
+        await view._settle_at_end(scroll_module.TAB_RETURN_DELAY)
+
+    assert pauses[0] == scroll_module.TAB_RETURN_DELAY
+    assert pauses[1:] == [scroll_module.SCROLL_SETTLE_DELAY]
