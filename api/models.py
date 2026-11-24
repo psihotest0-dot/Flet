@@ -148,6 +148,49 @@ class LibraryAddResult(BaseModel):
     size: int = 0
 
 
+# ``TaskPlan.status`` of a plan that still goes on; ``TaskPlanStep.status`` of the steps that
+# are over (done, or given up).
+PLAN_ACTIVE = "active"
+STEPS_OVER = ("done", "failed", "skipped")
+
+
+class TaskPlanStep(BaseModel):
+    """One step of a plan: for a task the server walks, one document (``GET /task-plan``)."""
+
+    id: int
+    text: str = ""
+    status: str = "pending"
+    evidence: str | None = None
+
+
+class TaskPlan(BaseModel):
+    """The plan of the task of a conversation.
+
+    ``kind`` is set (``key_facts``, ``summary``) for a task the server walks itself, one
+    file a document; missing for a plan of the assistant.
+    """
+
+    id: int
+    goal: str = ""
+    status: str = ""
+    kind: str | None = None
+    steps: list[TaskPlanStep] = []
+
+    @property
+    def over(self) -> int:
+        """How many steps are over."""
+        return sum(s.status in STEPS_OVER for s in self.steps)
+
+    @property
+    def current(self) -> TaskPlanStep | None:
+        """The step being worked on, else the next one, else ``None``."""
+        for wanted in ("doing", "pending"):
+            for s in self.steps:
+                if s.status == wanted:
+                    return s
+        return None
+
+
 class Rule(BaseModel):
     """A global rule or a note on how to talk: both are in the system prompt of every session.
 

@@ -261,6 +261,8 @@ class ChatTurnsMixin:
                     chat_message.show_stopped_note()
                 # The turn added messages the screen has no ids for (views.chat_paired).
                 self._forget_tail()
+                # A "да" may have started a task of the server (views.chat_task).
+                self._start_task_watch()
 
     async def regenerate_last(self, *_args):
         if self._is_streaming:

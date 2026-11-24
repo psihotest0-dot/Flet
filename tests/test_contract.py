@@ -113,6 +113,7 @@ CASES = [
         lambda c, d: c.update_file_category(ID, "law"),
     ),
     case("list_attachments", "plain", lambda c, d: c.list_attachments(SESSION)),
+    case("get_task_plan", "plain", lambda c, d: c.get_task_plan(SESSION)),
     case(
         "upload_attachment",
         "plain",

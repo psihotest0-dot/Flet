@@ -102,4 +102,5 @@ def mock_api_client():
     client.list_proposals = AsyncMock(return_value=[])
     client.list_rules = AsyncMock(return_value=[])
     client.list_oracle_decisions = AsyncMock(return_value=OracleDecisionPage())
+    client.get_task_plan = AsyncMock(return_value=None)
     return client

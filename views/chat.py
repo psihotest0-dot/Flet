@@ -48,6 +48,7 @@ from views.chat_paired import (
     ChatPairedMixin,
 )
 from views.chat_scroll import SCROLL_EVENT_INTERVAL, ChatScrollMixin
+from views.chat_task import ChatTaskMixin
 from views.chat_turns import ChatTurnsMixin
 from views.emoji_picker import EmojiPicker
 from views.shortcuts import NEW_CHAT, RENAME, STOP, shortcut_action
@@ -112,6 +113,7 @@ EMPTY_CHAT_SUGGESTIONS = (
 class ChatView(
     ChatAttachmentsMixin,
     ChatModesMixin,
+    ChatTaskMixin,
     ChatExportMixin,
     ChatPairedMixin,
     ChatScrollMixin,
@@ -323,6 +325,9 @@ class ChatView(
         self.chat_mode: str | None = None
         self.mode_menu = self._build_mode_menu()
         self.mode_chip = self._build_mode_chip()
+        # The task the server walks in the open conversation (views.chat_task).
+        self._task_watch: asyncio.Future | None = None
+        self.task_bar = self._build_task_bar()
         # Which model the conversation is sent to; see CLOUD_MODE_VIEW.
         self.cloud_btn = ft.TextButton(on_click=self.on_cloud_click)
         self._show_cloud_mode()
@@ -371,6 +376,7 @@ class ChatView(
                 self.messages_area,
                 self.emoji_picker,
                 self.attachments_row,
+                self.task_bar,
                 self.mode_chip,
                 input_row,
             ],
@@ -396,6 +402,8 @@ class ChatView(
         self.attachments = []
         if getattr(self, "chat_mode", None) is not None:
             self.clear_mode()
+        if getattr(self, "task_bar", None) is not None:
+            self._stop_task_watch()
         self._render_attachments()
         safe_update(self)
 
@@ -524,6 +532,7 @@ class ChatView(
             self._show_empty_state(True)
         if reload_history and self.page_ref is not None:
             # The files first, the history last: the history is what the view waits for.
+            self._start_task_watch()
             self._attachments_task = self.page_ref.run_task(self.load_attachments)
             self._load_task = self.page_ref.run_task(self.load_history)
         self._notify_session_changed(session_id)
@@ -809,12 +818,14 @@ class ChatView(
             self.page_ref.run_task(self.load_paired_sessions)
             self._start_paired_poll()
             # The files first, the history last: the history is what the view waits for.
+            self._start_task_watch()
             self._attachments_task = self.page_ref.run_task(self.load_attachments)
             self._load_task = self.page_ref.run_task(self.load_history)
 
     def will_unmount(self):
         self._cancel_running_tasks()
         self._stop_paired_poll()
+        self._stop_task_watch()
 
     # ---------------------------------------------------- the message field, history
     def _set_input(self, text: str) -> None:

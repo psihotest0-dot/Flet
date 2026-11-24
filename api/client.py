@@ -31,6 +31,7 @@ from api.models import (
     OracleDecisionPage,
     Proposal,
     Rule,
+    TaskPlan,
     TelegramSession,
     TelegramSessionList,
     UploadResult,
@@ -199,6 +200,12 @@ class APIClient:
         response = await self.client.delete(f"/v1/files/{file_id}")
         _raise_for_status(response)
         logger.info("File %s deleted.", file_id)
+
+    async def get_task_plan(self, session_id: str) -> TaskPlan | None:
+        """The newest plan of the task of a conversation, or ``None`` (``GET /task-plan``)."""
+        response = await self._get("/task-plan", params={"session_id": session_id})
+        plan = response.json().get("plan")
+        return TaskPlan(**plan) if plan else None
 
     async def list_attachments(self, session_id: str) -> list[ChatAttachment]:
         """The files attached to a conversation, newest first (without their text)."""
