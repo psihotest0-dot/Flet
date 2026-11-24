@@ -35,6 +35,9 @@ def task_line(plan: TaskPlan) -> str:
     current = plan.current
     if current is not None:
         line += f" · сега: {current.text}"
+        if current.parts:
+            # A whole document read in parts: which part now.
+            line += f" — част {min(current.parts_done + 1, current.parts)} от {current.parts}"
     return line
 
 

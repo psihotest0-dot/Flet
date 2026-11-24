@@ -161,6 +161,9 @@ class TaskPlanStep(BaseModel):
     text: str = ""
     status: str = "pending"
     evidence: str | None = None
+    # A whole document read in parts (``kind`` "full"): how many, how many are written.
+    parts: int = 0
+    parts_done: int = 0
 
 
 class TaskPlan(BaseModel):

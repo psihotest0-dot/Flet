@@ -51,6 +51,19 @@ def plan(
     )
 
 
+def test_the_line_of_a_whole_document_says_its_part():
+    p = TaskPlan(
+        id=1,
+        goal="подробни бележки",
+        status="active",
+        kind="full",
+        steps=[
+            {"id": 1, "text": "a.pdf", "status": "doing", "parts": 8, "parts_done": 3}
+        ],
+    )
+    assert task_line(p).endswith("сега: a.pdf — част 4 от 8")
+
+
 def test_the_line_says_how_far_and_what_now():
     assert (
         task_line(plan())
