@@ -40,6 +40,12 @@ MODES: tuple[tuple[str, str, ft.IconData, str], ...] = (
         ft.Icons.RECORD_VOICE_OVER,
         "Как да ти отговарям отсега нататък?",
     ),
+    (
+        "reminder",
+        "Напомняне",
+        ft.Icons.ALARM,
+        "Какво и кога да ти напомня? (напр. утре в 9 да платя тока)",
+    ),
 )
 MODE_LABELS = {key: label for key, label, _icon, _hint in MODES}
 MODE_HINTS = {key: hint for key, _label, _icon, hint in MODES}

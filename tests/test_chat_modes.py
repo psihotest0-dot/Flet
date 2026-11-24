@@ -17,7 +17,7 @@ from views.chat_modes import DEFAULT_HINT, MODE_HINTS, MODES
 
 CHAT_1 = "11111111-1111-1111-1111-111111111111"
 CHAT_2 = "22222222-2222-2222-2222-222222222222"
-BACKEND_MODES = {"books", "web", "library", "files", "memory", "style"}
+BACKEND_MODES = {"books", "web", "library", "files", "memory", "style", "reminder"}
 
 
 def seed() -> None:
