@@ -39,6 +39,7 @@ from views import theme
 from views.chat_attachments import ChatAttachmentsMixin
 from views.chat_export import ChatExportMixin
 from views.chat_message import ChatMessage
+from views.chat_modes import ChatModesMixin
 from views.chat_paired import (
     EMPTY_TAIL,
     HISTORY_PAGE_SIZE,
@@ -110,6 +111,7 @@ EMPTY_CHAT_SUGGESTIONS = (
 
 class ChatView(
     ChatAttachmentsMixin,
+    ChatModesMixin,
     ChatExportMixin,
     ChatPairedMixin,
     ChatScrollMixin,
@@ -317,6 +319,10 @@ class ChatView(
             tooltip="Прикачи файл към този разговор (код, лог, текст)",
             on_click=self.on_attach_click,
         )
+        # The paperclip and the modes of the next message, in one menu (views.chat_modes).
+        self.chat_mode: str | None = None
+        self.mode_menu = self._build_mode_menu()
+        self.mode_chip = self._build_mode_chip()
         # Which model the conversation is sent to; see CLOUD_MODE_VIEW.
         self.cloud_btn = ft.TextButton(on_click=self.on_cloud_click)
         self._show_cloud_mode()
@@ -349,7 +355,7 @@ class ChatView(
         input_row = ft.Row(
             controls=[
                 self.input_field,
-                self.attach_btn,
+                self.mode_menu,
                 self.cloud_btn,
                 self.emoji_btn,
                 self.stop_btn,
@@ -365,6 +371,7 @@ class ChatView(
                 self.messages_area,
                 self.emoji_picker,
                 self.attachments_row,
+                self.mode_chip,
                 input_row,
             ],
             expand=True,
@@ -385,8 +392,10 @@ class ChatView(
         self._show_to_bottom_button(False)
         self._show_empty_state(False)
         self.chat_list.controls.clear()
-        # The files of the other conversation are not this one's.
+        # The files of the other conversation are not this one's, nor is its mode.
         self.attachments = []
+        if getattr(self, "chat_mode", None) is not None:
+            self.clear_mode()
         self._render_attachments()
         safe_update(self)
 

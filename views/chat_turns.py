@@ -223,6 +223,9 @@ class ChatTurnsMixin:
         logger.info("Chat %s: message sent (%d characters).", session_id[:8], len(text))
 
         self._set_input("")
+        # The mode is for this one message (views.chat_modes).
+        options = {**self._chat_options(), **self._mode_options()}
+        self.clear_mode()
         safe_update(self, self.input_field)
         self._focus_input()
         self._set_streaming_ui(True)
@@ -240,7 +243,7 @@ class ChatTurnsMixin:
             error = await self._stream_response(
                 chat_message,
                 self.api_client.stream_chat(
-                    session_id=session_id, content=text, **self._chat_options()
+                    session_id=session_id, content=text, **options
                 ),
                 text,
             )

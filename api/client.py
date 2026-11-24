@@ -487,7 +487,11 @@ class APIClient:
         return self._stream_sse("/chat/regenerate", payload)
 
     def stream_chat(
-        self, session_id: str, content: str, use_paid: bool | None = None
+        self,
+        session_id: str,
+        content: str,
+        use_paid: bool | None = None,
+        mode: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Stream a chat response from the backend using Server-Sent Events (SSE).
 
@@ -499,6 +503,10 @@ class APIClient:
         conversation (the one shared with Telegram): ``queue_events``; and which of the
         person's memories a planned answer used: ``plan_events``. A backend that does
         not know a field ignores it and never sends the frame.
+
+        ``mode`` is the button of the message (``views.chat_modes``): the road the turn
+        must take - ``books``, ``web``, ``library``, ``files``, ``memory``, ``style``;
+        ``None`` leaves it out.
         """
         payload: dict[str, Any] = {
             "session_id": session_id,
@@ -508,6 +516,8 @@ class APIClient:
         }
         if use_paid is not None:
             payload["use_paid"] = use_paid
+        if mode:
+            payload["mode"] = mode
         return self._stream_sse("/chat/stream", payload)
 
     async def _stream_sse(
