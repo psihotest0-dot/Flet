@@ -21,6 +21,9 @@ from tenacity import (
 
 from api.errors import APIError
 from api.limits import DEFAULT_IMPORTANCE, MAX_UPLOAD_BYTES, MAX_UPLOAD_MB
+
+# The largest bill the backend reads (bills.MaxFileBytes).
+MAX_BILL_BYTES = 20 << 20
 from api.models import (
     MEMORY_CANDIDATE,
     ChatAttachment,
@@ -235,6 +238,32 @@ class APIClient:
             attachment.version,
         )
         return attachment
+
+    async def upload_bill(self, session_id: str, path: Path, filename: str) -> str:
+        """Send the PDF or the picture of a bill to be read into the conversation.
+
+        The backend reads it (OCR for a scan, then the local model), writes the upload and
+        its answer into the conversation and returns the answer: what was read and the
+        question whether to keep it. Reading a scan takes a while, so the read has no
+        timeout. ``ValueError`` for a file over ``MAX_BILL_BYTES``. A bill is the user's
+        own document: nothing of it is logged.
+        """
+        size = await asyncio.to_thread(lambda: path.stat().st_size)
+        if size > MAX_BILL_BYTES:
+            raise ValueError(f"File too large. Maximum size is {MAX_BILL_BYTES >> 20}MB.")
+        source = await asyncio.to_thread(path.open, "rb")
+        try:
+            response = await self.client.post(
+                "/v1/bills",
+                data={"session_id": session_id},
+                files={"file": (filename, source, "application/octet-stream")},
+                timeout=httpx.Timeout(5.0, read=None),
+            )
+        finally:
+            source.close()
+        _raise_for_status(response)
+        logger.info("A bill was read (%d bytes).", size)
+        return str(response.json().get("message", ""))
 
     async def delete_attachment(self, attachment_id: str) -> None:
         """Remove a file attached to a conversation."""

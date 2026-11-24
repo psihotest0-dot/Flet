@@ -64,6 +64,11 @@ class ChatModesMixin:
                 icon=ft.Icons.ATTACH_FILE,
                 on_click=self.on_attach_click,
             ),
+            ft.PopupMenuItem(
+                content="Сметка (PDF или снимка)",
+                icon=ft.Icons.RECEIPT_LONG,
+                on_click=self.on_bill_click,
+            ),
         ]
         for key, label, icon, _hint in MODES:
             items.append(

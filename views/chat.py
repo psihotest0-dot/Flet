@@ -37,6 +37,7 @@ from state.chat_sessions import (
 from state.settings import Settings, load_settings, save_settings
 from views import theme
 from views.chat_attachments import ChatAttachmentsMixin
+from views.chat_bills import ChatBillsMixin
 from views.chat_export import ChatExportMixin
 from views.chat_message import ChatMessage
 from views.chat_modes import ChatModesMixin
@@ -112,6 +113,7 @@ EMPTY_CHAT_SUGGESTIONS = (
 
 class ChatView(
     ChatAttachmentsMixin,
+    ChatBillsMixin,
     ChatModesMixin,
     ChatTaskMixin,
     ChatExportMixin,

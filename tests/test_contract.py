@@ -96,6 +96,12 @@ def an_upload(client, folder):
     return client.upload_file(path, "книга.pdf", "application/pdf")
 
 
+def a_bill(client, folder):
+    path = folder / "bill.pdf"
+    path.write_bytes(b"%PDF-1.4 a bill")
+    return client.upload_bill(SESSION, path, "сметка.pdf")
+
+
 def case(method, variant, call):
     """One way to call ``APIClient.method``; ``call(client, folder)`` makes the call."""
     return pytest.param(method, call, id=f"{method}-{variant}")
@@ -104,6 +110,7 @@ def case(method, variant, call):
 CASES = [
     case("check_health", "plain", lambda c, d: c.check_health()),
     case("upload_file", "plain", an_upload),
+    case("upload_bill", "plain", a_bill),
     case("delete_file", "plain", lambda c, d: c.delete_file(ID)),
     case("list_files", "plain", lambda c, d: c.list_files()),
     case("get_file_status", "plain", lambda c, d: c.get_file_status(ID)),

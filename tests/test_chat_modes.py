@@ -59,8 +59,11 @@ def test_the_menu_has_the_paperclip_first_and_then_the_modes(
     seed()
     view = make_view(mock_page, mock_api_client)
     labels = [item.content for item in view.mode_menu.items]
-    assert labels == ["Прикачи файл"] + [label for _key, label, *_ in MODES]
+    assert labels == ["Прикачи файл", "Сметка (PDF или снимка)"] + [
+        label for _key, label, *_ in MODES
+    ]
     assert view.mode_menu.items[0].on_click == view.on_attach_click
+    assert view.mode_menu.items[1].on_click == view.on_bill_click
     input_row = view.content.controls[-1]
     assert view.mode_menu in input_row.controls
     assert view.attach_btn not in input_row.controls, "the paperclip is in the menu"
@@ -74,7 +77,7 @@ def test_choosing_a_mode_shows_it_and_the_cross_takes_it_away(
     assert not view.mode_chip.visible
     assert view.input_field.hint_text == DEFAULT_HINT
 
-    view.mode_menu.items[2].on_click(None)  # "Интернет"
+    view.mode_menu.items[3].on_click(None)  # "Интернет"
     assert view.chat_mode == "web"
     assert view.mode_chip.visible
     assert "Интернет" in view.mode_chip_text.value
