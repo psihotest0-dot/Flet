@@ -368,6 +368,10 @@ class UserFilesView(ft.Container):
             "Запазване в библиотеката",
             f"Да запазя ли „{info.name}“ в библиотеката? Там копието не се променя; "
             "файлът тук остава и можеш да го редактираш или изтриеш.",
+            # Not the default "Изтрий": the owner saw a red "Изтрий" here on 2026-11-25 and
+            # rightly did not press it.
+            confirm_text="Запази",
+            destructive=False,
         )
         if not confirmed:
             return

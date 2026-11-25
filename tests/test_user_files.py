@@ -835,6 +835,9 @@ async def test_saving_in_the_library_asks_first_and_says_it_is_done(
 
     assert "„a.md“" in confirm.call_args.args[2]
     assert "не се променя" in confirm.call_args.args[2]
+    # The button of a save says so and is not red (the default of the dialog is "Изтрий").
+    assert confirm.call_args.kwargs.get("confirm_text") == "Запази"
+    assert confirm.call_args.kwargs.get("destructive") is False
     api_client.add_user_file_to_library.assert_awaited_once_with("a.md")
     assert "е в библиотеката" in snackbars.call_args.args[1]
     assert snackbars.call_args.kwargs.get("success") is True
