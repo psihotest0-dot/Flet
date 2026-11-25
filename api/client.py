@@ -21,9 +21,6 @@ from tenacity import (
 
 from api.errors import APIError
 from api.limits import DEFAULT_IMPORTANCE, MAX_UPLOAD_BYTES, MAX_UPLOAD_MB
-
-# The largest bill the backend reads (bills.MaxFileBytes).
-MAX_BILL_BYTES = 20 << 20
 from api.models import (
     MEMORY_CANDIDATE,
     ChatAttachment,
@@ -44,6 +41,9 @@ from api.models import (
 from api.stream import StreamEvent, parse_frame
 
 logger = logging.getLogger(__name__)
+
+# The largest bill the backend reads (bills.MaxFileBytes).
+MAX_BILL_BYTES = 20 << 20
 
 
 # The paths whose last part is the user's own text: the requests are built from them
@@ -250,7 +250,9 @@ class APIClient:
         """
         size = await asyncio.to_thread(lambda: path.stat().st_size)
         if size > MAX_BILL_BYTES:
-            raise ValueError(f"File too large. Maximum size is {MAX_BILL_BYTES >> 20}MB.")
+            raise ValueError(
+                f"File too large. Maximum size is {MAX_BILL_BYTES >> 20}MB."
+            )
         source = await asyncio.to_thread(path.open, "rb")
         try:
             response = await self.client.post(

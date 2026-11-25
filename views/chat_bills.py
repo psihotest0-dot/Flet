@@ -72,7 +72,9 @@ class ChatBillsMixin:
                 ex,
                 exc_info=is_unexpected(ex),
             )
-            show_snackbar(self.page_ref, f"Сметката не беше прочетена: {bill_error_text(ex)}")
+            show_snackbar(
+                self.page_ref, f"Сметката не беше прочетена: {bill_error_text(ex)}"
+            )
             return
         if session_id == self.session_id:
             await self.load_history()
