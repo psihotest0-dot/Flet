@@ -168,6 +168,61 @@ async def test_load_history_failure_is_logged_and_shown(
     assert "Бекендът не е достъпен" in snackbar.call_args.args[1]
 
 
+def _retry_button(view: ChatView) -> ft.TextButton | None:
+    rows = [row for row in view.chat_list.controls if row is view._retry_row]
+    return rows[0].controls[1] if rows else None
+
+
+@pytest.mark.asyncio
+async def test_an_empty_chat_whose_history_did_not_come_can_ask_again(
+    chat_view, mock_api_client
+):
+    mock_api_client.get_messages = AsyncMock(side_effect=httpx.ConnectError("refused"))
+    with patch("views.chat.show_snackbar"):
+        await chat_view.load_history()
+
+    button = _retry_button(chat_view)
+    assert button is not None and button.content == "Опитай отново"
+    assert chat_view._retry_row.controls[0].value == "Историята на чата не се зареди."
+    assert chat_view.empty_state.visible is False, "not 'start a conversation'"
+
+    mock_api_client.get_messages = AsyncMock(
+        return_value=[Message(id="m1", role="user", content="здравей")]
+    )
+    with mounted(ChatView):
+        await chat_view.on_retry_history_click(None)
+
+    assert _retry_button(chat_view) is None, "the history took its place"
+    assert [m.text_value for m in chat_view._messages_on_screen()] == ["здравей"]
+
+
+@pytest.mark.asyncio
+async def test_a_second_failure_keeps_one_line_and_gives_the_button_back(
+    chat_view, mock_api_client
+):
+    mock_api_client.get_messages = AsyncMock(side_effect=httpx.ConnectError("refused"))
+    with patch("views.chat.show_snackbar"):
+        await chat_view.load_history()
+        await chat_view.on_retry_history_click(None)
+
+    assert len(chat_view.chat_list.controls) == 1
+    assert _retry_button(chat_view).disabled is False
+
+
+@pytest.mark.asyncio
+async def test_a_failed_reload_keeps_the_messages_and_adds_no_line(
+    chat_view, mock_api_client
+):
+    chat_view.add_message("user", "вече тук", notify=False)
+    mock_api_client.get_messages = AsyncMock(side_effect=httpx.ConnectError("refused"))
+
+    with patch("views.chat.show_snackbar"):
+        await chat_view.load_history()
+
+    assert _retry_button(chat_view) is None
+    assert [m.text_value for m in chat_view._messages_on_screen()] == ["вече тук"]
+
+
 def _history_failure(caplog) -> logging.LogRecord:
     (record,) = [
         r for r in caplog.records if "Failed to load the history" in r.getMessage()

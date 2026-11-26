@@ -110,6 +110,11 @@ EMPTY_CHAT_SUGGESTIONS = (
     "Помогни ми да обмисля нещо: ",
 )
 
+# What an empty chat says when its history did not come, and the button that asks again
+# (before it, only another chat and back would ask).
+HISTORY_FAILED_TEXT = "Историята на чата не се зареди."
+HISTORY_RETRY_TEXT = "Опитай отново"
+
 
 class ChatView(
     ChatAttachmentsMixin,
@@ -187,6 +192,9 @@ class ChatView(
         self._older_row: ft.Control | None = None
         self._older_button: ft.TextButton | None = None
         self._loading_older = False
+        # The line "the history did not come" with its "Опитай отново" (``None``: none).
+        self._retry_row: ft.Row | None = None
+        self._retry_btn: ft.TextButton | None = None
         self._paired_active = True
         self._paired_task: asyncio.Future | None = None
 
@@ -405,6 +413,8 @@ class ChatView(
         self._reload_after_turn = False
         self._older_row = None
         self._loading_older = False
+        self._retry_row = None
+        self._retry_btn = None
         self._show_to_bottom_button(False)
         self._show_empty_state(False)
         self.chat_list.controls.clear()
@@ -865,8 +875,9 @@ class ChatView(
             if session_id == self.session_id:
                 show_snackbar(
                     self.page_ref,
-                    f"Историята на чата не се зареди. {describe_error(e)}",
+                    f"{HISTORY_FAILED_TEXT} {describe_error(e)}",
                 )
+                self._show_history_retry()
             return
 
         # The user switched sessions while the request was in flight.
@@ -918,6 +929,39 @@ class ChatView(
             self._last_assistant_msg = last_msg_obj
             self._last_assistant_row = last_msg_obj.row
             last_msg_obj.set_regenerate_visible(True)
+
+    def _show_history_retry(self) -> None:
+        """An empty chat whose history did not come: a line with "Опитай отново".
+
+        A screen that already shows messages keeps them as they are (the snackbar says
+        what failed); a line that is there already gets its button back.
+        """
+        if self._retry_row is not None and self._retry_row in self.chat_list.controls:
+            self._retry_btn.disabled = False
+            safe_update(self, self._retry_btn)
+            return
+        if self.chat_list.controls:
+            return
+        self._retry_btn = ft.TextButton(
+            HISTORY_RETRY_TEXT,
+            icon=ft.Icons.REFRESH,
+            on_click=self.on_retry_history_click,
+        )
+        self._retry_row = ft.Row(
+            [ft.Text(HISTORY_FAILED_TEXT, color=theme.MUTED), self._retry_btn],
+            alignment=ft.MainAxisAlignment.CENTER,
+            wrap=True,
+        )
+        self.chat_list.controls.append(self._retry_row)
+        self._show_empty_state(False)
+        safe_update(self, self.chat_list)
+
+    async def on_retry_history_click(self, e=None) -> None:
+        """Ask for the history of the open chat again; a success draws it in its place."""
+        if self._retry_btn is not None:
+            self._retry_btn.disabled = True
+            safe_update(self, self._retry_btn)
+        await self.load_history()
 
     def set_display_name(self, name: str) -> None:
         """Use ``name`` for the user's messages, the ones already on screen too."""
