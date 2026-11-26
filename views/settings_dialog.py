@@ -54,6 +54,9 @@ def validate_base_url(value: str | None) -> str:
         raise ValueError("Невалиден порт.") from None
     if not parts.hostname:
         raise ValueError("Липсва име на хост, напр. http://127.0.0.1:8080")
+    if parts.username is not None or parts.password is not None:
+        # The address is kept in settings.json and written to app.log as it is.
+        raise ValueError("Адресът не може да съдържа потребител или парола (…@).")
     if parts.query or parts.fragment:
         raise ValueError("Адресът не може да съдържа ? или #.")
     return url.rstrip("/")
@@ -111,6 +114,9 @@ class SettingsDialog:
         self.user_id = user_id or ""
         self._on_save = on_save
         self._checking = False
+        # Raised by every ``open``: a check still on its way belongs to the dialog that
+        # was closed and must not draw into the one opened again.
+        self._opening = 0
 
         self.base_url_field = ft.TextField(
             label="Base URL",
@@ -187,6 +193,10 @@ class SettingsDialog:
         self.base_url_field.error = None
         self.base_url_warning.visible = is_plain_http_to_another_computer(base_url)
         self.display_name_field.value = display_name
+        self._opening += 1
+        self._checking = False
+        self.check_btn.disabled = False
+        self.check_progress.visible = False
         self.check_result.visible = False
         self.copy_btn.icon = ft.Icons.COPY
         self.copy_btn.icon_color = None
@@ -240,22 +250,28 @@ class SettingsDialog:
         if url is None:
             return
 
+        opening = self._opening
         self._set_checking(True)
         healthy = False
         try:
-            # The probe has to use the typed address, not the saved client.
-            async with APIClient(base_url=url, user_id=self.user_id) as client:
+            # The probe has to use the typed address, not the saved client, and it goes
+            # without the user_id: the address is not saved yet, and /healthz needs none.
+            async with APIClient(base_url=url, user_id=None) as client:
                 healthy = await client.check_health()
         except Exception as ex:
             logger.warning(
                 "Connection check failed: %s", ex, exc_info=is_unexpected(ex)
             )
         finally:
-            self._set_checking(False)
+            if opening == self._opening:
+                self._set_checking(False)
 
         logger.info(
             "Connection check for %s: %s", url, "ok" if healthy else "no answer"
         )
+        if opening != self._opening:
+            # The dialog was closed and opened again meanwhile: not its answer.
+            return
         if healthy:
             self._show_result("Връзката е успешна.", theme.OK)
         else:

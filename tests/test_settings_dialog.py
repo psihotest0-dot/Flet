@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+
 import flet as ft
 import httpx
 import pytest
 import respx
 
+from api.client import APIClient
 from views import theme
 from views.settings_dialog import (
     INSECURE_URL_NOTE,
@@ -70,6 +73,9 @@ def test_valid_base_urls_are_normalised(raw, expected):
         "http://host:port",
         "http://host:8080?x=1",
         "http://host:8080/#frag",
+        # A name and a password would be kept in settings.json and app.log.
+        "http://me:secret@host:8080",
+        "https://me@host",
     ],
 )
 def test_invalid_base_urls_are_refused(raw):
@@ -189,6 +195,8 @@ async def test_check_connection_reports_a_reachable_backend(dialog):
     assert dialog.check_result.color == theme.OK
     assert dialog.check_btn.disabled is False
     assert dialog.check_progress.visible is False
+    # An address that is not saved yet does not get the key to the history.
+    assert "x-user-id" not in route.calls.last.request.headers
 
 
 @respx.mock
@@ -215,6 +223,34 @@ async def test_check_connection_reports_an_unreachable_backend(dialog, outcome):
     assert dialog.check_result.value == "Няма връзка с http://127.0.0.1:8080"
     assert dialog.check_result.color == theme.PROBLEM
     assert dialog.check_btn.disabled is False
+    assert dialog.check_progress.visible is False
+
+
+@pytest.mark.asyncio
+async def test_a_check_still_on_its_way_does_not_draw_into_the_dialog_opened_again(
+    dialog, monkeypatch
+):
+    release = asyncio.Event()
+
+    async def slow_health(_self):
+        await release.wait()
+        return True
+
+    monkeypatch.setattr(APIClient, "check_health", slow_health)
+    dialog.base_url_field.value = "http://10.0.0.5:8080"
+    checking = asyncio.create_task(dialog._check_connection(None))
+    await asyncio.sleep(0)
+    assert dialog.check_progress.visible is True
+
+    # Closed with "Отказ" during the check, then opened again.
+    dialog._cancel(None)
+    dialog.open(SAVED_URL)
+    assert dialog.check_progress.visible is False
+    assert dialog.check_btn.disabled is False
+    release.set()
+    await checking
+
+    assert dialog.check_result.visible is False, "not the answer for this dialog"
     assert dialog.check_progress.visible is False
 
 

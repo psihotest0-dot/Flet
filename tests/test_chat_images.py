@@ -7,6 +7,8 @@ answers images become links, and nothing that draws as an image is left.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import flet as ft
 import pytest
 from hypothesis import given, settings
@@ -312,6 +314,17 @@ async def test_copy_gives_the_answer_as_it_was_written(mock_page, clipboard):
     assert clipboard == [written]
     # "Копирано" is said only after the text is really on the clipboard.
     assert isinstance(mock_page.show_dialog.call_args.args[0], ft.SnackBar)
+
+
+@pytest.mark.asyncio
+async def test_a_copy_that_failed_says_so(mock_page, monkeypatch):
+    message = ChatMessage("assistant", "текст", page=mock_page)
+    monkeypatch.setattr("views.chat_message.copy_text", AsyncMock(return_value=False))
+
+    await message.copy_to_clipboard(None)
+
+    snackbar = mock_page.show_dialog.call_args.args[0]
+    assert snackbar.content.value == "Не успях да копирам."
 
 
 def test_the_users_own_message_is_shown_as_written():

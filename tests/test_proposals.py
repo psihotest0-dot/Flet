@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -771,6 +772,23 @@ async def test_a_file_write_that_cannot_be_done_shows_the_reason_and_stays_open(
     assert card.approve_btn.disabled is False
     snackbar = mock_page.show_dialog.call_args.args[0]
     assert snackbar.content.value == reason, "the backend's reason, not a rules message"
+
+
+@pytest.mark.asyncio
+async def test_the_name_in_a_refused_file_write_stays_on_the_screen_and_out_of_the_log(
+    mock_page, caplog
+):
+    reason = "Файлът „диагноза_Иван.md“ вече съществува. Отхвърли предложението."
+    api_client = card_api()
+    api_client.approve_proposal = AsyncMock(side_effect=APIError(422, reason))
+    card = make_card(api_client, Proposal(**FILE_WRITE), page=mock_page)
+
+    with caplog.at_level(logging.INFO):
+        await card._approve(None)
+
+    assert "диагноза_Иван" not in caplog.text, "AGENTS.md rule 7"
+    assert "Failed to decide proposal 31: Файлът „…“ вече съществува" in caplog.text
+    assert "диагноза_Иван" in mock_page.show_dialog.call_args.args[0].content.value
 
 
 @pytest.mark.asyncio

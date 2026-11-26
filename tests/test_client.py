@@ -248,6 +248,42 @@ async def test_delete_session_sends_the_user_and_the_session(client):
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_a_name_in_the_backends_refusal_stays_out_of_the_log(client, caplog):
+    # A refused file write names the file of the user (AGENTS.md rule 7).
+    reason = "Файлът „диагноза_Иван.md“ вече съществува. Отхвърли предложението."
+    respx.post("http://localhost:8080/proposals/7/approve").mock(
+        return_value=httpx.Response(422, text=reason)
+    )
+    caplog.set_level(logging.INFO, logger="api.client")
+
+    with pytest.raises(APIError) as raised:
+        await client.approve_proposal(7)
+
+    assert raised.value.message == reason, "the screen still gets the whole reason"
+    assert "диагноза_Иван" not in caplog.text
+    assert "POST /proposals/7/approve -> HTTP 422: Файлът „…“ вече" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_probe_without_a_user_sends_no_user_id():
+    seen: list[httpx.Request] = []
+    client = APIClient(base_url="http://127.0.0.1:9", user_id=None)
+    client.client = httpx.AsyncClient(
+        base_url="http://127.0.0.1:9",
+        headers=client.client.headers,
+        transport=httpx.MockTransport(
+            lambda request: seen.append(request) or httpx.Response(200)
+        ),
+    )
+
+    assert await client.check_health() is True
+    await client.aclose()
+
+    assert "x-user-id" not in {name.lower() for name in seen[0].headers}
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_delete_session_logs_only_the_start_of_the_id(client, caplog):
     session_id = "22222222-3333-4444-5555-666666666666"
     respx.delete(f"http://localhost:8080/chat/sessions/{session_id}").mock(

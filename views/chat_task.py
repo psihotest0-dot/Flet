@@ -77,21 +77,32 @@ class ChatTaskMixin:
         self._show_task(None)
 
     async def _watch_task(self, session_id: str) -> None:
-        """Show the task while it goes on; when it ends, draw the report and stop."""
+        """Show the task while it goes on; when it ends, draw the report and stop.
+
+        A look that fails while the bar is shown is not the end of the task: the bar
+        stays as it was and the next look tries again.
+        """
         shown = False
+        failing = False
         while session_id == self.session_id:
             try:
                 plan = await self.api_client.get_task_plan(session_id)
-            except asyncio.CancelledError:
-                raise
             except Exception as ex:
-                # Not worth a message: the chat answers "докъде стигна?" anyway.
-                logger.warning(
-                    "Could not read the task of the conversation: %s",
-                    ex,
-                    exc_info=is_unexpected(ex),
-                )
+                # Not worth a message: the chat answers "докъде стигна?" anyway. One
+                # line when the looks start to fail, not one every few seconds.
+                if not failing:
+                    logger.warning(
+                        "Could not read the task of the conversation: %s",
+                        ex,
+                        exc_info=is_unexpected(ex),
+                    )
+                failing = True
+                if shown:
+                    await asyncio.sleep(TASK_POLL_INTERVAL)
+                    continue
                 plan = None
+            else:
+                failing = False
             if session_id != self.session_id:
                 return
             running = (
@@ -105,8 +116,6 @@ class ChatTaskMixin:
                     # The backend wrote the report in the conversation: draw it.
                     try:
                         await self.refresh_paired_chat()
-                    except asyncio.CancelledError:
-                        raise
                     except Exception as ex:
                         logger.warning(
                             "Could not draw the report of the task: %s",

@@ -323,11 +323,13 @@ def main(page: ft.Page):
     def toggle_theme(e) -> None:
         """Go to the other theme, and keep the choice for the next start."""
         snapshot = settings.snapshot()
-        settings.theme = THEME_LIGHT if settings.theme == THEME_DARK else THEME_DARK
+        wanted = THEME_LIGHT if settings.theme == THEME_DARK else THEME_DARK
+        settings.theme = wanted
         if not save_settings(settings):
             settings.restore(snapshot)
-            # save_settings has logged the reason; this line says what was lost.
-            logger.error("The choice of the %s theme was not saved.", settings.theme)
+            # save_settings has logged the reason; this line says what was lost (the
+            # theme that was asked for: ``restore`` has put the old one back).
+            logger.error("The choice of the %s theme was not saved.", wanted)
             show_snackbar(page, SETTINGS_NOT_SAVED_TEXT)
             return
         logger.info("Theme: %s.", settings.theme)

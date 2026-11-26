@@ -25,6 +25,7 @@ from views.conversation_export import (
 )
 from views.timeline import now
 from views.ui_utils import (
+    COPY_FAILED_TEXT,
     copy_text,
     error_detail,
     error_for_log,
@@ -102,7 +103,7 @@ class ChatExportMixin:
         if await copy_text(self.page_ref, conversation[0]):
             show_snackbar(self.page_ref, "Разговорът е копиран.", success=True)
         else:
-            show_snackbar(self.page_ref, "Не успях да копирам.")
+            show_snackbar(self.page_ref, COPY_FAILED_TEXT)
 
     async def on_export_click(self, e=None) -> None:
         """Ask where to save the conversation and save it there as a ``.md`` file."""

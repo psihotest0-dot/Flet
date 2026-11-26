@@ -3,7 +3,8 @@
 The user picks the PDF of a bill (from an e-mail) or a picture of a paper one; the backend
 (``POST /v1/bills``) reads it - OCR for a scan, then the local model - and writes the upload and
 its answer into the open conversation: what was read and the question whether to keep it. The
-history is loaded again to show them; the user's "да" in the chat keeps the bill.
+history is loaded again to show them; the user's "да" in the chat keeps the bill. While an
+answer is being written the history waits for the end of that turn (``load_history``).
 
 ``ChatBillsMixin`` is a part of ``ChatView``: it uses ``file_picker``, ``api_client``,
 ``session_id``, ``page_ref`` and ``load_history``.
@@ -16,12 +17,21 @@ from pathlib import Path
 
 import flet as ft
 
-from api.errors import APIError
-from views.ui_utils import describe_error, file_kind, is_unexpected, show_snackbar
+from api.errors import APIError, FileTooLargeError
+from api.limits import MAX_BILL_BYTES
+from views.ui_utils import (
+    describe_error,
+    error_for_log,
+    file_kind,
+    is_unexpected,
+    show_snackbar,
+)
 
 logger = logging.getLogger(__name__)
 
 BILL_EXTENSIONS = ["pdf", "jpg", "jpeg", "png"]
+BILL_TOO_LARGE_TEXT = f"файлът е над {MAX_BILL_BYTES >> 20} MB"
+BILL_UNREADABLE_TEXT = "файлът не може да се прочете"
 
 
 def bill_error_text(error: BaseException) -> str:
@@ -30,11 +40,14 @@ def bill_error_text(error: BaseException) -> str:
         if error.status == 404:
             return "сметките не са включени на сървъра (BILLS_ENABLED)"
         if error.status == 413:
-            return "файлът е над 20 MB"
+            return BILL_TOO_LARGE_TEXT
         if error.status < 500:
             return f"бекендът отказа файла ({error.message})"
-    if isinstance(error, ValueError):
-        return "файлът е над 20 MB"
+    if isinstance(error, FileTooLargeError):
+        return BILL_TOO_LARGE_TEXT
+    if isinstance(error, OSError):
+        # Gone, locked or not allowed: the file on the disk, not the backend.
+        return BILL_UNREADABLE_TEXT
     return describe_error(error)
 
 
@@ -65,11 +78,12 @@ class ChatBillsMixin:
         try:
             await self.api_client.upload_bill(session_id, path, name)
         except Exception as ex:
-            # The name of a bill is the user's own text: the log keeps its kind.
+            # The name of a bill is the user's own text, and so is its path: the log
+            # keeps its kind and the kind of the error.
             logger.error(
                 "A bill (%s) was not read: %s",
                 file_kind(name),
-                ex,
+                error_for_log(ex),
                 exc_info=is_unexpected(ex),
             )
             show_snackbar(

@@ -8,9 +8,9 @@ An answer is read by a task of its own, so that "Спри" cancels exactly that.
 It is a part of ``ChatView`` and not a class of its own: it works on the state that
 ``ChatView.__init__`` creates - ``api_client``, ``session_id``, ``page_ref``,
 ``chat_list``, ``input_field`` and ``_set_input``, ``add_message``, ``scroll_to_bottom``
-and ``_follow_stream``, ``_set_streaming_ui``, ``_chat_options`` and the flags
-``_is_streaming``, ``_stop_generation``, ``_stream_task``, ``_last_assistant_msg`` and
-``_last_assistant_row``.
+and ``_follow_stream``, ``_set_streaming_ui``, ``_chat_options``, ``load_history`` and the
+flags ``_is_streaming``, ``_stop_generation``, ``_stream_task``, ``_reload_after_turn``,
+``_last_assistant_msg`` and ``_last_assistant_row``.
 """
 
 from __future__ import annotations
@@ -260,7 +260,8 @@ class ChatTurnsMixin:
                     # The backend never stores a half-written answer.
                     chat_message.show_stopped_note()
                 # The turn added messages the screen has no ids for (views.chat_paired).
-                self._forget_tail()
+                self._forget_tail(text)
+                self._reload_if_waiting()
                 # A "да" may have started a task of the server (views.chat_task).
                 self._start_task_watch()
 
@@ -310,9 +311,8 @@ class ChatTurnsMixin:
             self._stop_generation = False
             self._set_streaming_ui(False)
             if session_id == self.session_id:
-                # A new answer has a new id (views.chat_paired).
-                self._forget_tail()
                 if error is not None or stopped or chat_message is None:
+                    # The backend kept the old answer, and its id.
                     self._restore_previous_answer(
                         chat_message, previous_msg, previous_row, position
                     )
@@ -325,9 +325,18 @@ class ChatTurnsMixin:
                             success=True,
                         )
                 else:
+                    # A new answer has a new id (views.chat_paired).
+                    self._forget_tail()
                     self._last_assistant_msg = chat_message
                     self._last_assistant_row = chat_message.row
                     chat_message.set_regenerate_visible(True)
+                self._reload_if_waiting()
+
+    def _reload_if_waiting(self) -> None:
+        """Read the history again if one came while the answer was written (``load_history``)."""
+        if self._reload_after_turn and self.page_ref is not None:
+            self._reload_after_turn = False
+            self._load_task = self.page_ref.run_task(self.load_history)
 
     def _restore_previous_answer(
         self, failed_message, previous_msg, previous_row, position

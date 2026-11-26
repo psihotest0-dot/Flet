@@ -543,6 +543,10 @@ class OracleView(PollingTab, ft.Container):
                     exc_info=is_unexpected(ex),
                 )
                 self._set_error(f"Грешка при зареждане на журнала: {error_detail(ex)}")
+                # An older page that was on its way belonged to the reload that failed;
+                # the list on screen stays, and so must its button.
+                self.more_btn.disabled = False
+                safe_update(self, self.more_btn)
             return
         finally:
             if generation == self._generation:
@@ -779,6 +783,10 @@ class OracleView(PollingTab, ft.Container):
     def _show_first_page(self, page: OracleDecisionPage) -> None:
         self.decisions = list(page.decisions)
         self._next_before_id = page.next_before_id
+        # A "Покажи по-стари" still on its way must not leave the button off for the new
+        # list: after a reload its answer is dropped, and a click while it is still
+        # coming is ignored (``_loading_more``).
+        self.more_btn.disabled = False
         self._show_loaded()
 
     def _show_loaded(self) -> None:

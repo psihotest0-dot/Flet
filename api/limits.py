@@ -18,6 +18,9 @@ MAX_CONTENT_BYTES = 32000
 MAX_UPLOAD_MB = 100
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
+# The largest bill the backend reads (``bills.MaxFileBytes``, ``POST /v1/bills``).
+MAX_BILL_BYTES = 20 << 20
+
 # A file attached to one conversation (``/chat/attachments``, internal/attachments):
 # at most 256 KB a file, 20 files and 1 MB for the whole conversation. The backend
 # checks them again (413, 422); the client checks first, to answer in Bulgarian.

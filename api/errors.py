@@ -1,12 +1,27 @@
-"""The two ways a call to the backend can fail with an answer of its own."""
+"""The ways a call to the backend fails: with an answer of its own, or before it is sent."""
 
 from __future__ import annotations
 
+import re
+
 import httpx
+
+# A sentence of the backend for the screen puts a name the user gave between „ and “
+# ("Файлът „бележки.md“ вече съществува…", a refused file write).
+_QUOTED = re.compile(r"„[^“]*“")
+
+
+def without_quoted(text: str) -> str:
+    """``text`` for the log: what stands between „ and “ (a name of the user's) is left out."""
+    return _QUOTED.sub("„…“", text)
 
 
 class StreamError(Exception):
     """Exception raised for errors in the stream."""
+
+
+class FileTooLargeError(ValueError):
+    """A file over what the backend takes: refused here, before anything is sent."""
 
 
 # Backend error bodies are short plain-text sentences; anything longer is a

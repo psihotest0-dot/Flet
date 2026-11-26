@@ -11,7 +11,7 @@ from pathlib import PurePath
 import flet as ft
 import httpx
 
-from api.errors import APIError, StreamError
+from api.errors import APIError, FileTooLargeError, StreamError, without_quoted
 from views import theme
 
 logger = logging.getLogger(__name__)
@@ -140,19 +140,26 @@ TOO_LARGE_TEXT = "над позволения от бекенда размер"
 # What a snackbar says when ``save_settings`` returned ``False`` (main and the chat).
 SETTINGS_NOT_SAVED_TEXT = "Неуспешно запазване на настройките."
 
+# What a copy button says when ``copy_text`` returned ``False``.
+COPY_FAILED_TEXT = "Не успях да копирам."
+
 
 def is_unexpected(error: BaseException) -> bool:
     """Whether ``error`` is a bug rather than something that happens to a client.
 
     A dropped connection, an answer with an error status, an ``event: error``
-    frame and a file or a disk that is not there (``OSError``, a timeout among
-    them) are told to the user and written to the log as one line; a traceback
+    frame, a file or a disk that is not there (``OSError``, a timeout among
+    them) and a file over the backend's limit are told to the user and written
+    to the log as one line; a traceback
     would only fill ``app.log`` while the backend is down, and the message of an
     ``OSError`` carries the path of a file. Anything else (``AttributeError``, a
     malformed answer, ...) has no explanation but its place in the code, so the
     handler logs it with ``exc_info=is_unexpected(ex)``.
     """
-    return not isinstance(error, (httpx.TransportError, APIError, StreamError, OSError))
+    return not isinstance(
+        error,
+        (httpx.TransportError, APIError, StreamError, OSError, FileTooLargeError),
+    )
 
 
 def file_kind(name: str) -> str:
@@ -166,14 +173,16 @@ def file_kind(name: str) -> str:
 
 
 def error_for_log(error: BaseException) -> str:
-    """The text of ``error`` for the log: without the path an ``OSError`` carries.
+    """The text of ``error`` for the log: without a path or a name of the user's.
 
     ``str(PermissionError)`` is ``[Errno 13] Permission denied: 'C:\\...\\name.pdf'``;
-    the log keeps the kind and the number, which is what finds the cause.
+    the log keeps the kind and the number, which is what finds the cause. The
+    backend's own text names a file of the user in „…“ (a refused file write),
+    which is left out.
     """
     if isinstance(error, OSError):
         return f"{type(error).__name__} (errno {error.errno})"
-    return str(error) or type(error).__name__
+    return without_quoted(str(error)) or type(error).__name__
 
 
 def error_detail(error: BaseException) -> str:

@@ -136,6 +136,47 @@ async def test_a_failed_read_hides_the_bar_and_stops(mock_page, mock_api_client)
 
 
 @pytest.mark.asyncio
+async def test_reads_that_fail_while_the_task_goes_on_keep_the_bar(
+    mock_page, mock_api_client, monkeypatch, caplog
+):
+    seed()
+    monkeypatch.setattr(chat_task, "TASK_POLL_INTERVAL", 0)
+    view = make_view(mock_page, mock_api_client)
+    view.refresh_paired_chat = AsyncMock(return_value=True)
+    view._learn_tail = AsyncMock()
+    seen = []
+    answers = iter(
+        [
+            plan(),
+            httpx.ConnectError("down"),
+            httpx.ConnectError("still down"),
+            plan(steps=("done", "done", "doing")),
+            plan(status="done", steps=("done",) * 3),
+        ]
+    )
+
+    async def next_answer(_session):
+        seen.append(view.task_bar.visible)
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    mock_api_client.get_task_plan = AsyncMock(side_effect=next_answer)
+    with caplog.at_level("WARNING"):
+        await view._watch_task(CHAT_1)
+
+    assert mock_api_client.get_task_plan.await_count == 5, "the watch went on"
+    assert seen == [False, True, True, True, True], "the bar stayed while it failed"
+    assert not view.task_bar.visible, "gone at the end"
+    view.refresh_paired_chat.assert_awaited_once()
+    warnings = [
+        r for r in caplog.records if "task of the conversation" in r.getMessage()
+    ]
+    assert len(warnings) == 1, "one line when it starts to fail"
+
+
+@pytest.mark.asyncio
 async def test_another_conversation_stops_the_watch(mock_page, mock_api_client):
     seed()
     view = make_view(mock_page, mock_api_client)

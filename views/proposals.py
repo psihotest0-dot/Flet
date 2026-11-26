@@ -19,6 +19,7 @@ from api.models import WRITE_FILE_KIND, Proposal
 from views import theme
 from views.ui_utils import (
     describe_error,
+    error_for_log,
     is_unexpected,
     safe_update,
     show_snackbar,
@@ -198,11 +199,18 @@ class ProposalCard(ft.Container):
         except APIError as ex:
             if ex.status in CLOSED_STATUSES:
                 # Decided elsewhere (Telegram) or expired: nothing is left to do here.
-                logger.info("Proposal %s is already closed: %s", self.proposal.id, ex)
+                logger.info(
+                    "Proposal %s is already closed: %s",
+                    self.proposal.id,
+                    error_for_log(ex),
+                )
                 self._show_result("Вече е решено или е изтекло.")
                 self._tell_owner(approve=False)
                 return
-            logger.error("Failed to decide proposal %s: %s", self.proposal.id, ex)
+            # A refused file write names the file in the backend's text: not in the log.
+            logger.error(
+                "Failed to decide proposal %s: %s", self.proposal.id, error_for_log(ex)
+            )
             self._set_busy(False)
             show_snackbar(self.page_ref, _api_error_text(ex, self.proposal))
             return

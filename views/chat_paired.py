@@ -9,9 +9,10 @@ was written to it from Telegram (``refresh_paired_chat``).
 
 It is a part of ``ChatView`` and not a class of its own: it works on the state that
 ``ChatView.__init__`` creates - ``api_client``, ``settings``, ``session_id``, ``chat_list``,
-``page_ref``, ``_is_streaming``, ``_load_task``, ``_last_assistant_msg`` and the four of
+``page_ref``, ``_is_streaming``, ``_load_task``, ``_last_assistant_msg`` and the five of
 its own: ``_oldest_id`` (the first message on the screen), ``_tail_id`` (the last one),
-``_older_row`` and ``_paired_active``.
+``_unseen_turns`` (the turns of the app since the last one was known), ``_older_row`` and
+``_paired_active``.
 """
 
 from __future__ import annotations
@@ -117,9 +118,14 @@ class ChatPairedMixin:
         return self._older_row
 
     def _note_history(self, shown: list) -> None:
-        """Remember where the messages on the screen begin and end (their ids)."""
+        """Remember where the messages on the screen begin and end (their ids).
+
+        The screen now shows the conversation as the backend has it, so no turn of the
+        app is waiting to be recognised any more (``_forget_tail``).
+        """
         self._oldest_id = shown[0].id if shown else None
         self._tail_id = shown[-1].id if shown else EMPTY_TAIL
+        self._unseen_turns = None
 
     async def on_load_older_click(self, e=None) -> None:
         """Put the messages older than the oldest shown above it, without moving the reader."""
@@ -233,8 +239,6 @@ class ChatPairedMixin:
                 continue
             try:
                 await self.refresh_paired_chat()
-            except asyncio.CancelledError:
-                raise
             except Exception as ex:
                 # One line when it starts to fail, not one per try while the backend is down.
                 if not failed:
@@ -255,10 +259,13 @@ class ChatPairedMixin:
         One small request asks for the newest message; only when its id is not the one the
         screen ends with is a page fetched, and only the messages after the known one are
         added. If the known one is not in the page (the conversation was emptied, or more
-        than a page was written), the conversation is read again from the start. The first
-        look after a turn of the app only learns where the conversation stands. Returns
+        than a page was written), the conversation is read again from the start. After a
+        turn of the app its own messages are recognised first (``_learn_tail``); a first
+        look without any such turn only learns where the conversation stands. Returns
         whether something was drawn.
         """
+        if self._tail_id is None and self._unseen_turns is not None:
+            return await self._learn_tail()
         session_id = self.session_id
         latest = await self.api_client.get_messages(session_id, limit=1)
         if session_id != self.session_id or self._is_streaming or not latest:
@@ -313,23 +320,88 @@ class ChatPairedMixin:
             self._last_assistant_msg = None
             self._last_assistant_row = None
 
-    def _forget_tail(self) -> None:
+    def _forget_tail(self, sent: str | None = None) -> None:
         """After a turn of the app: what the conversation ends with is not known any more.
 
-        The turn added messages the screen has no ids for. The next look learns the end
-        (``_learn_tail`` does it at once), so that those messages are not fetched again
-        and drawn twice.
+        The turn added messages the screen has no ids for. ``sent`` is the text of the
+        message it sent (``None``: a regeneration, which replaced an answer). The end the
+        screen had before the first such turn and the texts are kept in ``_unseen_turns``,
+        so that the next look (``_learn_tail``, at once in a conversation shared with
+        Telegram) can tell these messages, which it must not draw a second time, from what
+        was written from Telegram meanwhile, which it must draw.
         """
+        if self._unseen_turns is None:
+            self._unseen_turns = (self._tail_id, [])
+        self._unseen_turns[1].append(sent)
         self._tail_id = None
         if is_paired_session(self.session_id) and self.page_ref is not None:
             self.page_ref.run_task(self._learn_tail)
 
-    async def _learn_tail(self, *_args) -> None:
+    async def _learn_tail(self, *_args) -> bool:
+        """Learn the end of the conversation after turns of the app; ``True`` if it drew.
+
+        The messages of the app's own turns are taken as seen and whatever follows them
+        is drawn. When they cannot be told apart (a regeneration, a message the backend
+        does not have followed by others, a known end that is gone, or more than a page
+        since) the history is read again.
+        Without a turn of the app to recognise, the newest message is the end.
+        """
         session_id = self.session_id
         try:
-            latest = await self.api_client.get_messages(session_id, limit=1)
+            page = await self.api_client.get_messages(
+                session_id, limit=HISTORY_REQUEST_LIMIT
+            )
         except Exception as ex:  # noqa: BLE001
             logger.debug("The end of the conversation was not learned: %s", ex)
-            return
-        if session_id == self.session_id and latest and self._tail_id is None:
-            self._tail_id = latest[0].id
+            return False
+        # Another chat, a look that already learned it, or a turn that has begun (its
+        # end calls this again with one more turn to recognise).
+        if session_id != self.session_id or self._tail_id is not None:
+            return False
+        if self._is_streaming or not page or page[-1].id is None:
+            return False
+        unseen, self._unseen_turns = self._unseen_turns, None
+        if unseen is None:
+            self._tail_id = page[-1].id
+            return False
+        new = after_own_turns(page, *unseen)
+        if new is None:
+            await self.load_history()
+            return True
+        if new:
+            self._append_new(new)
+            return True
+        self._tail_id = page[-1].id
+        return False
+
+
+def after_own_turns(page: list, before: str | None, sent: list) -> list | None:
+    """What of ``page`` came after the app's own turns: the messages to draw.
+
+    ``before`` is the id the screen ended with before the turns (``EMPTY_TAIL``: an
+    empty conversation), ``sent`` the text each turn sent (``None``: a regeneration).
+    Each turn is its user message with exactly that text and, if there is one, the answer
+    right after it. ``None`` when the page cannot be matched to the turns: the caller then
+    reads the whole history again rather than draw a message twice or not at all.
+    """
+    ids = [message.id for message in page]
+    if before == EMPTY_TAIL:
+        rest = page
+    elif before is not None and before in ids:
+        rest = page[ids.index(before) + 1 :]
+    else:
+        return None
+    position = 0
+    for text in sent:
+        if text is None:
+            return None
+        if position >= len(rest):
+            # The last turns left nothing (the backend refused the message).
+            break
+        mine = rest[position]
+        if mine.role != "user" or (mine.content or "").strip() != text.strip():
+            return None
+        position += 1
+        if position < len(rest) and rest[position].role == "assistant":
+            position += 1
+    return rest[position:]

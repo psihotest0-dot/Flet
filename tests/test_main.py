@@ -897,6 +897,20 @@ def test_a_theme_that_could_not_be_saved_is_not_switched_to(
     assert toggle_button(mock_page).icon == ft.Icons.LIGHT_MODE
 
 
+def test_the_log_names_the_theme_that_was_not_saved(
+    start_app, mock_page, monkeypatch, caplog
+):
+    save_settings(Settings(user_id=USER_ID))
+    start_app()
+    monkeypatch.setattr(main_module, "save_settings", lambda _settings: False)
+
+    with patch.object(main_module, "show_snackbar"), caplog.at_level(logging.ERROR):
+        toggle_button(mock_page).on_click(None)
+
+    # The light one was asked for; restore() has put the dark one back.
+    assert "The choice of the light theme was not saved." in caplog.text
+
+
 def test_the_code_blocks_of_the_chat_follow_a_change_of_theme(start_app, mock_page):
     save_settings(Settings(user_id=USER_ID))
     chat = tab_view(start_app(), 0)

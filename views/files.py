@@ -10,6 +10,7 @@ from pathlib import Path
 import flet as ft
 
 from api.client import APIClient
+from api.errors import APIError
 from api.limits import (
     MAX_UPLOAD_BYTES,
     MAX_UPLOAD_MB,
@@ -21,6 +22,7 @@ from views import theme
 from views.ui_utils import (
     PollingTab,
     confirm_dialog,
+    delete_on_backend,
     error_detail,
     error_for_log,
     file_kind,
@@ -307,6 +309,8 @@ class FilesView(PollingTab, ft.Container):
         self._rows: dict[str, ft.DataRow] = {}
         self._sort_column: int | None = SORT_UPLOADED
         self._sort_ascending = False
+        # Each load takes a number; only the newest one may write its result.
+        self._load_seq = 0
 
     # -------------------------------------------------------------- lifecycle
     def _load_job(self):
@@ -320,11 +324,18 @@ class FilesView(PollingTab, ft.Container):
         await self.initial_load()
 
     async def initial_load(self, *_args):
+        # Mounting, "Обнови" and the end of an upload can each start a load; only the
+        # newest may write its answer, or an older list could take a new file away.
+        self._load_seq += 1
+        sequence = self._load_seq
         try:
             files = await self.api_client.list_files()
         except Exception as e:
             logger.error("Failed to load files: %s", e, exc_info=is_unexpected(e))
-            show_snackbar(self.page_ref, "Неуспешно зареждане на файловете.")
+            if sequence == self._load_seq:
+                show_snackbar(self.page_ref, "Неуспешно зареждане на файловете.")
+            return
+        if sequence != self._load_seq:
             return
         self.files = files
         self.update_table()
@@ -433,6 +444,12 @@ class FilesView(PollingTab, ft.Container):
             for file, result in zip(pending_files, results, strict=True):
                 if isinstance(result, asyncio.CancelledError):
                     raise result
+                if isinstance(result, APIError) and result.status == 404:
+                    # Deleted elsewhere: asked again, it would be a 404 and a line in
+                    # the log every few seconds.
+                    logger.info("File %s is gone from the backend.", file.id)
+                    self.remove_file_row(file.id)
+                    continue
                 if isinstance(result, BaseException):
                     logger.warning(
                         "Failed to refresh status of %s: %s", file.id, result
@@ -455,9 +472,10 @@ class FilesView(PollingTab, ft.Container):
         by_id = {f.id: f for f in fresh if f.id}
         for file in pending_files:
             updated = by_id.get(file.id)
-            # A file missing from the list was deleted elsewhere; the next full
-            # load drops its row.
-            if updated is not None:
+            if updated is None:
+                # Deleted elsewhere: its row goes, and it is not asked about again.
+                self.remove_file_row(file.id)
+            else:
                 self._apply_status(file.id, updated)
 
     async def on_upload_click(self, e):
@@ -635,6 +653,9 @@ class FilesView(PollingTab, ft.Container):
                 if file.id == file_id:
                     self.files[i] = updated_file
                     break
+            if (self.category_filter.value or FILTER_ALL) != FILTER_ALL:
+                # Under a category filter the file may not belong in the table any more.
+                self.update_table()
             show_snackbar(self.page_ref, "Категорията е обновена!", success=True)
 
         return handler
@@ -651,17 +672,14 @@ class FilesView(PollingTab, ft.Container):
             if not confirmed:
                 return
 
-            try:
-                await self.api_client.delete_file(file_id)
-            except Exception as ex:
-                logger.error(
-                    "Failed to delete file: %s", ex, exc_info=is_unexpected(ex)
-                )
-                show_snackbar(
-                    self.page_ref, f"Грешка при изтриване на файла: {error_detail(ex)}"
-                )
-                return
-
-            self.remove_file_row(file_id)
+            # A 404 counts as done: the file is gone already (deleted elsewhere), so
+            # its row goes too.
+            if await delete_on_backend(
+                self.page_ref,
+                lambda: self.api_client.delete_file(file_id),
+                "файла",
+                f"file {file_id}",
+            ):
+                self.remove_file_row(file_id)
 
         return handler

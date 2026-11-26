@@ -178,6 +178,12 @@ class ChatView(
         # ``views.chat_paired``.
         self._oldest_id: str | None = None
         self._tail_id: str | None = None
+        # The end the screen had before the turns of the app it has no ids for, and the
+        # text each of them sent (``None``: a regeneration); ``None`` when there are none.
+        self._unseen_turns: tuple[str | None, list[str | None]] | None = None
+        # A history that arrived while an answer was being written: drawing it then
+        # would take that answer off the screen, so it is read again after the turn.
+        self._reload_after_turn = False
         self._older_row: ft.Control | None = None
         self._older_button: ft.TextButton | None = None
         self._loading_older = False
@@ -395,6 +401,8 @@ class ChatView(
         self._history_truncated = False
         self._oldest_id = None
         self._tail_id = None
+        self._unseen_turns = None
+        self._reload_after_turn = False
         self._older_row = None
         self._loading_older = False
         self._show_to_bottom_button(False)
@@ -863,6 +871,12 @@ class ChatView(
 
         # The user switched sessions while the request was in flight.
         if session_id != self.session_id:
+            return
+        if self._is_streaming:
+            # Drawn now, it would take the answer being written off the screen (a bill
+            # read meanwhile, or a message sent before the history came): it is read
+            # again when the turn ends (``_reload_if_waiting``).
+            self._reload_after_turn = True
             return
 
         self.chat_list.controls.clear()

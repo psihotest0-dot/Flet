@@ -1766,9 +1766,78 @@ async def test_many_unfinished_files_are_polled_with_one_list(
 
     mock_api_client.list_files.assert_awaited_once()
     mock_api_client.get_file_status.assert_not_called()
-    assert [f.status for f in view.files] == ["completed"] * len(done[:-1]) + [
-        "processing"
-    ]
+    assert [f.status for f in view.files] == ["completed"] * len(done[:-1])
+    # The deleted one is not asked about again, and its row is gone.
+    assert files[-1].id not in view._rows
+
+
+@pytest.mark.asyncio
+async def test_an_unfinished_file_deleted_elsewhere_stops_being_asked_about(
+    mock_page, mock_api_client, caplog
+):
+    files = _pending(2)
+    view = _files_view(mock_page, mock_api_client, files)
+
+    async def status(file_id):
+        if file_id == "p1":
+            raise APIError(404, "file not found")
+        return IngestedFile(id=file_id, file_name="x", status="completed")
+
+    mock_api_client.get_file_status = AsyncMock(side_effect=status)
+
+    with caplog.at_level("WARNING"):
+        await _one_poll(view)
+
+    assert [f.id for f in view.files] == ["p0"]
+    assert "p1" not in view._rows
+    assert not caplog.records, "a file that is gone is not a warning"
+
+
+@pytest.mark.asyncio
+async def test_an_older_list_does_not_overwrite_a_newer_one(mock_page, mock_api_client):
+    view = _files_view(mock_page, mock_api_client, [])
+    release = asyncio.Event()
+    old, new = _pending(1), _pending(2)
+
+    async def slow_old_list():
+        await release.wait()
+        return old
+
+    mock_api_client.list_files = AsyncMock(side_effect=slow_old_list)
+    first = asyncio.create_task(view.initial_load())
+    await asyncio.sleep(0)
+    # "Обнови" (or the end of an upload) while the first answer is on its way.
+    mock_api_client.list_files = AsyncMock(return_value=new)
+    await view.initial_load()
+    release.set()
+    await first
+
+    assert [f.id for f in view.files] == ["p0", "p1"]
+
+
+@pytest.mark.asyncio
+async def test_a_file_moved_out_of_the_filtered_category_leaves_the_table(
+    mock_page, mock_api_client
+):
+    view = _files_view(
+        mock_page,
+        mock_api_client,
+        [IngestedFile(id="f1", file_name="a.pdf", status="completed", category="law")],
+    )
+    view.category_filter.value = "law"
+    view.update_table()
+    assert len(view.data_table.rows) == 1
+    moved = IngestedFile(
+        id="f1", file_name="a.pdf", status="completed", category="history"
+    )
+    mock_api_client.update_file_category = AsyncMock(return_value=moved)
+
+    await view.create_category_change_handler("f1")(
+        SimpleNamespace(control=SimpleNamespace(value="history"))
+    )
+
+    assert view.data_table.rows == []
+    assert view.count_text.value == "Показани 0 от 1"
 
 
 @pytest.mark.asyncio
@@ -2051,6 +2120,46 @@ async def test_memory_row_delete_cancelled_keeps_row(mock_page, mock_api_client)
 
     mock_api_client.delete_memory.assert_not_called()
     assert view.data_table.rows == [row]
+
+
+def _files_view_with_one_file(mock_page, mock_api_client) -> FilesView:
+    view = FilesView(mock_page, mock_api_client)
+    view.files = [IngestedFile(id="f1", file_name="a.pdf", status="completed")]
+    view.update_table()
+    return view
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_file_that_is_gone_already_removes_its_row(
+    mock_page, mock_api_client
+):
+    # Deleted from another client: the backend answers 404, what the user wanted is true.
+    view = _files_view_with_one_file(mock_page, mock_api_client)
+    mock_api_client.delete_file = AsyncMock(side_effect=APIError(404, "file not found"))
+
+    with patch("views.files.confirm_dialog", new=AsyncMock(return_value=True)):
+        await view.create_delete_handler("f1")(None)
+
+    assert view.files == []
+    assert view.data_table.rows == []
+    mock_page.show_dialog.assert_not_called()  # no error snackbar
+
+
+@pytest.mark.asyncio
+async def test_a_file_that_could_not_be_deleted_keeps_its_row_and_says_so(
+    mock_page, mock_api_client
+):
+    view = _files_view_with_one_file(mock_page, mock_api_client)
+    mock_api_client.delete_file = AsyncMock(side_effect=APIError(500, "db down"))
+
+    with patch("views.files.confirm_dialog", new=AsyncMock(return_value=True)):
+        await view.create_delete_handler("f1")(None)
+
+    assert len(view.data_table.rows) == 1
+    assert (
+        mock_page.show_dialog.call_args.args[0].content.value
+        == "Грешка при изтриване на файла: db down"
+    )
 
 
 @pytest.mark.asyncio

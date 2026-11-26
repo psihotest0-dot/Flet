@@ -10,7 +10,7 @@ import httpx
 import pytest
 from helpers import mounted, real_session
 
-from api.errors import APIError, StreamError
+from api.errors import APIError, FileTooLargeError, StreamError, without_quoted
 from views import theme
 from views.ui_utils import (
     PollingTab,
@@ -92,6 +92,20 @@ def test_an_os_error_is_logged_without_the_path_it_carries():
 def test_any_other_error_is_logged_with_its_own_text():
     assert error_for_log(ValueError("bad value")) == "bad value"
     assert error_for_log(ValueError()) == "ValueError"
+
+
+def test_a_name_the_backend_quotes_is_left_out_of_the_log():
+    error = APIError(
+        422, "Файлът „диагноза_Иван.md“ вече го няма. Отхвърли предложението."
+    )
+
+    assert error_for_log(error) == "Файлът „…“ вече го няма. Отхвърли предложението."
+    assert without_quoted("„a“ и „b“, а не c") == "„…“ и „…“, а не c"
+    assert without_quoted("no quotes at all") == "no quotes at all"
+
+
+def test_a_file_over_the_limit_is_expected():
+    assert is_unexpected(FileTooLargeError("File too large.")) is False
 
 
 @pytest.mark.parametrize(

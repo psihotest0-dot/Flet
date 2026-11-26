@@ -22,6 +22,7 @@ from views.proposals import ProposalCard
 from views.sources import as_source, source_details, source_snippet, source_title
 from views.timeline import when_label
 from views.ui_utils import (
+    COPY_FAILED_TEXT,
     close_dialog,
     confirm_dialog,
     copy_text,
@@ -29,6 +30,7 @@ from views.ui_utils import (
     open_dialog,
     open_url,
     safe_update,
+    show_snackbar,
 )
 
 logger = logging.getLogger(__name__)
@@ -337,6 +339,9 @@ class ChatMessage(ft.Column):
                     duration=2000,
                 ),
             )
+        else:
+            # Like the other copy buttons: a click that did nothing says so.
+            show_snackbar(self.page_ref, COPY_FAILED_TEXT)
 
     def restyle(self) -> None:
         """Give the code blocks the colours that fit the theme that is on now."""

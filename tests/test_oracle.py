@@ -1059,6 +1059,36 @@ async def test_older_decisions_that_arrive_after_a_reload_are_dropped(
     assert ids(view) == [5]
 
 
+@pytest.mark.parametrize("reload_fails", [False, True], ids=["reloaded", "failed"])
+@pytest.mark.asyncio
+async def test_a_reload_while_older_decisions_come_leaves_the_button_usable(
+    mock_page, mock_api_client, reload_fails
+):
+    view = make_view(mock_page, mock_api_client, decision(10), next_before_id=10)
+    await view.load()
+    release = asyncio.Event()
+
+    async def slow(**_kwargs):
+        await release.wait()
+        return page(decision(9))
+
+    mock_api_client.list_oracle_decisions = AsyncMock(side_effect=slow)
+    older = asyncio.create_task(view.load_more())
+    await asyncio.sleep(0)
+    assert view.more_btn.disabled is True
+    # "Обнови" (or the tab opened again) while the older page is on its way.
+    mock_api_client.list_oracle_decisions = AsyncMock(
+        side_effect=httpx.ConnectError("down") if reload_fails else None,
+        return_value=page(decision(12), decision(11), next_before_id=11),
+    )
+    await view.load()
+    release.set()
+    await older
+
+    assert view.more_btn.visible is True
+    assert view.more_btn.disabled is False, "it stayed off until a restart"
+
+
 # ------------------------------------------------------------- new decisions
 @pytest.mark.asyncio
 async def test_new_decisions_go_on_top_and_older_pages_stay(mock_page, mock_api_client):

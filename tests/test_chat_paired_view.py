@@ -26,6 +26,7 @@ from views.chat_paired import (
     OLDER_HINT,
     PAIRED_POLL_INTERVAL,
     PAIRED_POLL_MAX_INTERVAL,
+    after_own_turns,
 )
 from views.chat_turns import ACTIVITY_QUEUED_TEXT, ACTIVITY_WORKING_TEXT
 
@@ -688,27 +689,240 @@ async def test_a_look_at_a_chat_that_was_left_draws_nothing(mock_page, api):
     assert view._tail_id == "m4"
 
 
+def said(id: str, role: str, content: str) -> Message:
+    return Message(id=id, role=role, content=content)
+
+
+def answer_on_screen(view: ChatView, question: str, answer: str) -> None:
+    """The app asked and was answered: two messages the screen has no ids for."""
+    with mounted(ChatView):
+        view.add_message("user", question, notify=False)
+        view.add_message("assistant", answer, notify=False)
+
+
+def backend_has(api, history: list[Message]) -> None:
+    """``get_messages`` answers like the backend: the newest ``limit``, oldest first."""
+
+    async def get_messages(session_id, limit=None, before=None):
+        return history[-limit:] if limit else history
+
+    api.get_messages = AsyncMock(side_effect=get_messages)
+
+
 @pytest.mark.asyncio
 async def test_after_a_turn_of_the_app_its_own_messages_are_not_drawn_a_second_time(
     mock_page, api
 ):
     view = make_tg_view(mock_page, api)
     await load(view, api, msgs(1, 2))
-    # The app asked and was answered: two messages the screen has no ids for.
-    with mounted(ChatView):
-        view.add_message("user", "asked here", notify=False)
-        view.add_message("assistant", "answered here", notify=False)
-    api.get_messages = AsyncMock(return_value=msgs(4, 4))
+    answer_on_screen(view, "asked here", "answered here")
+    backend_has(
+        api,
+        [
+            *msgs(1, 2),
+            said("m3", "user", "asked here"),
+            said("m4", "assistant", "answered here"),
+        ],
+    )
 
-    view._forget_tail()
+    view._forget_tail("asked here")
     assert view._tail_id is None
     mock_page.run_task.assert_called_once_with(view._learn_tail)
-    await view._learn_tail()
+    with mounted(ChatView):
+        assert await view._learn_tail() is False
     assert view._tail_id == "m4"
 
-    api.get_messages = AsyncMock(return_value=msgs(4, 4))
     assert await view.refresh_paired_chat() is False
     assert texts(view) == ["text 1", "text 2", "asked here", "answered here"]
+
+
+@pytest.mark.asyncio
+async def test_what_telegram_wrote_right_after_a_turn_of_the_app_is_drawn(
+    mock_page, api
+):
+    view = make_tg_view(mock_page, api)
+    await load(view, api, msgs(1, 2))
+    answer_on_screen(view, "asked here", "answered here")
+    # The person also wrote from Telegram the moment the app's turn ended.
+    backend_has(
+        api,
+        [
+            *msgs(1, 2),
+            said("m3", "user", "asked here"),
+            said("m4", "assistant", "answered here"),
+            said("m5", "user", "from telegram"),
+        ],
+    )
+
+    view._forget_tail("asked here")
+    with mounted(ChatView):
+        assert await view._learn_tail() is True
+
+    assert texts(view)[-3:] == ["asked here", "answered here", "from telegram"]
+    assert view._tail_id == "m5"
+    assert await view.refresh_paired_chat() is False, "nothing is drawn twice"
+    assert len(texts(view)) == 5
+
+
+@pytest.mark.asyncio
+async def test_a_look_before_the_end_was_learned_recognises_the_turn_too(
+    mock_page, api
+):
+    # The poll can come before ``_learn_tail`` (or after it failed).
+    view = make_tg_view(mock_page, api)
+    await load(view, api, msgs(1, 2))
+    answer_on_screen(view, "asked here", "answered here")
+    view._forget_tail("asked here")
+    backend_has(
+        api,
+        [
+            *msgs(1, 2),
+            said("m3", "user", "asked here"),
+            said("m4", "assistant", "answered here"),
+            said("m5", "user", "from telegram"),
+        ],
+    )
+
+    with mounted(ChatView):
+        assert await view.refresh_paired_chat() is True
+
+    assert texts(view)[-1] == "from telegram"
+    assert view._tail_id == "m5"
+
+
+@pytest.mark.asyncio
+async def test_two_turns_in_a_row_are_both_recognised(mock_page, api):
+    view = make_tg_view(mock_page, api)
+    await load(view, api, msgs(1, 2))
+    answer_on_screen(view, "first", "answer 1")
+    view._forget_tail("first")
+    answer_on_screen(view, "second", "answer 2")
+    view._forget_tail("second")
+    backend_has(
+        api,
+        [
+            *msgs(1, 2),
+            said("m3", "user", "first"),
+            said("m4", "assistant", "answer 1"),
+            said("m5", "user", "second"),
+            said("m6", "assistant", "answer 2"),
+        ],
+    )
+
+    with mounted(ChatView):
+        assert await view._learn_tail() is False
+
+    assert view._tail_id == "m6"
+    assert len(texts(view)) == 6
+
+
+@pytest.mark.asyncio
+async def test_a_refused_message_leaves_the_conversation_as_it_was(mock_page, api):
+    view = make_tg_view(mock_page, api)
+    await load(view, api, msgs(1, 2))
+    view._forget_tail("not taken")
+    backend_has(api, msgs(1, 2))
+    view.load_history = AsyncMock()
+
+    assert await view._learn_tail() is False
+
+    view.load_history.assert_not_awaited()
+    assert view._tail_id == "m2"
+
+
+@pytest.mark.parametrize(
+    "history",
+    [
+        # A regeneration: the old answer has a new id.
+        pytest.param(None, id="regenerated"),
+        # The end the screen knew is not there any more.
+        pytest.param([said("m9", "user", "asked here")], id="known-end-gone"),
+        # Something came before the app's own message.
+        pytest.param(
+            [
+                *msgs(1, 2),
+                said("m3", "user", "other"),
+                said("m4", "user", "asked here"),
+            ],
+            id="other-first",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_turn_that_cannot_be_recognised_reads_the_history_again(
+    mock_page, api, history
+):
+    view = make_tg_view(mock_page, api)
+    await load(view, api, msgs(1, 2))
+    if history is None:
+        view._forget_tail()
+        history = [*msgs(1, 1), said("m7", "assistant", "regenerated")]
+    else:
+        view._forget_tail("asked here")
+    backend_has(api, history)
+    view.load_history = AsyncMock()
+
+    assert await view._learn_tail() is True
+
+    view.load_history.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_learning_waits_while_a_new_answer_is_written(mock_page, api):
+    view = make_tg_view(mock_page, api)
+    await load(view, api, msgs(1, 2))
+    view._forget_tail("asked here")
+    backend_has(api, [*msgs(1, 2), said("m3", "user", "asked here")])
+    view._is_streaming = True
+
+    assert await view._learn_tail() is False
+
+    assert view._tail_id is None
+    assert view._unseen_turns == ("m2", ["asked here"]), (
+        "the next turn's end tries again"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_history_drawn_again_forgets_the_turns(mock_page, api):
+    view = make_tg_view(mock_page, api)
+    view._forget_tail("asked here")
+
+    await load(view, api, msgs(1, 4))
+
+    assert view._unseen_turns is None
+    assert view._tail_id == "m4"
+
+
+@pytest.mark.parametrize(
+    "page, before, sent, new",
+    [
+        ([], EMPTY_TAIL, [], []),
+        (
+            [said("m1", "user", "hi"), said("m2", "assistant", "hello")],
+            EMPTY_TAIL,
+            ["hi"],
+            [],
+        ),
+        # A stopped turn: the backend kept the question only.
+        (
+            [
+                said("m1", "user", "hi"),
+                said("m2", "user", "tg"),
+                said("m3", "assistant", "a"),
+            ],
+            EMPTY_TAIL,
+            [" hi "],
+            ["m2", "m3"],
+        ),
+        ([said("m1", "user", "hi")], None, ["hi"], None),
+        ([said("m1", "assistant", "hi")], EMPTY_TAIL, ["hi"], None),
+    ],
+    ids=["empty", "answered", "stopped-then-telegram", "end-unknown", "not-a-question"],
+)
+def test_after_own_turns(page, before, sent, new):
+    result = after_own_turns(page, before, sent)
+    assert (None if result is None else [m.id for m in result]) == new
 
 
 @pytest.mark.asyncio

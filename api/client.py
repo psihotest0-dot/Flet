@@ -19,8 +19,13 @@ from tenacity import (
     wait_exponential,
 )
 
-from api.errors import APIError
-from api.limits import DEFAULT_IMPORTANCE, MAX_UPLOAD_BYTES, MAX_UPLOAD_MB
+from api.errors import APIError, FileTooLargeError, without_quoted
+from api.limits import (
+    DEFAULT_IMPORTANCE,
+    MAX_BILL_BYTES,
+    MAX_UPLOAD_BYTES,
+    MAX_UPLOAD_MB,
+)
 from api.models import (
     MEMORY_CANDIDATE,
     ChatAttachment,
@@ -41,9 +46,6 @@ from api.models import (
 from api.stream import StreamEvent, parse_frame
 
 logger = logging.getLogger(__name__)
-
-# The largest bill the backend reads (bills.MaxFileBytes).
-MAX_BILL_BYTES = 20 << 20
 
 
 # The paths whose last part is the user's own text: the requests are built from them
@@ -74,8 +76,9 @@ def _log_http_error(response: httpx.Response, error: APIError) -> None:
     The views only log the backend's text; without the method and path the log
     cannot say which call failed. Only the path is written - the query string
     carries the ``session_id`` - and ``_loggable_path`` keeps a file name and a
-    whole session id out of it. A 5xx is the backend's fault (error), a 4xx is
-    the answer to this very request (warning).
+    whole session id out of it; a name in the backend's own text (a refused file
+    write says „<name>“) is left out too. A 5xx is the backend's fault (error), a
+    4xx is the answer to this very request (warning).
     """
     request = response.request
     level = logging.ERROR if error.status >= 500 else logging.WARNING
@@ -85,7 +88,7 @@ def _log_http_error(response: httpx.Response, error: APIError) -> None:
         request.method,
         _loggable_path(request.url.path),
         error.status,
-        error.message,
+        without_quoted(error.message),
     )
 
 
@@ -113,12 +116,16 @@ def _is_transient(error: BaseException) -> bool:
 class APIClient:
     """Client for making asynchronous requests to the AI agent backend API."""
 
-    def __init__(self, base_url: str, user_id: str):
+    def __init__(self, base_url: str, user_id: str | None):
+        """``user_id`` goes with every request as ``X-User-ID``.
+
+        ``None`` is only for probing an address (``check_health``): the id is the one key
+        to the history, and the address may not be the user's backend at all.
+        """
         self.base_url = base_url
         self.user_id = user_id
-        self.client = httpx.AsyncClient(
-            base_url=self.base_url, headers={"X-User-ID": user_id}
-        )
+        headers = {"X-User-ID": user_id} if user_id else {}
+        self.client = httpx.AsyncClient(base_url=self.base_url, headers=headers)
 
     def set_base_url(self, base_url: str) -> None:
         """Send the next requests to ``base_url``.
@@ -160,7 +167,7 @@ class APIClient:
 
         The file goes from the disk to the connection a piece at a time (httpx reads
         it in chunks of 64 KiB); it is never held in memory, which a 65 MB book
-        taken three at a time used to do. ``ValueError`` for a file over
+        taken three at a time used to do. :class:`FileTooLargeError` for a file over
         ``MAX_UPLOAD_BYTES``.
 
         A file the backend already holds (same content) is not an error: the
@@ -168,7 +175,9 @@ class APIClient:
         """
         size = await asyncio.to_thread(lambda: path.stat().st_size)
         if size > MAX_UPLOAD_BYTES:
-            raise ValueError(f"File too large. Maximum size is {MAX_UPLOAD_MB}MB.")
+            raise FileTooLargeError(
+                f"File too large. Maximum size is {MAX_UPLOAD_MB}MB."
+            )
         source = await asyncio.to_thread(path.open, "rb")
         try:
             response = await self.client.post(
@@ -245,12 +254,12 @@ class APIClient:
         The backend reads it (OCR for a scan, then the local model), writes the upload and
         its answer into the conversation and returns the answer: what was read and the
         question whether to keep it. Reading a scan takes a while, so the read has no
-        timeout. ``ValueError`` for a file over ``MAX_BILL_BYTES``. A bill is the user's
-        own document: nothing of it is logged.
+        timeout. :class:`FileTooLargeError` for a file over ``MAX_BILL_BYTES``. A bill is
+        the user's own document: nothing of it is logged.
         """
         size = await asyncio.to_thread(lambda: path.stat().st_size)
         if size > MAX_BILL_BYTES:
-            raise ValueError(
+            raise FileTooLargeError(
                 f"File too large. Maximum size is {MAX_BILL_BYTES >> 20}MB."
             )
         source = await asyncio.to_thread(path.open, "rb")
@@ -543,8 +552,8 @@ class APIClient:
         not know a field ignores it and never sends the frame.
 
         ``mode`` is the button of the message (``views.chat_modes``): the road the turn
-        must take - ``books``, ``web``, ``library``, ``files``, ``memory``, ``style``;
-        ``None`` leaves it out.
+        must take - ``analyze``, ``books``, ``web``, ``library``, ``files``, ``memory``,
+        ``style``, ``reminder``; ``None`` leaves it out.
         """
         payload: dict[str, Any] = {
             "session_id": session_id,

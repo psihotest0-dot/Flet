@@ -27,6 +27,7 @@ from views.files import files_label, size_label
 from views.proposals import proposal_cards
 from views.timeline import full_label
 from views.ui_utils import (
+    COPY_FAILED_TEXT,
     close_dialog,
     confirm_dialog,
     copy_text,
@@ -342,7 +343,7 @@ class UserFilesView(ft.Container):
             if await copy_text(self.page_ref, state["shown"]):
                 show_snackbar(self.page_ref, "Копирано.", success=True)
             else:
-                show_snackbar(self.page_ref, "Не успях да копирам.")
+                show_snackbar(self.page_ref, COPY_FAILED_TEXT)
 
         switch_btn.on_click = switch
         copy_btn.on_click = copy
