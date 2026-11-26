@@ -19,6 +19,13 @@ from views.ui_utils import safe_update
 
 # (mode of the request, label, icon, the hint of the input while it is chosen)
 MODES: tuple[tuple[str, str, ft.IconData, str], ...] = (
+    # Next to the paperclip: the attached file, analysed by the books of its subject.
+    (
+        "analyze",
+        "Анализ",
+        ft.Icons.ANALYTICS,
+        "Какво да анализирам в прикачения файл? (напр. „анализирай“)",
+    ),
     ("books", "Книги", ft.Icons.MENU_BOOK, "Какво да потърся в книгите?"),
     ("web", "Интернет", ft.Icons.TRAVEL_EXPLORE, "Какво да потърся в интернет?"),
     (

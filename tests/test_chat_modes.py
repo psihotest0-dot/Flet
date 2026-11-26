@@ -17,7 +17,16 @@ from views.chat_modes import DEFAULT_HINT, MODE_HINTS, MODES
 
 CHAT_1 = "11111111-1111-1111-1111-111111111111"
 CHAT_2 = "22222222-2222-2222-2222-222222222222"
-BACKEND_MODES = {"books", "web", "library", "files", "memory", "style", "reminder"}
+BACKEND_MODES = {
+    "analyze",
+    "books",
+    "web",
+    "library",
+    "files",
+    "memory",
+    "style",
+    "reminder",
+}
 
 
 def seed() -> None:
@@ -69,6 +78,17 @@ def test_the_menu_has_the_paperclip_first_and_then_the_modes(
     assert view.attach_btn not in input_row.controls, "the paperclip is in the menu"
 
 
+def test_the_analysis_is_next_to_the_paperclip(mock_page, mock_api_client):
+    """The button "Анализ" works on the attached file: it comes right after the paperclip and the bill."""
+    seed()
+    view = make_view(mock_page, mock_api_client)
+    item = view.mode_menu.items[2]
+    assert item.content == "Анализ"
+    item.on_click(None)
+    assert view.chat_mode == "analyze"
+    assert view.input_field.hint_text == MODE_HINTS["analyze"]
+
+
 def test_choosing_a_mode_shows_it_and_the_cross_takes_it_away(
     mock_page, mock_api_client
 ):
@@ -77,7 +97,8 @@ def test_choosing_a_mode_shows_it_and_the_cross_takes_it_away(
     assert not view.mode_chip.visible
     assert view.input_field.hint_text == DEFAULT_HINT
 
-    view.mode_menu.items[3].on_click(None)  # "Интернет"
+    item = next(i for i in view.mode_menu.items if i.content == "Интернет")
+    item.on_click(None)
     assert view.chat_mode == "web"
     assert view.mode_chip.visible
     assert "Интернет" in view.mode_chip_text.value
