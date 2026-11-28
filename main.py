@@ -4,6 +4,8 @@ import os
 import sys
 import threading
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -22,7 +24,11 @@ from views.chat import ChatView
 from views.files import FilesView
 from views.memory import MemoryView
 from views.oracle import OracleView
-from views.settings_dialog import SettingsDialog, is_plain_http_to_another_computer
+from views.settings_dialog import (
+    INSECURE_URL_NOTE,
+    SettingsDialog,
+    is_plain_http_to_another_computer,
+)
 from views.ui_utils import (
     SETTINGS_NOT_SAVED_TEXT,
     has_open_dialog,
@@ -38,9 +44,29 @@ LOG_FILE = Path(__file__).with_name("app.log")
 HEALTH_CHECK_INTERVAL = 10
 # How long closing the window waits for the HTTP client; then the window goes anyway.
 CLOSE_TIMEOUT = 5.0
-TAB_LABELS = ("Чат", "Памет", "Файлове", "Бот", "Файлове на Лили")
-# Tab index -> the view method that re-reads its data when the tab is opened again.
-RELOADED_ON_VISIT = {1: "load_memories", 3: "refresh", 4: "refresh"}
+
+
+@dataclass(frozen=True)
+class TabSpec:
+    """One tab: its label, how its view is built and how it is re-read."""
+
+    label: str
+    # Builds the view on the first visit. ``None`` for the chat, built at once.
+    build: Callable[[ft.Page, APIClient], ft.Control] | None
+    # The view's method that re-reads its data when the tab is opened again.
+    reload: str | None = None
+
+
+# The order of the tab bar. Label, view and reload of a tab are one entry, so a
+# tab moved in this list keeps all three; three tables by index did not. The chat
+# stays first: the start and its keyboard shortcuts use index 0.
+TABS = (
+    TabSpec("Чат", None),
+    TabSpec("Памет", MemoryView, "load_memories"),
+    TabSpec("Файлове", FilesView),
+    TabSpec("Бот", OracleView, "refresh"),
+    TabSpec("Файлове на Лили", UserFilesView, "refresh"),
+)
 # Libraries that log every single request on INFO.
 NOISY_LOGGERS = ("httpx", "httpcore")
 UNEXPECTED_ERROR_TEXT = "Възникна неочаквана грешка. Подробностите са в app.log."
@@ -190,8 +216,22 @@ def main(page: ft.Page):
             settings.base_url,
         )
     api_client = APIClient(base_url=settings.base_url, user_id=settings.user_id)
+
+    def on_chat_session_changed(session_id: str) -> None:
+        """React to another chat being opened.
+
+        Memories belong to the user, not to a chat, so the Memory tab is not
+        reloaded here - it refreshes when its tab is opened.
+        """
+        logger.info("Active chat session changed to %s", short_id(session_id))
+
+    # The chat tab is built at once, before the handlers that use it (the
+    # settings and the theme); the others on their first visit.
+    chat_view = ChatView(
+        page, api_client, on_session_changed=on_chat_session_changed, settings=settings
+    )
     # index -> view; tabs are created on first activation (see ensure_view below).
-    views: dict[int, ft.Control] = {}
+    views: dict[int, ft.Control] = {0: chat_view}
 
     def apply_settings(new_url: str, display_name: str = DEFAULT_DISPLAY_NAME):
         """Persist the validated Base URL and chat name; point the client at the URL."""
@@ -218,9 +258,7 @@ def main(page: ft.Page):
             api_client.set_base_url(settings.base_url)
             # The tooltip and the banner name the address.
             show_connection()
-        for view in views.values():
-            if isinstance(view, ChatView):
-                view.set_display_name(settings.display_name)
+        chat_view.set_display_name(settings.display_name)
 
         show_snackbar(page, "Настройките са запазени успешно!", success=True)
 
@@ -262,6 +300,24 @@ def main(page: ft.Page):
         border_radius=8,
         visible=False,
     )
+    # The same note the settings dialog shows, but on the main window: a line in
+    # app.log alone is never seen.
+    insecure_banner = ft.Container(
+        content=ft.Row(
+            [
+                ft.Icon(ft.Icons.LOCK_OPEN, color=theme.ON_PROBLEM_BACKGROUND),
+                ft.Text(
+                    INSECURE_URL_NOTE, color=theme.ON_PROBLEM_BACKGROUND, expand=True
+                ),
+                ft.TextButton("Настройки", on_click=open_settings),
+            ],
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        bgcolor=theme.PROBLEM_BACKGROUND,
+        padding=ft.Padding.symmetric(horizontal=16, vertical=4),
+        border_radius=8,
+        visible=False,
+    )
 
     def show_connection() -> None:
         """Draw the indicator and the banner from ``healthy`` and the address now set."""
@@ -292,9 +348,10 @@ def main(page: ft.Page):
             f"Няма връзка с бекенда на {url}. Опитвам отново на всеки "
             f"{HEALTH_CHECK_INTERVAL} секунди."
         )
+        insecure_banner.visible = is_plain_http_to_another_computer(url)
         # Before the first page update there is nothing to send: the controls go
         # out with the page, already drawn this way.
-        safe_update(page, status_pill, offline_banner)
+        safe_update(page, status_pill, offline_banner, insecure_banner)
 
     def set_status(is_healthy: bool):
         nonlocal healthy
@@ -375,19 +432,33 @@ def main(page: ft.Page):
             return
         closing = True
         logger.info("The window was closed, the HTTP client is shut down.")
+        # Each step on its own: a view whose clean-up raises must not keep the
+        # other views running or the HTTP client open.
+        steps: list[tuple[str, Callable[[], object]]] = [
+            ("the health poll", task_handle.cancel)
+        ]
+        # Their own clean-up: the pollers, the loads, the stream.
+        steps += [(type(view).__name__, view.will_unmount) for view in views.values()]
         try:
-            task_handle.cancel()
-            for view in views.values():
-                # Their own clean-up: the pollers, the loads, the stream.
-                view.will_unmount()
-            # The session has one client for its whole life; it is closed here.
-            await asyncio.wait_for(api_client.aclose(), CLOSE_TIMEOUT)
-        except Exception as ex:
-            logger.warning(
-                "Could not shut down cleanly: %s",
-                str(ex) or type(ex).__name__,
-                exc_info=is_unexpected(ex),
-            )
+            for name, step in steps:
+                try:
+                    step()
+                except Exception as ex:
+                    logger.warning(
+                        "Could not stop %s: %s",
+                        name,
+                        str(ex) or type(ex).__name__,
+                        exc_info=is_unexpected(ex),
+                    )
+            try:
+                # The session has one client for its whole life; it is closed here.
+                await asyncio.wait_for(api_client.aclose(), CLOSE_TIMEOUT)
+            except Exception as ex:
+                logger.warning(
+                    "Could not shut down cleanly: %s",
+                    str(ex) or type(ex).__name__,
+                    exc_info=is_unexpected(ex),
+                )
         finally:
             try:
                 await page.window.destroy()
@@ -403,54 +474,21 @@ def main(page: ft.Page):
     page.window.on_event = on_window_event
 
     # Views are mounted lazily: creating all of them up front issued an API call
-    # per tab and started the pollers before the user opened a single tab.
-    def on_chat_session_changed(session_id: str) -> None:
-        """React to another chat being opened.
-
-        Memories belong to the user, not to a chat, so the Memory tab is not
-        reloaded here - it refreshes when its tab is opened.
-        """
-        logger.info("Active chat session changed to %s", short_id(session_id))
-
-    def create_memory() -> MemoryView:
-        return MemoryView(page, api_client)
-
-    def create_files() -> FilesView:
-        return FilesView(page, api_client)
-
-    def create_oracle() -> OracleView:
-        return OracleView(page, api_client)
-
-    def create_user_files() -> UserFilesView:
-        return UserFilesView(page, api_client)
-
-    # The chat tab is built at once (below); the others on their first visit.
-    factories = {
-        1: create_memory,
-        2: create_files,
-        3: create_oracle,
-        4: create_user_files,
-    }
-
-    chat_view = ChatView(
-        page, api_client, on_session_changed=on_chat_session_changed, settings=settings
-    )
-    views[0] = chat_view
-
-    # One slot for every tab; an empty container stands in for a view that has
-    # not been opened yet.
+    # per tab and started the pollers before the user opened a single tab. One
+    # slot for every tab; an empty container stands in for a view that has not
+    # been opened yet.
     tab_contents = ft.TabBarView(
         expand=True,
-        controls=[chat_view, *(ft.Container() for _ in TAB_LABELS[1:])],
+        controls=[chat_view, *(ft.Container() for _ in TABS[1:])],
     )
     tabs = ft.Tabs(
-        length=len(TAB_LABELS),
+        length=len(TABS),
         selected_index=0,
         animation_duration=300,
         content=ft.Column(
             expand=True,
             controls=[
-                ft.TabBar(tabs=[ft.Tab(label=label) for label in TAB_LABELS]),
+                ft.TabBar(tabs=[ft.Tab(label=tab.label) for tab in TABS]),
                 tab_contents,
             ],
         ),
@@ -460,7 +498,11 @@ def main(page: ft.Page):
     def ensure_view(index: int) -> ft.Control:
         view = views.get(index)
         if view is None:
-            view = factories[index]()
+            build = TABS[index].build
+            if build is None:
+                # Only the chat has no builder, and it is built at the start.
+                return chat_view
+            view = build(page, api_client)
             views[index] = view
             tab_contents.controls[index] = view
             safe_update(page, tab_contents)
@@ -468,16 +510,17 @@ def main(page: ft.Page):
 
     def on_tab_change(e):
         index = e.control.selected_index or 0
-        if index not in views and index not in factories:
+        if not 0 <= index < len(TABS):
             return
         existed = index in views
         view = ensure_view(index)
-        if existed and index in RELOADED_ON_VISIT:
+        reload = TABS[index].reload
+        if existed and reload:
             # A new view loads itself when it is mounted. An existing one is
             # re-read on every visit: memories also appear in the background
             # (the consolidation job proposes candidates after a chat) and so
             # do the bot's decisions.
-            page.run_task(getattr(view, RELOADED_ON_VISIT[index]))
+            page.run_task(getattr(view, reload))
         for polled_index, polled_view in views.items():
             if isinstance(polled_view, (ChatView, FilesView, OracleView)):
                 # Poll file statuses, the bot's journal and an open Telegram
@@ -497,6 +540,7 @@ def main(page: ft.Page):
 
     # The banner first and the tabs last: the tabs take the rest of the height.
     page.add(offline_banner)
+    page.add(insecure_banner)
     page.add(tabs)
     keep_the_window_alive(page)
 

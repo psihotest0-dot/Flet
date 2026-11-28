@@ -14,7 +14,7 @@ import httpx
 import pytest
 import respx
 from flet.messaging.protocol import MessageAction
-from helpers import real_session, tab_view
+from helpers import real_session, tab_labels, tab_view
 
 import main as main_module
 import views.chat_scroll as chat_scroll_module
@@ -22,7 +22,10 @@ from api.client import APIClient
 from state.settings import Settings, load_settings, save_settings
 from views import theme
 from views.files import FilesView
+from views.memory import MemoryView
 from views.oracle import OracleView
+from views.settings_dialog import INSECURE_URL_NOTE
+from views.user_files import UserFilesView
 
 USER_ID = "123e4567-e89b-12d3-a456-426614174000"
 
@@ -509,6 +512,31 @@ async def test_a_failed_clean_up_still_lets_the_window_go(
 
 
 @pytest.mark.asyncio
+async def test_a_view_whose_clean_up_raises_stops_neither_the_others_nor_the_client(
+    start_app, mock_page, monkeypatch, caplog
+):
+    tabs = start_app()
+    select_tab(tabs, 2)
+    select_tab(tabs, 3)
+    files_view, bot_view = tab_view(tabs, 2), tab_view(tabs, 3)
+    client = tab_view(tabs, 0).api_client
+
+    def broken_unmount():
+        raise RuntimeError("the poller is gone")
+
+    # The files tab comes before the bot tab in the views, so its failure is
+    # the one that used to skip the rest.
+    monkeypatch.setattr(files_view, "will_unmount", broken_unmount)
+
+    await mock_page.window.on_event(window_event(ft.WindowEventType.CLOSE))
+
+    assert "Could not stop FilesView: the poller is gone" in caplog.text
+    assert (bot_view._polling, bot_view._active) == (False, False)
+    assert client.client.is_closed is True
+    mock_page.window.destroy.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_a_clean_up_that_hangs_does_not_hold_the_window(
     start_app, mock_page, monkeypatch, caplog
 ):
@@ -645,6 +673,42 @@ def test_memory_tab_reloads_each_time_it_is_opened_again(start_app, mock_page):
     select_tab(tabs, 1)
     mock_page.run_task.assert_called_once_with(memory_view.load_memories)
     assert tab_view(tabs, 1) is memory_view
+
+
+@pytest.mark.parametrize(
+    ("index", "label", "view_class", "reload"),
+    [
+        (1, "Памет", MemoryView, "load_memories"),
+        (2, "Файлове", FilesView, None),
+        (3, "Бот", OracleView, "refresh"),
+        (4, "Файлове на Лили", UserFilesView, "refresh"),
+    ],
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+def test_each_tab_has_its_label_its_view_and_its_reload(
+    start_app, mock_page, index, label, view_class, reload
+):
+    # Label, view and reload were three tables by index: a tab moved in one of
+    # them silently reloaded another tab's view, or none.
+    tabs = start_app()
+    assert tab_labels(tabs)[index] == label
+
+    select_tab(tabs, index)
+    view = tab_view(tabs, index)
+    assert isinstance(view, view_class)
+
+    select_tab(tabs, 0)
+    mock_page.run_task.reset_mock()
+    select_tab(tabs, index)
+    # The pollers of the files and the bot tabs also start through run_task.
+    reloads = [
+        call.args[0].__name__
+        for call in mock_page.run_task.call_args_list
+        if getattr(call.args[0], "__self__", None) is view
+        and call.args[0].__name__ in ("load_memories", "refresh")
+    ]
+    assert reloads == ([] if reload is None else [reload])
+    assert tab_view(tabs, index) is view
 
 
 def test_an_open_telegram_conversation_is_watched_only_while_the_chat_tab_is_open(
@@ -944,13 +1008,54 @@ def pill_texts(pill):
     return label.value, icon.color, label.color
 
 
-def test_the_banner_goes_over_the_tabs(start_app, mock_page):
+def test_the_banners_go_over_the_tabs(start_app, mock_page):
     tabs = start_app()
 
     _pill, banner, _on_change = connection_parts(mock_page)
 
-    # The tabs are added last: they take what the banner leaves.
-    assert [call.args[0] for call in mock_page.add.call_args_list] == [banner, tabs]
+    # The tabs are added last: they take what the banners leave.
+    assert [call.args[0] for call in mock_page.add.call_args_list] == [
+        banner,
+        insecure_banner(mock_page),
+        tabs,
+    ]
+
+
+# ------------------------------------------------------- plain http, in the window
+def insecure_banner(mock_page) -> ft.Container:
+    return mock_page.add.call_args_list[1].args[0]
+
+
+def test_a_backend_reached_over_plain_http_is_shown_in_the_window(start_app, mock_page):
+    # A line in app.log alone was never seen.
+    save_settings(Settings(user_id=USER_ID, base_url="http://192.168.1.20:8080"))
+    start_app()
+
+    banner = insecure_banner(mock_page)
+    assert banner.visible is True
+    _icon, text, _button = banner.content.controls
+    assert text.value == INSECURE_URL_NOTE
+
+
+def test_a_local_backend_shows_no_plain_http_banner(start_app, mock_page):
+    save_settings(Settings(user_id=USER_ID, base_url="http://127.0.0.1:8080"))
+    start_app()
+
+    assert insecure_banner(mock_page).visible is False
+
+
+def test_the_plain_http_banner_follows_the_saved_address(
+    start_app, mock_page, settings_dialog_spy
+):
+    save_settings(Settings(user_id=USER_ID, base_url="http://127.0.0.1:8080"))
+    start_app()
+    banner = insecure_banner(mock_page)
+
+    settings_dialog_spy["on_save"]("http://192.168.1.20:8080")
+    assert banner.visible is True
+
+    settings_dialog_spy["on_save"]("https://192.168.1.20:8443")
+    assert banner.visible is False
 
 
 def test_until_the_first_answer_the_indicator_only_says_it_is_checking(
