@@ -151,15 +151,15 @@ async def test_upload_file_conflict(client, tmp_path):
 
 @pytest.mark.asyncio
 async def test_upload_file_too_large(client, tmp_path, monkeypatch):
-    # A limit of ten bytes instead of a file of 100 MB.
+    # A limit of ten bytes instead of a file of 150 MB.
     monkeypatch.setattr(client_module, "MAX_UPLOAD_BYTES", 10)
 
-    with pytest.raises(ValueError, match="Maximum size is 100MB"):
+    with pytest.raises(ValueError, match="Maximum size is 150MB"):
         await client.upload_file(a_file(tmp_path, b"a" * 11), "large.txt")
 
 
 def test_the_upload_limit_is_the_default_of_the_backend():
-    assert MAX_UPLOAD_BYTES == 100 * 1024 * 1024
+    assert MAX_UPLOAD_BYTES == 150 * 1024 * 1024
 
 
 @respx.mock

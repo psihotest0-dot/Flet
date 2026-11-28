@@ -1469,7 +1469,7 @@ async def test_a_file_over_the_limit_is_not_sent(mock_page, mock_api_client, tmp
         await view.upload_files([picked])
 
     mock_api_client.upload_file.assert_not_called()
-    assert "huge.pdf: файлът е по-голям от 100 MB" in snackbar.call_args.args[1]
+    assert "huge.pdf: файлът е по-голям от 150 MB" in snackbar.call_args.args[1]
 
 
 @pytest.mark.asyncio
@@ -1505,7 +1505,7 @@ async def test_the_log_holds_the_kind_of_an_uploaded_file_and_never_its_name(
         await view.upload_files([refused])
 
     assert "Skipped a .doc file: the format is not supported." in caplog.text
-    assert "Skipped a .epub file: 1 bytes is over the 100 MB limit." in caplog.text
+    assert "Skipped a .epub file: 1 bytes is over the 150 MB limit." in caplog.text
     assert "Failed to upload a .pdf file: PermissionError (errno 13)" in caplog.text
     assert secret not in caplog.text
     assert str(tmp_path) not in caplog.text

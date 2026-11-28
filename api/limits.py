@@ -13,9 +13,9 @@ DEFAULT_IMPORTANCE = 5
 # bytes on a Cyrillic letter, so Bulgarian text gets about 16000 letters.
 MAX_CONTENT_BYTES = 32000
 
-# The backend's MAX_UPLOAD_MB (100 unless its owner changed it). It is a limit on
+# The backend's MAX_UPLOAD_MB (150 unless its owner changed it). It is a limit on
 # the whole request, not on the file, so a file just below it can still get a 413.
-MAX_UPLOAD_MB = 100
+MAX_UPLOAD_MB = 150
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
 # The largest bill the backend reads (``bills.MaxFileBytes``, ``POST /v1/bills``).
